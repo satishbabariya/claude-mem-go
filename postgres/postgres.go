@@ -267,6 +267,7 @@ func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
 // project scopes the comparison set to one project when non-empty, for the
 // same cross-project-leak reason as Search.
 func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]store.VectorMatch, error) {
+	limit = clampNegativeLimit(limit)
 	scope := ""
 	args := []any{pgvector.NewVector(queryVec), limit}
 	if project != "" {

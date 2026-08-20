@@ -18,6 +18,7 @@ import "fmt"
 // a store with a large history must not require loading every candidate
 // row into memory at once.
 func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	args := []any{afterID, expectedDims}
 	scope := ""
 	if project != "" {

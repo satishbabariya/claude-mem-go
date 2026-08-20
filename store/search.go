@@ -145,6 +145,27 @@ func (n nullableTextFields) apply(o *Observation) {
 	o.Narrative = n.narrative.String
 }
 
+// clampNegativeLimit guards every LIMIT-bounded query in this file against
+// a real SQLite quirk, found the hard way against this project's own
+// driver: SQLite's LIMIT treats a negative value as "unlimited," not
+// "zero" — the same root cause already fixed for Timeline, applying here
+// to every other paginated read path too (Search, RecentByProject,
+// BySessionID, ObservationsForFile, ExportAll,
+// ObservationsNeedingEmbedding all reproduced returning every row in the
+// table when given limit=-1, confirmed by hand against a real seeded
+// database, not assumed from Timeline's fix alone). LIMIT 0 already
+// behaves correctly (an empty result, confirmed separately) — only
+// negative values need clamping. mcpserver.go's own caller already
+// substitutes a default before calling any of these, so this is
+// defense-in-depth for the Backend contract itself, the same reasoning as
+// Timeline's clamp.
+func clampNegativeLimit(limit int) int {
+	if limit < 0 {
+		return 0
+	}
+	return limit
+}
+
 // Search runs an FTS5 MATCH query across title/subtitle/narrative/facts/
 // concepts, ranked by bm25 (FTS5's built-in relevance function — lower is
 // better, so ORDER BY rank ascending is "best match first").
@@ -157,6 +178,7 @@ func (n nullableTextFields) apply(o *Observation) {
 // plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
 // lookups from a terminal.
 func (s *Store) Search(project, query string, limit int) ([]SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	args := []any{sanitizeFTSQuery(query)}
 	scope := ""
 	if project != "" {
@@ -202,6 +224,7 @@ func (s *Store) Search(project, query string, limit int) ([]SearchResult, error)
 // idx_observations_created), not FTS5; this is "what happened lately here,"
 // not a search.
 func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
@@ -238,6 +261,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, erro
 // first — the read path for Stop-hook session summarization: the narrative
 // arc of what happened, not a ranked search.
 func (s *Store) BySessionID(sessionID string, limit int) ([]SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
@@ -278,6 +302,7 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]SearchResult, error)
 // modernc.org/sqlite (confirmed by hand, not assumed — see this package's
 // doc history).
 func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT DISTINCT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified

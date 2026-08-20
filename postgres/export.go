@@ -16,6 +16,7 @@ import (
 // for why the embedding needs to travel too, not just the observation's
 // content.
 func (s *Store) ExportAll(afterID int64, limit int) ([]store.ExportRow, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified,

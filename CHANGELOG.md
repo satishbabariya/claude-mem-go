@@ -62,6 +62,30 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **Every `Backend` method taking a `limit` now clamps a negative value,
+  and — the more consequential fix — the worker daemon and MCP server now
+  recover from a panic instead of crashing the whole process.** Auditing
+  every `limit`-taking method (prompted by Timeline's own negative-depth
+  fix) found the identical "SQLite's LIMIT treats negative as unlimited"
+  bug in `Search`, `RecentByProject`, `BySessionID`,
+  `ObservationsForFile`, `ExportAll`, and `ObservationsNeedingEmbedding`.
+  `SemanticSearch` had a *worse* version: it slices its own results in Go
+  (`all[:limit]`), so a negative limit didn't return everything — it
+  **panicked** with a real "slice bounds out of range" error. Since
+  neither the worker daemon (`SemanticSearch` runs in its per-event
+  goroutine) nor the MCP server (synchronous request handler) had *any*
+  panic recovery anywhere, that panic would have crashed the entire
+  shared process, not just failed one call. Not reachable through the
+  live MCP tool surface today (its own caller already substitutes a
+  default before calling any of these), so this is defense-in-depth for
+  the `Backend` contract and the two long-lived processes built on it —
+  the same reasoning as Timeline's fix, but this time paired with an
+  actual process-level safety net. Verified thoroughly: a regression test
+  per affected method against both real backends, a fault-injection test
+  in each of `worker`/`mcpserver` (a fake `Backend` that panics on every
+  call, proving the process survives and a caller gets a clean error
+  instead of a dead connection), and a live `claude` CLI session
+  confirming the server stays alive and keeps working afterward.
 - **`Backend.Timeline` clamps `depthBefore`/`depthAfter` to
   `[0, MaxTimelineDepth]` at the store layer**, not just in the MCP tool's
   own caller. Found the hard way: a negative depth isn't "no results" —

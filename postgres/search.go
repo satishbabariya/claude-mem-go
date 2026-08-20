@@ -23,6 +23,21 @@ func (n nullableTextFields) apply(o *store.Observation) {
 	o.Narrative = n.narrative.String
 }
 
+// clampNegativeLimit guards every LIMIT-bounded query in this file — see
+// store.clampNegativeLimit's doc comment for the full story (found
+// against the SQLite backend first). This backend fails differently for
+// the identical root cause: Postgres rejects a negative LIMIT outright
+// with a real "LIMIT must not be negative" error rather than SQLite's
+// silent "unlimited," confirmed directly against the live container —
+// still worth clamping here rather than letting that raw driver error
+// reach whatever called this.
+func clampNegativeLimit(limit int) int {
+	if limit < 0 {
+		return 0
+	}
+	return limit
+}
+
 // Search runs real Postgres full-text search against the generated
 // search_vector column (see schemaSQL), ranked by ts_rank_cd. Unlike the
 // SQLite/FTS5 backend, plainto_tsquery tokenizes punctuation (including a
@@ -34,6 +49,7 @@ func (n nullableTextFields) apply(o *store.Observation) {
 // project ever recorded on the machine, so an unscoped search is a genuine
 // cross-project leak, not just a ranking nuisance.
 func (s *Store) Search(project, query string, limit int) ([]store.SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	scope := ""
 	args := []any{query}
 	if project != "" {
@@ -78,6 +94,7 @@ func (s *Store) Search(project, query string, limit int) ([]store.SearchResult, 
 // first — the plain-index read path for SessionStart context injection,
 // not a search.
 func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
@@ -113,6 +130,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 // BySessionID returns every observation recorded for one session, oldest
 // first — the read path for Stop-hook session summarization.
 func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
@@ -203,6 +221,7 @@ func (s *Store) ByIDs(ids []int64) ([]store.SearchResult, error) {
 // json_each membership check, and does not conflict with pgx's $N
 // placeholder syntax (pgx never treats a bare `?` as a placeholder).
 func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]store.SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified

@@ -14,6 +14,7 @@ import (
 // all) is exactly as real a case here as there, so this still needs to
 // exist and behave identically for callers.
 func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]store.SearchResult, error) {
+	limit = clampNegativeLimit(limit)
 	scope := ""
 	args := []any{afterID, expectedDims, limit}
 	if project != "" {

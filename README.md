@@ -569,6 +569,48 @@ over its actual socket, confirmed the daemon logged a rejection and
 stayed alive, then sent a normal-sized payload through the same daemon
 and confirmed it processed normally afterward.
 
+### A negative limit, and the bigger gap it exposed: no panic recovery anywhere
+
+Auditing every `Backend` method that takes a `limit` (prompted by
+Timeline's own negative-depth fix, above) found the identical bug in
+`Search`, `RecentByProject`, `BySessionID`, `ObservationsForFile`,
+`ExportAll`, and `ObservationsNeedingEmbedding`: SQLite's `LIMIT` treats a
+negative value as *unlimited*, confirmed by hand against a real seeded
+database returning every row for `limit=-1` instead of zero. `SemanticSearch`
+had a worse version of the same bug — it slices its own results in Go
+(`all[:limit]`) rather than relying on SQL's `LIMIT`, so a negative limit
+didn't return "everything," it **panicked outright** with a real "slice
+bounds out of range" runtime error.
+
+That panic mattered more than it might look: neither the worker daemon
+nor the MCP server had *any* panic recovery anywhere. `SemanticSearch`
+runs inside the worker's per-event goroutine (`handleConn`'s
+`go d.process(...)`) and the MCP server's synchronous request handler —
+an unrecovered panic in either one crashes the **entire process**, not
+just the one call: the worker daemon serving every project on the
+machine, or the whole `claude` session's MCP connection. Neither one was
+actually reachable through the live MCP tool surface today (its own
+caller already substitutes a default before calling any of these, the
+same story as Timeline's fix), but "not reachable today" and "safe" are
+different claims for a public `Backend` method and the two long-lived
+processes built on it.
+
+Fixed both layers: every affected method now clamps a negative limit to
+0 in both backends (`clampNegativeLimit`, `LIMIT 0` already behaves
+correctly — only negative values needed guarding), and — the more
+consequential half — `worker.Daemon.process` and `mcpserver.Server.handle`
+now both recover from a panic instead of letting it crash the process, an
+independent backstop against *any* future bug of this shape, not just
+this one. Verified thoroughly: a dedicated regression test per method
+against both real backends (SQLite confirms zero rows instead of
+unlimited; Postgres confirms a clean clamp instead of surfacing its own
+real "LIMIT must not be negative" driver error), a fault-injection test
+in each of `worker`/`mcpserver` (a fake `Backend` that panics on every
+call, exercised through the real request-handling path, confirming the
+process survives and a real caller gets a clean error instead of a dead
+connection), and a live `claude` CLI session confirming the MCP server
+stays alive and keeps serving requests correctly afterward.
+
 ## Quick start
 
 ```sh

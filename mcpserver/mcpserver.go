@@ -291,7 +291,23 @@ func (s *Server) Run(r io.Reader, w io.Writer) error {
 	return scanner.Err()
 }
 
-func (s *Server) handle(req rpcRequest) *rpcResponse {
+func (s *Server) handle(req rpcRequest) (resp *rpcResponse) {
+	// handle runs synchronously in Run's scanner loop, not a spawned
+	// goroutine — an unrecovered panic here doesn't just fail one tool
+	// call, it terminates the entire process (Go's default for a panic
+	// that unwinds past main), ending the whole MCP session and, if this
+	// was mid-write, potentially the whole `claude` session using it.
+	// Found not hypothetically: a real, reproducible panic existed in
+	// store.Store.SemanticSearch (a negative limit slicing out of
+	// bounds) before that call site was fixed — this recover is the
+	// backstop for that entire class of bug, not a substitute for fixing
+	// root causes when they're found.
+	defer func() {
+		if r := recover(); r != nil {
+			s.Log.Printf("PANIC recovered handling %s: %v", req.Method, r)
+			resp = s.errorReply(req, -32603, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
 	s.Log.Printf("<- %s", req.Method)
 	switch req.Method {
 	case "initialize":

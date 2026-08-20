@@ -40,6 +40,7 @@ type ExportRow struct {
 // this — no backup story, no way to move data between the SQLite and
 // Postgres backends.
 func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
+	limit = clampNegativeLimit(limit)
 	// LEFT JOIN, not INNER: most observations have no row in
 	// observation_vectors at all (never embedded), and that must not
 	// exclude them from the export.

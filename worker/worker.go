@@ -210,6 +210,22 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 func (d *Daemon) process(ctx context.Context, raw []byte) {
+	// This runs in its own goroutine (see handleConn's `go d.process(...)`)
+	// — an unrecovered panic here doesn't just fail this one event, it
+	// crashes the ENTIRE daemon process, taking memory capture down for
+	// every project on the machine sharing this one daemon. Found not
+	// hypothetically: a real, reproducible panic existed in
+	// store.Store.SemanticSearch (a negative limit slicing out of
+	// bounds) before that was fixed — this recover is the backstop for
+	// that entire class of bug (this one and any other not yet found),
+	// not a substitute for fixing root causes when they're found.
+	defer func() {
+		if r := recover(); r != nil {
+			d.Log.Printf("PANIC recovered in process (%d byte payload): %v", len(raw), r)
+			d.counters.observerErrors.Add(1)
+		}
+	}()
+
 	in, err := claudeagent.ParseHookInput(bytes.NewReader(raw))
 	if err != nil {
 		d.Log.Printf("FAILED parsing payload: %v (%d bytes)", err, len(raw))

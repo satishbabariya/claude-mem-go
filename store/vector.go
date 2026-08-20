@@ -94,6 +94,16 @@ type VectorMatch struct {
 // same cross-project-leak reason as Search (this store is one shared
 // database across every project ever recorded on the machine).
 func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]VectorMatch, error) {
+	// A real, more severe version of the same bug clampNegativeLimit
+	// exists for: this method slices its own results in Go
+	// (all[:limit]) rather than relying on SQL's LIMIT, so a negative
+	// limit doesn't silently return "everything" — it panics outright
+	// with "slice bounds out of range," confirmed against a real seeded
+	// database. Since this runs inside the worker daemon's per-event
+	// goroutine and the MCP server's request handler, an unrecovered
+	// panic here would crash the entire shared process, not just fail
+	// one call.
+	limit = clampNegativeLimit(limit)
 	// observation_vectors is guaranteed to exist by Open's migrations
 	// (see store/migrations.go) — no need to create it lazily here.
 	query := `
