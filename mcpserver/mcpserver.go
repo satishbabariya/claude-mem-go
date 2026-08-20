@@ -19,6 +19,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +33,23 @@ import (
 )
 
 const protocolVersion = "2025-11-25"
+
+// generateSessionID returns a short random hex string — see Server.
+// SessionID's doc comment for why one per MCP server process is the
+// right scope. Not a cryptographic secret, just a collision-resistant
+// grouping key, but crypto/rand costs nothing extra to use correctly here.
+func generateSessionID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Never actually expected to fail in practice on any real OS —
+		// fall back to a fixed marker rather than leaving SessionID empty
+		// (which would make every add_observation call before the next
+		// Run() collide on content_hash instead of just sharing a
+		// less-random-looking session grouping).
+		return "mcp-session-fallback"
+	}
+	return "mcp-" + hex.EncodeToString(b[:])
+}
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -133,6 +152,26 @@ func tools() []toolDef {
 				"required": []string{"file_path"},
 			},
 		},
+		{
+			Name: "add_observation",
+			Description: "Explicitly persist a fact, decision, or preference into claude-mem-go's memory — " +
+				"for something worth remembering that isn't the direct result of one tool call. Automatic " +
+				"capture (the PostToolUse hook) already records what tool calls did; use this for something " +
+				"that should be recalled in a future session on its own, e.g. a decision the user just made " +
+				"or a preference they stated.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":     map[string]any{"type": "string", "description": "Short summary (required)"},
+					"subtitle":  map[string]any{"type": "string", "description": "One-line detail"},
+					"narrative": map[string]any{"type": "string", "description": "Fuller explanation, if useful"},
+					"facts":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Discrete facts worth keeping separately"},
+					"concepts":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concepts/tags that help future search find this"},
+					"project":   map[string]any{"type": "string", "description": "Defaults to the current project"},
+				},
+				"required": []string{"title"},
+			},
+		},
 	}
 }
 
@@ -159,7 +198,17 @@ type Server struct {
 	// current project," which searches everything (matches the pre-scoping
 	// behavior, used by tests and any caller that genuinely has none).
 	Project string
-	Log     *log.Logger
+	// SessionID scopes add_observation's manually-added rows the same way
+	// PostToolUse's real session_id scopes automatic capture. MCP tool
+	// calls carry no session_id of their own (unlike a hook payload), and
+	// Claude Code spawns one MCP server process per session (see
+	// .mcp.json), so a per-process value generated once at Run() start is
+	// the natural substitute — every add_observation call within one real
+	// session shares it, and a different session gets a different one for
+	// free by virtue of being a different process. Empty until Run()
+	// generates one; tests that don't call Run() can set this directly.
+	SessionID string
+	Log       *log.Logger
 
 	st store.Backend
 }
@@ -176,6 +225,10 @@ func (s *Server) Run(r io.Reader, w io.Writer) error {
 	}
 	s.st = st
 	defer st.Close()
+
+	if s.SessionID == "" {
+		s.SessionID = generateSessionID()
+	}
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -249,12 +302,17 @@ func (s *Server) errorReply(req rpcRequest, code int, message string) *rpcRespon
 type toolCallParams struct {
 	Name      string `json:"name"`
 	Arguments struct {
-		Query       string `json:"query"`
-		Limit       int    `json:"limit"`
-		AllProjects bool   `json:"all_projects"`
-		Project     string `json:"project"`    // recent_observations, file_observations: override the current project
-		SessionID   string `json:"session_id"` // session_observations
-		FilePath    string `json:"file_path"`  // file_observations
+		Query       string   `json:"query"`
+		Limit       int      `json:"limit"`
+		AllProjects bool     `json:"all_projects"`
+		Project     string   `json:"project"`    // recent_observations, file_observations, add_observation: override the current project
+		SessionID   string   `json:"session_id"` // session_observations
+		FilePath    string   `json:"file_path"`  // file_observations
+		Title       string   `json:"title"`      // add_observation
+		Subtitle    string   `json:"subtitle"`   // add_observation
+		Narrative   string   `json:"narrative"`  // add_observation
+		Facts       []string `json:"facts"`      // add_observation
+		Concepts    []string `json:"concepts"`   // add_observation
 	} `json:"arguments"`
 }
 
@@ -304,6 +362,9 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		result = s.runSession(params.Arguments.SessionID, limit)
 	case "file_observations":
 		result = s.runFile(scopedProject, params.Arguments.FilePath, limit)
+	case "add_observation":
+		result = s.runAddObservation(scopedProject, params.Arguments.Title, params.Arguments.Subtitle,
+			params.Arguments.Narrative, params.Arguments.Facts, params.Arguments.Concepts)
 	default:
 		return s.errorReply(req, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -360,6 +421,37 @@ func (s *Server) runFile(project, filePath string, limit int) toolCallResult {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations failed: " + err.Error()}}}
 	}
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+// runAddObservation is the write side of this server's otherwise
+// read-only surface: every other tool reads what PostToolUse already
+// captured automatically. This lets Claude explicitly persist something
+// worth remembering that isn't the direct result of one tool call — a
+// decision, a stated preference — the same real gap real claude-mem's own
+// observation_add tool closes. ContentHash(SessionID, "manual", title,
+// narrative) reuses the exact same idempotency mechanism automatic
+// capture relies on: calling this twice with the same title/narrative in
+// the same session is a no-op, not a duplicate.
+func (s *Server) runAddObservation(project, title, subtitle, narrative string, facts, concepts []string) toolCallResult {
+	if title == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "add_observation requires a \"title\" argument"}}}
+	}
+	if project == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "no project to add to — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+
+	o := store.Observation{Type: "manual", Title: title, Subtitle: subtitle, Narrative: narrative, Facts: facts, Concepts: concepts}
+	hash := store.ContentHash(s.SessionID, "manual", title, narrative)
+	res, err := s.st.Insert(s.SessionID, project, "manual", hash, o, 0)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "add_observation failed: " + err.Error()}}}
+	}
+	if !res.Inserted {
+		return toolCallResult{Content: []toolContent{{Type: "text",
+			Text: fmt.Sprintf("Already remembered (id=%d) — an identical observation (same title and narrative) was already added this session.", res.ID)}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: fmt.Sprintf("Remembered (id=%d): %s", res.ID, title)}}}
 }
 
 func (s *Server) runSemanticSearch(project, query string, limit int) toolCallResult {

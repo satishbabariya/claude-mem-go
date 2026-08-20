@@ -123,6 +123,9 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	if !found["file_observations"] {
 		t.Errorf("tools/list missing file_observations, got %v", names)
 	}
+	if !found["add_observation"] {
+		t.Errorf("tools/list missing add_observation, got %v", names)
+	}
 }
 
 func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
@@ -428,6 +431,80 @@ func TestToolsCallFileObservationsWithNoFilePathIsAnError(t *testing.T) {
 	})
 	if !toolCallIsError(t, resp[0]) {
 		t.Fatalf("file_observations with no file_path: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallAddObservationPersistsAndIsFindable is add_observation's
+// core contract: the write actually lands, scoped to the server's current
+// project, and is findable through the existing read tools afterward —
+// the same store, not a side channel.
+func TestToolsCallAddObservationPersistsAndIsFindable(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"decided to use Postgres for scale","narrative":"team agreed local SQLite wasn't enough","facts":["fact one"],"concepts":["architecture"]}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "Remembered") {
+		t.Fatalf("add_observation response = %q, want it to confirm the observation was remembered", text)
+	}
+
+	s2 := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{}}}`,
+	})
+	recentText := toolCallText(t, resp2[0])
+	if !strings.Contains(recentText, "decided to use Postgres for scale") {
+		t.Fatalf("recent_observations after add_observation = %q, want the manually-added row to show up", recentText)
+	}
+}
+
+// TestToolsCallAddObservationIsIdempotentWithinASession confirms calling
+// add_observation twice with the same title/narrative in the same server
+// process (same SessionID) is a no-op the second time, not a duplicate —
+// the same content-hash idempotency automatic capture already relies on.
+func TestToolsCallAddObservationIsIdempotentWithinASession(t *testing.T) {
+	s, dbPath := newTestServer(t)
+	s.Project = "proj"
+
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"remember this exact thing","narrative":"same every time"}}}`
+	resp := runLines(t, s, []string{call})
+	if toolCallIsError(t, resp[0]) {
+		t.Fatalf("first add_observation call: want success, got %v", resp[0])
+	}
+
+	s2 := &Server{DBPath: dbPath, Project: "proj", SessionID: s.SessionID, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{call})
+	text2 := toolCallText(t, resp2[0])
+	if !strings.Contains(text2, "Already remembered") {
+		t.Fatalf("second identical add_observation call in the same session = %q, want it recognized as already remembered", text2)
+	}
+}
+
+func TestToolsCallAddObservationRequiresTitle(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with no title: want isError=true, got %v", resp[0])
+	}
+}
+
+func TestToolsCallAddObservationRequiresAProject(t *testing.T) {
+	s, _ := newTestServer(t) // Project left unset
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"something"}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with no server project: want isError=true, got %v", resp[0])
 	}
 }
 

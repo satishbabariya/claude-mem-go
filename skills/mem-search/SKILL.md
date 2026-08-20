@@ -19,14 +19,17 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Five tools, two kinds of job
+## Six tools, three kinds of job
 
-claude-mem-go exposes five MCP tools — simpler than a multi-step
+claude-mem-go exposes six MCP tools — simpler than a multi-step
 index/timeline/fetch pipeline, because this project's schema doesn't carry
 the token-cost concerns that pipeline exists to manage (no separate raw-vs-
 compressed representations to fetch in stages). Two are search (below);
 three are direct lookups when you already know what you want and don't
-need to search for it:
+need to search for it; one — `add_observation` — is the only *write*
+tool among them (see below). This skill is mainly about finding what's
+already remembered, but recognizing when a request actually needs
+`add_observation` instead of a search matters too:
 
 - `recent_observations(limit?, project?)` — the current project's most
   recent observations, newest first. The same read path `SessionStart`'s
@@ -70,6 +73,23 @@ Requires the worker/MCP server to have an embedding model configured
 (`-embed-model`, default `nomic-embed-text` via Ollama) — if semantic
 search returns nothing when keyword search finds results, the query terms
 probably just don't overlap; try rephrasing, or fall back to keyword search.
+
+### `add_observation` — the one write tool
+
+Everything above only ever surfaces what `PostToolUse` already captured
+automatically from a tool call. Use `add_observation` when there's
+something worth remembering that ISN'T the direct result of one — a
+decision the user just made, a stated preference, a piece of context that
+should be recalled in a future session on its own:
+
+```
+add_observation(title="prefers tabs over spaces in Go code", narrative="stated explicitly, applies project-wide")
+```
+
+`title` is required; `subtitle`/`narrative`/`facts`/`concepts` are
+optional. Calling it twice with the same `title`/`narrative` in the same
+session is a no-op, not a duplicate — safe to call again if unsure
+whether it already ran.
 
 ## Which one first?
 

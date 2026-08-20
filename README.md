@@ -159,18 +159,29 @@ docker compose up -d
   `-project` scopes to one project; the default (empty) searches every
   project in the store, since these are ad-hoc CLI lookups run by a human
   who may genuinely want that.
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing five tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing six tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` and `semantic_search_observations` (keyword and
-  meaning-based search), plus `recent_observations`, `session_observations`,
+  meaning-based search), `recent_observations`, `session_observations`,
   and `file_observations` — the same `RecentByProject`/`BySessionID`/
   `ObservationsForFile` reads `SessionStart`, `Stop`, and the `PreToolUse`
   file-context hook already push automatically, now reachable on demand
-  instead of only ever happening for you. Wire format confirmed against a
-  real `claude` session, not assumed from the spec (see `mcpserver/`'s doc
-  comment); every tool's end-to-end call verified against the real CLI, not
-  just unit-tested — including a live plugin install exercising all three
-  of the newer lookup tools against seeded rows.
+  instead of only ever happening for you — and `add_observation`, this
+  server's only *write* tool: everything else only ever surfaces what
+  `PostToolUse` already captured automatically from a tool call; this lets
+  Claude explicitly persist something worth remembering that isn't the
+  direct result of one (a decision, a stated preference) — the same real
+  gap real claude-mem's own `observation_add` tool closes. Idempotent the
+  same way automatic capture is: `ContentHash(SessionID, "manual", title,
+  narrative)` means calling it twice with the same title/narrative in the
+  same session is a no-op, not a duplicate. `SessionID` here is generated
+  once per MCP server process (Claude Code spawns one per session, so this
+  is the natural per-session scope an MCP tool call has no other way to
+  carry). Wire format confirmed against a real `claude` session, not
+  assumed from the spec (see `mcpserver/`'s doc comment); every tool's
+  end-to-end call verified against the real CLI, not just unit-tested —
+  including a live plugin install exercising the newer lookup tools and
+  `add_observation` against real seeded/added rows.
   Scoped to the current project by default (derived from the server
   process's cwd) — this store is one shared database across every project
   ever recorded on the machine, so an unscoped search is a real
