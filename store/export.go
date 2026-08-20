@@ -1,11 +1,20 @@
 package store
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // ExportRow is one observation as read back by ExportAll — everything
 // needed to reinsert it via ImportRow, preserving its original identity
-// (ContentHash, the idempotency key) and timing (CreatedAt/CreatedAtEpoch),
-// rather than re-stamping "now" the way a normal capture does.
+// (ContentHash, the idempotency key), timing (CreatedAt/CreatedAtEpoch),
+// and — a real gap in this feature's first version, found by the same
+// "does every write path do what the others do" check that caught the
+// add_observation/Stop embedding bugs — its embedding, if it had one.
+// Without this, export+import (backup, or the SQLite<->Postgres migration
+// path) silently dropped semantic searchability for every single
+// observation: a "migrate to Postgres for real ANN search at scale" would
+// have arrived with nothing left to search.
 type ExportRow struct {
 	ID             int64       `json:"id"`
 	SessionID      string      `json:"session_id"`
@@ -16,6 +25,10 @@ type ExportRow struct {
 	CostUSD        float64     `json:"cost_usd"`
 	CreatedAt      string      `json:"created_at"`
 	CreatedAtEpoch int64       `json:"created_at_epoch"`
+	// Embedding is nil when the observation was never embedded (no embed
+	// model configured at capture time, or the embedding call failed) —
+	// that's a legitimate, common state, not an error.
+	Embedding []float32 `json:"embedding,omitempty"`
 }
 
 // ExportAll returns up to limit observations with id > afterID, ordered by
@@ -27,13 +40,18 @@ type ExportRow struct {
 // this — no backup story, no way to move data between the SQLite and
 // Postgres backends.
 func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
+	// LEFT JOIN, not INNER: most observations have no row in
+	// observation_vectors at all (never embedded), and that must not
+	// exclude them from the export.
 	rows, err := s.db.Query(`
-		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified,
-		       cost_usd, created_at, created_at_epoch, content_hash
-		FROM observations
-		WHERE id > ?
-		ORDER BY id ASC
+		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.cost_usd, o.created_at, o.created_at_epoch, o.content_hash,
+		       v.dims, v.embedding
+		FROM observations o
+		LEFT JOIN observation_vectors v ON v.observation_id = o.id
+		WHERE o.id > ?
+		ORDER BY o.id ASC
 		LIMIT ?`, afterID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("export observations after id %d: %w", afterID, err)
@@ -45,9 +63,12 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 		var r ExportRow
 		var nf nullableTextFields
 		var facts, concepts, filesRead, filesModified string
+		var dims sql.NullInt64
+		var embeddingBlob []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative, &concepts, &filesRead, &filesModified,
-			&r.CostUSD, &r.CreatedAt, &r.CreatedAtEpoch, &r.ContentHash); err != nil {
+			&r.CostUSD, &r.CreatedAt, &r.CreatedAtEpoch, &r.ContentHash,
+			&dims, &embeddingBlob); err != nil {
 			return nil, fmt.Errorf("scan export row: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -55,6 +76,13 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 		r.Observation.Concepts = parseJSONArray(concepts)
 		r.Observation.FilesRead = parseJSONArray(filesRead)
 		r.Observation.FilesModified = parseJSONArray(filesModified)
+		if dims.Valid {
+			vec, err := decodeVector(embeddingBlob, int(dims.Int64))
+			if err != nil {
+				return nil, fmt.Errorf("decode embedding for observation %d: %w", r.ID, err)
+			}
+			r.Embedding = vec
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -62,10 +90,20 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 
 // ImportRow re-inserts a previously exported row, preserving its original
 // ContentHash (the same idempotent-dedup guarantee Insert provides — a
-// row already imported is a no-op, not a duplicate) and its original
-// CreatedAt/CreatedAtEpoch, so a restore reflects when things actually
-// happened rather than when they were re-imported.
+// row already imported is a no-op, not a duplicate), its original
+// CreatedAt/CreatedAtEpoch, and its embedding, if it had one — a restore
+// should be a full restore, not one that quietly leaves every observation
+// unsearchable by meaning.
 func (s *Store) ImportRow(row ExportRow) (InsertResult, error) {
-	return s.insertRow(row.SessionID, row.Project, row.ToolName, row.ContentHash,
+	res, err := s.insertRow(row.SessionID, row.Project, row.ToolName, row.ContentHash,
 		row.Observation, row.CostUSD, row.CreatedAt, row.CreatedAtEpoch)
+	if err != nil {
+		return res, err
+	}
+	if res.Inserted && len(row.Embedding) > 0 {
+		if err := s.SaveEmbedding(res.ID, row.Embedding); err != nil {
+			return res, fmt.Errorf("import observation %d: save embedding: %w", res.ID, err)
+		}
+	}
+	return res, nil
 }

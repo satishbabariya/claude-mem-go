@@ -176,3 +176,79 @@ func TestImportRowIsIdempotent(t *testing.T) {
 		t.Fatalf("CountByProject after importing the same row twice = %d, want 1", count)
 	}
 }
+
+// TestExportAllIncludesEmbeddingAndImportRowRestoresIt is the regression
+// test for a real gap in this feature's first version: ExportRow carried
+// no embedding field at all, so export+import silently dropped semantic
+// searchability for every observation — a "migrate to Postgres for real
+// ANN search at scale" would have arrived with nothing left to search.
+func TestExportAllIncludesEmbeddingAndImportRowRestoresIt(t *testing.T) {
+	source := openExportTestStore(t)
+	res, err := source.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "x", "y"),
+		Observation{Type: "discovery", Title: "has an embedding"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	wantVec := []float32{1, 2, 3, 4}
+	if err := source.SaveEmbedding(res.ID, wantVec); err != nil {
+		t.Fatalf("SaveEmbedding: %v", err)
+	}
+
+	// Also seed a row with NO embedding, to confirm ExportAll still
+	// includes it (LEFT JOIN, not an accidental INNER JOIN that would
+	// silently drop every never-embedded observation from the export).
+	if _, err := source.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "no-embed", "z"),
+		Observation{Type: "discovery", Title: "never embedded"}, 0); err != nil {
+		t.Fatalf("Insert (no embedding): %v", err)
+	}
+
+	rows, err := source.ExportAll(0, 10)
+	if err != nil {
+		t.Fatalf("ExportAll: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ExportAll returned %d rows, want 2 (both the embedded and un-embedded row)", len(rows))
+	}
+
+	var embeddedRow, unembeddedRow *ExportRow
+	for i := range rows {
+		if rows[i].ID == res.ID {
+			embeddedRow = &rows[i]
+		} else {
+			unembeddedRow = &rows[i]
+		}
+	}
+	if embeddedRow == nil || unembeddedRow == nil {
+		t.Fatalf("ExportAll didn't return both expected rows: %+v", rows)
+	}
+	if len(embeddedRow.Embedding) != len(wantVec) {
+		t.Fatalf("embedded row's Embedding = %v, want %v", embeddedRow.Embedding, wantVec)
+	}
+	for i, v := range wantVec {
+		if embeddedRow.Embedding[i] != v {
+			t.Fatalf("embedded row's Embedding = %v, want %v", embeddedRow.Embedding, wantVec)
+		}
+	}
+	if len(unembeddedRow.Embedding) != 0 {
+		t.Fatalf("un-embedded row's Embedding = %v, want empty", unembeddedRow.Embedding)
+	}
+
+	dest := openExportTestStore(t)
+	importRes, err := dest.ImportRow(*embeddedRow)
+	if err != nil {
+		t.Fatalf("ImportRow: %v", err)
+	}
+	semantic, err := dest.SemanticSearch("", []float32{1, 2, 3, 4}, 10)
+	if err != nil {
+		t.Fatalf("SemanticSearch: %v", err)
+	}
+	found := false
+	for _, m := range semantic {
+		if m.ID == importRes.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("SemanticSearch after ImportRow didn't find the imported row's restored embedding: %+v", semantic)
+	}
+}

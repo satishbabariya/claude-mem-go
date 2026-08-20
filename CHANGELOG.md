@@ -70,6 +70,13 @@ than assumed correct.
     information-dense observation this project produces — had been
     invisible to semantic search since the day that hook was written, not
     just since this pass began.
+  - `export`/`import` silently dropped every observation's embedding —
+    `ExportRow` carried no field for it at all. A "migrate to Postgres for
+    real ANN search at scale" would have arrived with nothing left to
+    search. Fixed (`Backend.ExportAll` now LEFT JOINs the embedding,
+    `ImportRow` restores it) and verified against this project's own real
+    dev database and the live Postgres container with a real embedding
+    value.
 - Also: bounded the Postgres connection pool (previously
   `database/sql`'s default of unlimited), CLI `-limit` flags clamped to
   match the MCP server's own bound, and `docker-compose.yml`'s Postgres

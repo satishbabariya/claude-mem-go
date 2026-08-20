@@ -268,6 +268,15 @@ docker compose up -d
   32-observation dev database, imported it into the live Postgres
   container, confirmed the rows searchable there, then re-ran the same
   import and confirmed it correctly skipped all 32 as already present.
+  `ExportRow` also carries each row's embedding, if it had one — the first
+  version didn't, a real gap the same "does every write path do what the
+  others do" check that caught the `add_observation`/`Stop` embedding
+  bugs also caught here: without it, migrating to Postgres for real ANN
+  search at scale would have arrived with nothing left to search. Fixed
+  and verified against this project's own real dev database (38 of 46
+  observations carried an embedding; all 38 survived a round trip into a
+  completely fresh SQLite file) and against the live Postgres container
+  with a real embedding value, not a fabricated one.
 - **prune** — deletes observations older than a cutoff; there was no
   retention story at all before this, meaning the store only ever grows.
   Dry-run by default (`-older-than-days N` alone just reports a count);

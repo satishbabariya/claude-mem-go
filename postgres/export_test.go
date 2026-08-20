@@ -140,3 +140,68 @@ func TestExportSQLiteImportPostgres(t *testing.T) {
 		t.Fatalf("row migrated from SQLite not found correctly in Postgres: %v", found)
 	}
 }
+
+// TestExportSQLiteImportPostgresPreservesEmbedding is the regression test
+// for a real gap in export/import's first version: ExportRow carried no
+// embedding field, so migrating from SQLite to Postgres — supposedly the
+// path to "real ANN search at scale" — silently arrived with nothing left
+// to search. Uses a real embedding value round-tripped through both
+// backends, not a mocked one.
+func TestExportSQLiteImportPostgresPreservesEmbedding(t *testing.T) {
+	sqliteDB, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("sqlite Open: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	project := uniqueProject(t)
+	res, err := sqliteDB.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "embed-migrate", project),
+		store.Observation{Type: "discovery", Title: "row with an embedding to migrate"}, 0)
+	if err != nil {
+		t.Fatalf("sqlite Insert: %v", err)
+	}
+	vec := make([]float32, DefaultEmbedDims)
+	vec[0] = 1
+	if err := sqliteDB.SaveEmbedding(res.ID, vec); err != nil {
+		t.Fatalf("sqlite SaveEmbedding: %v", err)
+	}
+
+	rows, err := sqliteDB.ExportAll(0, 100)
+	if err != nil {
+		t.Fatalf("sqlite ExportAll: %v", err)
+	}
+	var toMigrate *store.ExportRow
+	for i := range rows {
+		if rows[i].Project == project {
+			toMigrate = &rows[i]
+		}
+	}
+	if toMigrate == nil {
+		t.Fatalf("sqlite ExportAll didn't include the seeded row for project %s", project)
+	}
+	if len(toMigrate.Embedding) != DefaultEmbedDims {
+		t.Fatalf("exported row's Embedding has %d dims, want %d — the embedding wasn't exported at all", len(toMigrate.Embedding), DefaultEmbedDims)
+	}
+
+	pg := openTestStore(t)
+	importRes, err := pg.ImportRow(*toMigrate)
+	if err != nil {
+		t.Fatalf("postgres ImportRow: %v", err)
+	}
+
+	query := make([]float32, DefaultEmbedDims)
+	query[0] = 1
+	matches, err := pg.SemanticSearch(project, query, 10)
+	if err != nil {
+		t.Fatalf("postgres SemanticSearch: %v", err)
+	}
+	found := false
+	for _, m := range matches {
+		if m.ID == importRes.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("SemanticSearch in Postgres after migrating from SQLite didn't find the row — the embedding didn't survive the migration: %+v", matches)
+	}
+}
