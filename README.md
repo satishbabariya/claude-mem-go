@@ -137,6 +137,16 @@ docker compose up -d
   distinctive marker was seeded directly into the database, and a real
   `claude -p` session — with no tools, asked only about its own injected
   context — correctly reported it back verbatim.
+- **prompt-context** — the `UserPromptSubmit` hook: embeds the actual
+  submitted prompt text and injects the semantically closest observations
+  — sharper than `context`'s static recent-observations dump, since it
+  responds to what's actually being asked rather than just "what happened
+  lately." Real claude-mem's own gap of the identical shape (`session-init`
+  does the same "embed the prompt, semantic-search, inject" against its
+  own server-backed store). Skips prompts under 20 characters (too short
+  to embed meaningfully) and disables entirely with `-embed-model ""`, the
+  same convention `mcp`/`stop` use. See "`UserPromptSubmit`" below for how
+  this was verified against a real Ollama call and a real `claude` session.
 - **file-context** — the `PreToolUse` hook (matcher `Read`): real
   claude-mem's own per-file recall, distinct from `context`'s per-project
   recall. Looks up prior observations that mention the specific file about
@@ -512,14 +522,45 @@ claimed behavior.
   claude-mem's full multi-device sync machinery. What's no longer a gap:
   a real versioned migration path for whatever gets added next (see
   "Schema migrations" above) — neither backend had one before.
-- **`Setup` and `UserPromptSubmit` aren't wired** — real claude-mem uses
-  these for version-checking and session-init respectively.
-  `SessionStart`+`PreToolUse`+`PostToolUse`+`Stop` now cover recall (both
-  per-project and per-file), capture, and summarization; these two remaining
-  hooks are lower-value without claude-mem's modes/knowledge-graph system,
-  which also has no analog here. (`PreToolUse` — per-file recall on `Read`
-  — is wired as of the `file-context` subcommand above; it used to be in
-  this list.)
+- **`Setup` isn't wired** — real claude-mem uses it for version-checking a
+  Node/Bun install; there's no equivalent check this single static Go
+  binary needs (no runtime to verify, no interpreter version to detect).
+  `UserPromptSubmit` **is** now wired (see below) — the last of the two
+  hooks this section used to list as missing.
+
+### `UserPromptSubmit` — semantic context injection on the actual prompt
+
+`SessionStart`'s context injection (`context` subcommand) is a static
+"most recent observations" dump, decided before Claude has any idea what
+the user is about to ask. `prompt-context` closes the sharper gap real
+claude-mem's own `session-init` handler covers: it fires on the actual
+submitted prompt text, embeds it via the same local Ollama call
+`semantic-search` uses, and injects the observations semantically closest
+to *that specific question* — recall that responds to what's actually
+being asked, not just "what happened lately."
+
+Needed a new field on `claude-agent-sdk-go`'s `HookInput`
+(`Prompt string`, confirmed against a real captured `UserPromptSubmit`
+payload — same technique this package's other fields were verified with —
+tagged `v0.1.1`) since nothing had ever needed the submitted prompt text
+before. Guards mirror real claude-mem's own: prompts under 20 characters
+are skipped rather than embedded (too short to be a meaningful semantic
+anchor, and would waste an Ollama round-trip on every single message for
+no benefit), and `-embed-model ""` disables the hook entirely — the same
+on/off convention `mcp`/`stop` already use.
+
+Verified against a real, isolated Ollama-backed setup, not a mock: two
+topically distinct observations seeded and embedded (one about choosing
+Postgres/pgvector for ANN search, one about log rotation), a real
+`claude -p` session asked "what database technology did we choose for
+scaling similarity search over embeddings?" — no keyword overlap with the
+seeded title's exact wording — and Claude's answer came back correctly
+identifying Postgres/pgvector/HNSW, explicitly attributing it to injected
+memory rather than a codebase search. Deliberately run against a
+throwaway `-db` file via `.claude/settings.json` rather than a full
+plugin install, to avoid writing test rows into this machine's real,
+shared production database (the same discipline applied throughout this
+project's live-verification history).
 
 ## Testing
 

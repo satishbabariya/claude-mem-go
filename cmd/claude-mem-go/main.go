@@ -13,6 +13,7 @@
 //	claude-mem-go semantic-search  — meaning-based search via local Ollama embeddings + cosine similarity
 //	claude-mem-go mcp              — MCP server exposing search/semantic-search as tools (stdio transport)
 //	claude-mem-go context         — SessionStart hook: inject recent memory for this project as context
+//	claude-mem-go prompt-context  — UserPromptSubmit hook: embed the submitted prompt, inject the semantically closest memory
 //	claude-mem-go stop            — Stop hook: synthesize and persist a session-level summary observation
 //	claude-mem-go doctor          — check that the claude CLI, worker, database, and Ollama are all reachable
 //	claude-mem-go file-context    — PreToolUse hook (Read): inject prior memory about the specific file being read
@@ -52,6 +53,8 @@ func main() {
 		os.Exit(cmdMCP(os.Args[2:]))
 	case "context":
 		os.Exit(cmdContext(os.Args[2:]))
+	case "prompt-context":
+		os.Exit(cmdPromptContext(os.Args[2:]))
 	case "stop":
 		os.Exit(cmdStop(os.Args[2:]))
 	case "doctor":

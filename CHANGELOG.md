@@ -32,8 +32,21 @@ than assumed correct.
   `= ANY($1)` array support), scoped to the current project the same way
   `search_observations` is. Verified against a real `claude` CLI session,
   not just a unit test.
-- **`PreToolUse` (file-context) and `Stop` (session summary) hooks wired**,
-  closing two of the previously-unwired hooks.
+- **`PreToolUse` (file-context), `Stop` (session summary), and
+  `UserPromptSubmit` (prompt-context) hooks wired**, closing three of the
+  previously-unwired hooks. `UserPromptSubmit` is the sharpest of the
+  three: it embeds the actual submitted prompt text and injects the
+  observations semantically closest to *that specific question*, rather
+  than `SessionStart`'s static "recent observations" dump — the same real
+  gap real claude-mem's own `session-init` handler covers. Required a new
+  `Prompt` field on `claude-agent-sdk-go`'s `HookInput` (confirmed against
+  a real captured payload, tagged `v0.1.1`). Verified against a real,
+  isolated Ollama call and a real `claude` CLI session: two topically
+  distinct seeded observations, a prompt with no keyword overlap with
+  either, and Claude's answer correctly identified the semantically
+  relevant one and explicitly attributed it to injected memory. `Setup`
+  remains unwired — real claude-mem uses it for Node/Bun version-checking,
+  which has no equivalent for a single static Go binary.
 - **`prune`** — retention command (dry-run by default), and **`export`/
   **`import`** — backup and the SQLite↔Postgres migration path. Both new;
   neither existed before.

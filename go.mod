@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pgvector/pgvector-go v0.4.1
-	github.com/satishbabariya/claude-agent-sdk-go v0.1.0
+	github.com/satishbabariya/claude-agent-sdk-go v0.1.1
 	modernc.org/sqlite v1.57.0
 )
 
