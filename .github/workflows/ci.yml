@@ -56,10 +56,13 @@ jobs:
           CLAUDE_MEM_GO_TEST_POSTGRES_DSN: postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable
 
       - name: Validate plugin manifest
+        # No fallback/skip on install failure: a silently-skipped validation
+        # step reads as "the manifest is fine" when it never actually
+        # checked anything. Verified locally (a stock node:20-slim
+        # container, matching what a hosted Ubuntu runner has) that this
+        # installs and passes cleanly before removing the old
+        # `command -v claude || echo skipping` escape hatch that let this
+        # step silently no-op for as long as it existed.
         run: |
-          npm install -g @anthropic-ai/claude-code 2>/dev/null || true
-          if command -v claude >/dev/null 2>&1; then
-            claude plugin validate .
-          else
-            echo "claude CLI not available in CI — skipping plugin manifest validation"
-          fi
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate .
