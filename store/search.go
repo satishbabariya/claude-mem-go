@@ -48,9 +48,21 @@ CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
 	INSERT INTO observations_fts(rowid, title, subtitle, narrative, facts, concepts)
 	VALUES (new.id, new.title, new.subtitle, new.narrative, new.facts, new.concepts);
 END;
+-- A plain DELETE, not the fts5 "special command" INSERT INTO
+-- observations_fts(observations_fts) VALUES ('delete', rowid, ...col
+-- values...) form — that form is for CONTENTLESS or EXTERNAL CONTENT
+-- tables, which need the old column values handed back to them because
+-- they don't store their own content. This table is neither (see the
+-- doc comment above on why it's self-contained); it owns its own rows, so
+-- it can delete by rowid directly. A real, previously-latent bug: this
+-- trigger used the special-command form for years without ever being
+-- exercised, because nothing deleted from observations until Prune
+-- (prune.go) — the first real DELETE hit it immediately with a genuine
+-- "SQL logic error" from SQLite itself, reproduced via both the Go driver
+-- and the plain sqlite3 CLI, confirming it's the trigger SQL, not a
+-- driver quirk.
 CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
-	INSERT INTO observations_fts(observations_fts, rowid, title, subtitle, narrative, facts, concepts)
-	VALUES ('delete', old.id, old.title, old.subtitle, old.narrative, old.facts, old.concepts);
+	DELETE FROM observations_fts WHERE rowid = old.id;
 END;
 `
 

@@ -161,6 +161,25 @@ docker compose up -d
   correctly exits 1, and an unpulled Ollama model correctly downgrades to
   a warning rather than a failure. Also surfaces the worker's own activity
   (see below) when available.
+- **prune** — deletes observations older than a cutoff; there was no
+  retention story at all before this, meaning the store only ever grows.
+  Dry-run by default (`-older-than-days N` alone just reports a count);
+  `-yes` is required to actually delete, and `-project` scopes it to one
+  project instead of every project in the store. Finding this gap surfaced
+  a real, previously-latent bug: the FTS5 `observations_ad` trigger used
+  the fts5 "special command" delete syntax, which is only valid for
+  contentless/external-content tables — this table is neither, and the
+  trigger had silently never been exercised because nothing had ever
+  deleted a row before `prune` existed. The first real `DELETE` hit it
+  immediately with a genuine SQL error, reproduced through both the Go
+  driver and the plain `sqlite3` CLI. Fixed via a new numbered migration
+  (not just fixing the schema definition, which would only help brand-new
+  databases) — verified against the exact upgrade scenario: a simulated
+  already-migrated database with the original broken trigger correctly
+  gets fixed on reopen, and `prune` then works against it. Also tested
+  against a live Postgres container (no shadow table there, but still
+  verified the generated `search_vector` and `embedding` columns are
+  genuinely gone after a prune, not just the row).
 - **Observability** — the worker daemon's only introspection used to be
   raw log lines (`worker.log`, and the per-hook logs). It now also writes
   a small `~/.claude-mem-go/worker-stats.json` snapshot after every

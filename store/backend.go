@@ -36,6 +36,12 @@ type Backend interface {
 	// files_modified mentions filePath — the read path for PreToolUse's
 	// file-context hook.
 	ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error)
+	// Prune deletes observations older than cutoffEpoch (a Unix seconds
+	// timestamp), scoped to one project when non-empty or every project
+	// when empty. dryRun counts what WOULD be deleted without deleting
+	// anything. This is the store's retention story — without it, the
+	// store only ever grows.
+	Prune(project string, cutoffEpoch int64, dryRun bool) (int64, error)
 	Close() error
 }
 
