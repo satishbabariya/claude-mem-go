@@ -99,6 +99,19 @@ func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres %s: %w", dsn, err)
 	}
+	// Bounded, not left at database/sql's default of unlimited: every
+	// long-lived process that talks to this backend (the worker daemon,
+	// the MCP server) now opens exactly one Store for its whole lifetime
+	// (see worker.Daemon.Run) rather than one per event — correct for
+	// connection churn, but it means this pool is the ONLY thing standing
+	// between a burst of concurrent calls and Postgres's own
+	// max_connections limit, which every other client sharing the same
+	// server also counts against. These are conservative defaults for a
+	// hook-driven, not high-QPS, workload — not tuned against a real load
+	// test, just deliberately bounded instead of silently unbounded.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)

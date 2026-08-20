@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -59,6 +60,7 @@ type Daemon struct {
 
 	sessions *sessionCache
 	counters statsCounters
+	st       store.Backend
 }
 
 // Stats returns a snapshot of the daemon's current activity and
@@ -91,6 +93,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// the real spawn-lock staleness handling, simplified: only one daemon is
 	// ever meant to hold this socket, so remove-then-bind is enough.
 	_ = os.Remove(d.SocketPath)
+
+	// Opened once for the whole daemon lifetime, not per event — a daemon
+	// that lives for days handling occasional hook events must not pay a
+	// fresh connection (a real TCP handshake against Postgres, or SQLite's
+	// own per-open PRAGMA setup) on every single tool call. Real risk this
+	// avoids, not a hypothetical one: many concurrent tool-call events
+	// (up to MaxConcurrent observer sessions at once, each ending in an
+	// Insert) each opening their own Postgres connection is exactly the
+	// kind of connection churn that can exhaust a shared server's
+	// max_connections under real load.
+	st, err := backend.Open(ctx, d.DBPath, 0)
+	if err != nil {
+		return fmt.Errorf("open store at %s: %w", d.DBPath, err)
+	}
+	d.st = st
+	defer st.Close()
 
 	ln, err := net.Listen("unix", d.SocketPath)
 	if err != nil {
@@ -218,20 +236,12 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		}
 	}
 
-	st, err := backend.Open(ctx, d.DBPath, 0)
-	if err != nil {
-		d.Log.Printf("FAILED opening store at %s: %v", d.DBPath, err)
-		d.counters.insertErrors.Add(1)
-		return
-	}
-	defer st.Close()
-
 	project := filepath.Base(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 	hash := store.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
-	res, err := st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
+	res, err := d.st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
 		d.Log.Printf("FAILED sqlite insert: %v", err)
 		d.counters.insertErrors.Add(1)
@@ -263,7 +273,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		d.counters.embedErrors.Add(1)
 		return
 	}
-	if err := st.SaveEmbedding(res.ID, vec); err != nil {
+	if err := d.st.SaveEmbedding(res.ID, vec); err != nil {
 		d.Log.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 		d.counters.embedErrors.Add(1)
 	}

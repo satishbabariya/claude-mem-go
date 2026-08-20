@@ -89,7 +89,18 @@ docker compose up -d
 
 - **worker** — a persistent daemon, meant to be started once (see `start`)
   and left running. Listens on a Unix socket, processes PostToolUse
-  payloads through a bounded `pool` of observer sessions.
+  payloads through a bounded `pool` of observer sessions. Opens its
+  `store.Backend` exactly once for the daemon's whole lifetime (fixed from
+  opening and closing a fresh one on every single event) — real connection
+  churn otherwise, since a daemon meant to run for days would pay a fresh
+  connection (a real TCP handshake against Postgres) per tool call
+  indefinitely; verified end-to-end by restarting a live daemon and
+  sending it multiple real events in sequence through the one handle.
+  Combined with the Postgres backend's now-bounded connection pool
+  (`SetMaxOpenConns`/`SetMaxIdleConns`, previously left at
+  `database/sql`'s default of unlimited) — the two together are what keep
+  a burst of concurrent tool calls from being the only thing standing
+  between this daemon and a shared Postgres server's `max_connections`.
 - **hook** — the thin client Claude Code's `PostToolUse` hook actually
   invokes: forward stdin to the worker's socket, exit. Deliberately does
   *no* observation work itself — see "Why the worker/hook split" below.

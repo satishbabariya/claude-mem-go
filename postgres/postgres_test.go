@@ -346,3 +346,18 @@ func TestPostgresOpenRecordsMigrationAndReopenDoesNotReapply(t *testing.T) {
 		t.Fatalf("schema_migrations has %d rows for version 1 after reopening, want 1 (no duplicate from re-applying)", count2)
 	}
 }
+
+// TestPostgresOpenBoundsConnectionPool confirms Open doesn't leave the
+// pool at database/sql's default of unlimited — real risk now that every
+// long-lived caller (worker.Daemon, mcpserver.Server) opens one Store for
+// its whole process lifetime instead of one per event: an unbounded pool
+// is the only thing standing between a burst of concurrent calls and
+// Postgres's own max_connections, shared with every other client on the
+// same server.
+func TestPostgresOpenBoundsConnectionPool(t *testing.T) {
+	st := openTestStore(t)
+	stats := st.db.Stats()
+	if stats.MaxOpenConnections <= 0 {
+		t.Fatalf("MaxOpenConnections = %d, want a positive bound, not database/sql's default of unlimited (0)", stats.MaxOpenConnections)
+	}
+}
