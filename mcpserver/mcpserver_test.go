@@ -204,6 +204,52 @@ func TestUnknownMethodIsMethodNotFound(t *testing.T) {
 	}
 }
 
+// TestSearchObservationsScopesToServerProject is the regression test for a
+// real cross-project leak: the underlying store is one shared database
+// across every project ever recorded on the machine (see
+// store.DefaultDBPath), so an MCP client working on project A must not see
+// project B's memory just because both happen to share a keyword. Server.
+// Project (set from the server process's cwd in cmd's cmdMCP) is what
+// enforces that boundary by default.
+func TestSearchObservationsScopesToServerProject(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	oA := store.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-a"}
+	if _, err := st.Insert("s1", "project-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"), oA, 0); err != nil {
+		t.Fatalf("seed project-a: %v", err)
+	}
+	oB := store.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-b"}
+	if _, err := st.Insert("s1", "project-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"), oB, 0); err != nil {
+		t.Fatalf("seed project-b: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "project-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets"}}}`,
+	})
+	text := resp[0]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "project-a") {
+		t.Fatalf("search scoped to project-a found nothing from it: %q", text)
+	}
+	if strings.Contains(text, "project-b") {
+		t.Fatalf("search scoped to project-a leaked a project-b result: %q", text)
+	}
+
+	// all_projects:true is the explicit escape hatch — it must see both.
+	s2 := &Server{DBPath: dbPath, Project: "project-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets","all_projects":true}}}`,
+	})
+	text2 := resp2[0]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text2, "project-a") || !strings.Contains(text2, "project-b") {
+		t.Fatalf("all_projects:true should see both projects, got: %q", text2)
+	}
+}
+
 func TestMalformedLineIsSkippedNotFatal(t *testing.T) {
 	s, _ := newTestServer(t)
 	// One garbage line between two valid requests must not kill the session

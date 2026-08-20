@@ -11,6 +11,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -89,18 +90,29 @@ type VectorMatch struct {
 
 // SemanticSearch scores every embedded observation against queryVec by
 // cosine similarity and returns the top `limit`, best match first.
-func (s *Store) SemanticSearch(queryVec []float32, limit int) ([]VectorMatch, error) {
+//
+// project scopes the comparison set to one project when non-empty, for the
+// same cross-project-leak reason as Search (this store is one shared
+// database across every project ever recorded on the machine).
+func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]VectorMatch, error) {
 	if _, err := s.db.Exec(createVectorTableSQL); err != nil {
 		return nil, fmt.Errorf("create vector schema: %w", err)
 	}
 
-	rows, err := s.db.Query(`
+	query := `
 		SELECT v.observation_id, v.dims, v.embedding,
 		       o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified
 		FROM observation_vectors v
 		JOIN observations o ON o.id = v.observation_id
-	`)
+	`
+	var rows *sql.Rows
+	var err error
+	if project != "" {
+		rows, err = s.db.Query(query+" WHERE o.project = ?", project)
+	} else {
+		rows, err = s.db.Query(query)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query embeddings: %w", err)
 	}

@@ -20,6 +20,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" file-context",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",

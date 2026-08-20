@@ -42,7 +42,7 @@ func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("claude-mem", 10)
+	results, err := st.Search("", "claude-mem", 10)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error instead of results: %v", err)
 	}

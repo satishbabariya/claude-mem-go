@@ -73,8 +73,9 @@ func tools() []toolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query": map[string]any{"type": "string", "description": "Search terms"},
-					"limit": map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"query":        map[string]any{"type": "string", "description": "Search terms"},
+					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
 				},
 				"required": []string{"query"},
 			},
@@ -85,8 +86,9 @@ func tools() []toolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query": map[string]any{"type": "string", "description": "A natural-language question or description"},
-					"limit": map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"query":        map[string]any{"type": "string", "description": "A natural-language question or description"},
+					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
 				},
 				"required": []string{"query"},
 			},
@@ -110,7 +112,14 @@ type toolCallResult struct {
 type Server struct {
 	DBPath     string
 	EmbedModel string // empty disables semantic_search_observations
-	Log        *log.Logger
+	// Project scopes search_observations/semantic_search_observations to
+	// one project by default — this is one shared database across every
+	// project ever recorded on the machine, and an MCP client working on
+	// project A must not silently see project B's memory. Empty means "no
+	// current project," which searches everything (matches the pre-scoping
+	// behavior, used by tests and any caller that genuinely has none).
+	Project string
+	Log     *log.Logger
 
 	st store.Backend
 }
@@ -200,8 +209,9 @@ func (s *Server) errorReply(req rpcRequest, code int, message string) *rpcRespon
 type toolCallParams struct {
 	Name      string `json:"name"`
 	Arguments struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query       string `json:"query"`
+		Limit       int    `json:"limit"`
+		AllProjects bool   `json:"all_projects"`
 	} `json:"arguments"`
 }
 
@@ -223,27 +233,32 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		limit = maxLimit
 	}
 
+	project := s.Project
+	if params.Arguments.AllProjects {
+		project = ""
+	}
+
 	var result toolCallResult
 	switch params.Name {
 	case "search_observations":
-		result = s.runSearch(params.Arguments.Query, limit)
+		result = s.runSearch(project, params.Arguments.Query, limit)
 	case "semantic_search_observations":
-		result = s.runSemanticSearch(params.Arguments.Query, limit)
+		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
 	default:
 		return s.errorReply(req, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
 	return s.reply(req, result)
 }
 
-func (s *Server) runSearch(query string, limit int) toolCallResult {
-	results, err := s.st.Search(query, limit)
+func (s *Server) runSearch(project, query string, limit int) toolCallResult {
+	results, err := s.st.Search(project, query, limit)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
 	}
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
 }
 
-func (s *Server) runSemanticSearch(query string, limit int) toolCallResult {
+func (s *Server) runSemanticSearch(project, query string, limit int) toolCallResult {
 	if s.EmbedModel == "" {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
 			Text: "semantic search is disabled on this server (no embed model configured)"}}}
@@ -252,7 +267,7 @@ func (s *Server) runSemanticSearch(query string, limit int) toolCallResult {
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "embedding the query failed: " + err.Error()}}}
 	}
-	matches, err := s.st.SemanticSearch(vec, limit)
+	matches, err := s.st.SemanticSearch(project, vec, limit)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "semantic search failed: " + err.Error()}}}
 	}

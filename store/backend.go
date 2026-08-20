@@ -14,9 +14,15 @@ package store
 type Backend interface {
 	Insert(sessionID, project, toolName, contentHash string, o Observation, costUSD float64) (InsertResult, error)
 	CountByProject(project string) (int, error)
-	Search(query string, limit int) ([]SearchResult, error)
+	// Search full-text-searches observations; project scopes it to one
+	// project when non-empty, or every project in the store when empty. See
+	// Store.Search's doc comment for why an empty project is a deliberate,
+	// narrow exception rather than the default.
+	Search(project, query string, limit int) ([]SearchResult, error)
 	SaveEmbedding(observationID int64, vec []float32) error
-	SemanticSearch(queryVec []float32, limit int) ([]VectorMatch, error)
+	// SemanticSearch is Search's embedding-based counterpart; project has
+	// the same scoping meaning.
+	SemanticSearch(project string, queryVec []float32, limit int) ([]VectorMatch, error)
 	// RecentByProject returns a project's most recent observations, newest
 	// first — the read path for SessionStart context injection (see the
 	// context subcommand): the actual "memory" half of claude-mem, as
@@ -26,6 +32,10 @@ type Backend interface {
 	// session, oldest first — the read path for Stop-hook session
 	// summarization: what actually happened this session, in order.
 	BySessionID(sessionID string, limit int) ([]SearchResult, error)
+	// ObservationsForFile returns observations whose files_read or
+	// files_modified mentions filePath — the read path for PreToolUse's
+	// file-context hook.
+	ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error)
 	Close() error
 }
 

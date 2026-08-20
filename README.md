@@ -67,6 +67,14 @@ docker compose up -d
   distinctive marker was seeded directly into the database, and a real
   `claude -p` session — with no tools, asked only about its own injected
   context — correctly reported it back verbatim.
+- **file-context** — the `PreToolUse` hook (matcher `Read`): real
+  claude-mem's own per-file recall, distinct from `context`'s per-project
+  recall. Looks up prior observations that mention the specific file about
+  to be read (via `files_read`/`files_modified`) and injects them before
+  the read happens. Verified against a real session the same way `context`
+  was: a distinctive marker seeded directly into the database, and a real
+  `claude` session — asked to read that exact file — correctly reported the
+  injected context back.
 - **stop** — the `Stop` hook: synthesizes everything recorded during one
   session into a single `type=summary` observation (real claude-mem's
   "summarize" step). Idempotent the same way ingestion is — the key is the
@@ -78,11 +86,22 @@ docker compose up -d
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
   (local embeddings + cosine similarity) search over what's been persisted.
+  `-project` scopes to one project; the default (empty) searches every
+  project in the store, since these are ad-hoc CLI lookups run by a human
+  who may genuinely want that.
 - **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing `search_observations`
   and `semantic_search_observations` as tools any MCP client — including
   Claude Code itself — can call directly. Wire format confirmed against a
   real `claude` session, not assumed from the spec (see `mcpserver/`'s doc
   comment); end-to-end tool calls verified against the real CLI too.
+  Scoped to the current project by default (derived from the server
+  process's cwd) — this store is one shared database across every project
+  ever recorded on the machine, so an unscoped search is a real
+  cross-project leak, not just a ranking nuisance; found via a Postgres
+  test flake (accumulated rows from unrelated projects crowded a fixed
+  `LIMIT`), fixed at the `store.Backend` interface level so both backends
+  and the CLI got it too. Pass `all_projects: true` to a tool call to
+  search everything on purpose.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate
@@ -172,11 +191,14 @@ terminal, so these logs are the only way to see what they did).
   bookkeeping and an FTS5 shadow table are not replicated here) — this
   persists what an observation actually *contains* plus a content-hash
   dedup key, not claude-mem's full multi-device sync machinery.
-- **`Setup`, `PreToolUse`, and `UserPromptSubmit` aren't wired** — real
-  claude-mem uses these for version-checking, per-file context on `Read`,
-  and session-init respectively. `SessionStart`+`PostToolUse`+`Stop` cover
-  capture, recall, and summarization; these three are lower-value without
-  claude-mem's modes/knowledge-graph system, which also has no analog here.
+- **`Setup` and `UserPromptSubmit` aren't wired** — real claude-mem uses
+  these for version-checking and session-init respectively.
+  `SessionStart`+`PreToolUse`+`PostToolUse`+`Stop` now cover recall (both
+  per-project and per-file), capture, and summarization; these two remaining
+  hooks are lower-value without claude-mem's modes/knowledge-graph system,
+  which also has no analog here. (`PreToolUse` — per-file recall on `Read`
+  — is wired as of the `file-context` subcommand above; it used to be in
+  this list.)
 
 ## Testing
 

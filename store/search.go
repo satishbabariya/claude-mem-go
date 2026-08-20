@@ -136,15 +136,30 @@ func (n nullableTextFields) apply(o *Observation) {
 // Search runs an FTS5 MATCH query across title/subtitle/narrative/facts/
 // concepts, ranked by bm25 (FTS5's built-in relevance function — lower is
 // better, so ORDER BY rank ascending is "best match first").
-func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
+//
+// project scopes the search to one project when non-empty; empty searches
+// every project in the store. This store is a single shared database across
+// every project ever recorded on the machine (see DefaultDBPath), so an
+// unscoped Search is a real cross-project leak — the MCP server (Claude's
+// own search_observations tool) always passes the current project; the
+// plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
+// lookups from a terminal.
+func (s *Store) Search(project, query string, limit int) ([]SearchResult, error) {
+	args := []any{sanitizeFTSQuery(query)}
+	scope := ""
+	if project != "" {
+		scope = "AND o.project = ?"
+		args = append(args, project)
+	}
+	args = append(args, limit)
 	rows, err := s.db.Query(`
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified
 		FROM observations_fts f
 		JOIN observations o ON o.id = f.rowid
-		WHERE observations_fts MATCH ?
+		WHERE observations_fts MATCH ? `+scope+`
 		ORDER BY rank
-		LIMIT ?`, sanitizeFTSQuery(query), limit)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("fts5 search %q: %w", query, err)
 	}
@@ -232,6 +247,50 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]SearchResult, error)
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
 			&concepts, &filesRead, &filesModified); err != nil {
 			return nil, fmt.Errorf("scan session observation: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = parseJSONArray(facts)
+		r.Observation.Concepts = parseJSONArray(concepts)
+		r.Observation.FilesRead = parseJSONArray(filesRead)
+		r.Observation.FilesModified = parseJSONArray(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ObservationsForFile returns observations whose files_read or
+// files_modified mentions filePath — the read path for PreToolUse's
+// file-context hook: what does memory already know about this specific
+// file, not the whole project. json_each is SQLite's JSON1 table-valued
+// function for testing array membership; it's compiled into
+// modernc.org/sqlite (confirmed by hand, not assumed — see this package's
+// doc history).
+func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified
+		FROM observations o
+		WHERE o.project = ?
+		  AND (
+		    EXISTS (SELECT 1 FROM json_each(o.files_read) WHERE json_each.value = ?)
+		    OR EXISTS (SELECT 1 FROM json_each(o.files_modified) WHERE json_each.value = ?)
+		  )
+		ORDER BY o.created_at_epoch DESC, o.id DESC
+		LIMIT ?`, project, filePath, filePath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("observations for file %q: %w", filePath, err)
+	}
+	defer rows.Close()
+
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified string
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan file-context observation: %w", err)
 		}
 		nf.apply(&r.Observation)
 		r.Observation.Facts = parseJSONArray(facts)

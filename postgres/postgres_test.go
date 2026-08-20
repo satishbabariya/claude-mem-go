@@ -91,7 +91,15 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	// The exact real bug found in the SQLite/FTS5 backend: "claude-mem"
 	// broke FTS5's grammar outright. Postgres's plainto_tsquery must not
 	// have the same problem — that's the whole reason this backend exists.
-	results, err := st.Search("claude-mem", 10)
+	//
+	// Scoped to this test's own project: this is a persistent, shared
+	// database across every test run ever executed against it, and title
+	// "claude-mem installation found" is seeded repeatedly across runs — an
+	// unscoped search plus a small LIMIT can genuinely miss this run's own
+	// row under accumulated history. Real callers hit the identical
+	// scoping requirement for the identical reason (see Search's doc
+	// comment), so this isn't a test-only workaround.
+	results, err := st.Search(project, "claude-mem", 10)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error: %v", err)
 	}
@@ -114,7 +122,7 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("xyzzy_no_such_term_anywhere", 10)
+	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -151,7 +159,12 @@ func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 
 	query := make([]float32, DefaultEmbedDims)
 	query[0] = 1
-	matches, err := st.SemanticSearch(query, 50)
+	// Scoped to this test's own project: same accumulated-history reasoning
+	// as the hyphenated-query test above — an unscoped comparison set only
+	// grows every time this suite runs against the shared instance, and a
+	// fixed limit=50 would eventually push one of these two rows out of
+	// the returned set on ranking ties alone.
+	matches, err := st.SemanticSearch(project, query, 50)
 	if err != nil {
 		t.Fatalf("SemanticSearch: %v", err)
 	}
@@ -251,6 +264,38 @@ func TestPostgresBySessionIDOrdersOldestFirst(t *testing.T) {
 	if results[0].ID != first.ID || results[1].ID != second.ID {
 		t.Fatalf("BySessionID order = [%d, %d], want oldest first [%d, %d]",
 			results[0].ID, results[1].ID, first.ID, second.ID)
+	}
+}
+
+func TestPostgresObservationsForFileMatchesReadAndModifiedExactly(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	readMatch, err := st.Insert("s1", project, "Read", store.ContentHash("s1", "Read", "1", project),
+		store.Observation{Type: "discovery", Title: "read match", FilesRead: []string{"main.go"}}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	modifiedMatch, err := st.Insert("s1", project, "Edit", store.ContentHash("s1", "Edit", "2", project),
+		store.Observation{Type: "change", Title: "modified match", FilesModified: []string{"main.go"}}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if _, err := st.Insert("s1", project, "Read", store.ContentHash("s1", "Read", "3", project),
+		store.Observation{Type: "discovery", Title: "substring only", FilesRead: []string{"not-main.go-really"}}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	results, err := st.ObservationsForFile(project, "main.go", 10)
+	if err != nil {
+		t.Fatalf("ObservationsForFile: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("ObservationsForFile(\"main.go\") returned %d results, want exactly 2 (read + modified matches, not the substring-only row)", len(results))
+	}
+	ids := map[int64]bool{results[0].ID: true, results[1].ID: true}
+	if !ids[readMatch.ID] || !ids[modifiedMatch.ID] {
+		t.Fatalf("results = %v, want both %d and %d", ids, readMatch.ID, modifiedMatch.ID)
 	}
 }
 

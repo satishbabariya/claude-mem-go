@@ -15,6 +15,7 @@
 //	claude-mem-go context         — SessionStart hook: inject recent memory for this project as context
 //	claude-mem-go stop            — Stop hook: synthesize and persist a session-level summary observation
 //	claude-mem-go doctor          — check that the claude CLI, worker, database, and Ollama are all reachable
+//	claude-mem-go file-context    — PreToolUse hook (Read): inject prior memory about the specific file being read
 package main
 
 import (
@@ -69,6 +70,8 @@ func main() {
 		os.Exit(cmdStop(os.Args[2:]))
 	case "doctor":
 		os.Exit(cmdDoctor(os.Args[2:]))
+	case "file-context":
+		os.Exit(cmdFileContext(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -307,10 +310,11 @@ func cmdSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 10, "max results")
+	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-limit N] <query>")
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-limit N] <query>")
 		return 2
 	}
 	query := fs.Arg(0)
@@ -322,7 +326,7 @@ func cmdSearch(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.Search(query, *limit)
+	results, err := st.Search(*project, query, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1
@@ -346,10 +350,11 @@ func cmdSemanticSearch(args []string) int {
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(must match the model used when ingesting, or scores will be meaningless)")
 	limit := fs.Int("limit", 10, "max results")
+	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go semantic-search [-db path] [-limit N] <query>")
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go semantic-search [-db path] [-project name] [-limit N] <query>")
 		return 2
 	}
 	query := fs.Arg(0)
@@ -367,7 +372,7 @@ func cmdSemanticSearch(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.SemanticSearch(queryVec, *limit)
+	results, err := st.SemanticSearch(*project, queryVec, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED semantic search: %v\n", err)
 		return 1
@@ -396,7 +401,14 @@ func cmdMCP(args []string) int {
 	fs.Parse(args)
 
 	l := openLog("mcp.log")
-	srv := &mcpserver.Server{DBPath: *dbPath, EmbedModel: *embedModel, Log: l}
+	project := ""
+	if cwd, err := os.Getwd(); err == nil {
+		project = filepath.Base(cwd)
+		if project == "." {
+			project = ""
+		}
+	}
+	srv := &mcpserver.Server{DBPath: *dbPath, EmbedModel: *embedModel, Project: project, Log: l}
 	if err := srv.Run(os.Stdin, os.Stdout); err != nil {
 		l.Printf("server exited: %v", err)
 		return 1
@@ -404,11 +416,13 @@ func cmdMCP(args []string) int {
 	return 0
 }
 
-// sessionStartOutput is the JSON shape Claude Code expects back from a
-// SessionStart hook on stdout — confirmed against a real session earlier in
-// this project's development (a SessionStart hook injecting a skill this
-// exact way was observed directly), not guessed from docs.
-type sessionStartOutput struct {
+// hookOutput is the JSON shape Claude Code expects back on stdout from a
+// hook that injects context — confirmed against real sessions, not guessed
+// from docs: a SessionStart hook injecting a skill this exact way was
+// observed directly, and the same shape with hookEventName="PreToolUse"
+// was independently verified for the file-context hook (a real, distinctive
+// marker round-tripped through an actual Read tool call).
+type hookOutput struct {
 	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 }
 
@@ -471,7 +485,7 @@ func cmdContext(args []string) int {
 	}
 
 	ctx := formatContext(recent)
-	out := sessionStartOutput{HookSpecificOutput: &hookSpecificOutput{
+	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "SessionStart",
 		AdditionalContext: ctx,
 	}}
@@ -635,4 +649,97 @@ func cmdDoctor(args []string) int {
 	}
 	fmt.Println("All critical checks passed.")
 	return 0
+}
+
+// cmdFileContext is the PreToolUse hook (matcher "Read"): injects whatever
+// memory already exists about the SPECIFIC file about to be read, not the
+// whole project — real claude-mem's own PreToolUse hook is literally named
+// "file-context" for the same purpose. Verified empirically that PreToolUse
+// supports the same hookSpecificOutput.additionalContext injection
+// SessionStart uses, with a real distinctive marker round-tripped through
+// an actual Read tool call, before writing any of this.
+func cmdFileContext(args []string) int {
+	fs := flag.NewFlagSet("file-context", flag.ExitOnError)
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	limit := fs.Int("limit", 5, "how many prior observations about this file to inject")
+	fs.Parse(args)
+
+	l := openLog("file-context.log")
+
+	in, err := claudeagent.ParseHookInput(os.Stdin)
+	if err != nil {
+		l.Printf("FAILED parsing hook payload: %v", err)
+		fmt.Println("{}")
+		return 0
+	}
+	if in.ToolName != "Read" {
+		// Defensive: hooks.json's matcher already restricts this to Read,
+		// but a hook must never assume its own registration is the only
+		// thing that can invoke it.
+		l.Printf("skip: tool_name=%q is not Read", in.ToolName)
+		fmt.Println("{}")
+		return 0
+	}
+
+	var toolInput struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(in.ToolInput, &toolInput); err != nil || toolInput.FilePath == "" {
+		l.Printf("FAILED reading file_path from tool_input: %v (%s)", err, in.ToolInput)
+		fmt.Println("{}")
+		return 0
+	}
+
+	project := filepath.Base(in.Cwd)
+	if project == "" || project == "." {
+		project = filepath.Base(filepath.Dir(in.TranscriptPath))
+	}
+
+	st, err := backend.Open(context.Background(), *dbPath, 0)
+	if err != nil {
+		l.Printf("FAILED opening store at %s: %v", *dbPath, err)
+		fmt.Println("{}")
+		return 0
+	}
+	defer st.Close()
+
+	results, err := st.ObservationsForFile(project, toolInput.FilePath, *limit)
+	if err != nil {
+		l.Printf("FAILED ObservationsForFile(%s): %v", toolInput.FilePath, err)
+		fmt.Println("{}")
+		return 0
+	}
+	if len(results) == 0 {
+		l.Printf("no prior observations for file=%s project=%s", toolInput.FilePath, project)
+		fmt.Println("{}")
+		return 0
+	}
+
+	ctx := formatFileContext(toolInput.FilePath, results)
+	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
+		HookEventName:     "PreToolUse",
+		AdditionalContext: ctx,
+	}}
+	enc, err := json.Marshal(out)
+	if err != nil {
+		l.Printf("FAILED marshaling output: %v", err)
+		fmt.Println("{}")
+		return 0
+	}
+	l.Printf("injected %d observations for file=%s project=%s", len(results), toolInput.FilePath, project)
+	fmt.Println(string(enc))
+	return 0
+}
+
+func formatFileContext(filePath string, results []store.SearchResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Prior memory about %s:\n\n", filePath)
+	for _, r := range results {
+		fmt.Fprintf(&b, "- %s", r.Observation.Title)
+		if r.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

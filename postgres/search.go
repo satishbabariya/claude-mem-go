@@ -28,14 +28,27 @@ func (n nullableTextFields) apply(o *store.Observation) {
 // SQLite/FTS5 backend, plainto_tsquery tokenizes punctuation (including a
 // bare hyphen — the exact case that broke FTS5's grammar) without any
 // hand-written sanitizer.
-func (s *Store) Search(query string, limit int) ([]store.SearchResult, error) {
+// project scopes the search to one project when non-empty; empty searches
+// every project in the store. See store.Store.Search's doc comment for why
+// this matters: one shared database can hold observations from every
+// project ever recorded on the machine, so an unscoped search is a genuine
+// cross-project leak, not just a ranking nuisance.
+func (s *Store) Search(project, query string, limit int) ([]store.SearchResult, error) {
+	scope := ""
+	args := []any{query}
+	if project != "" {
+		scope = "AND project = $3"
+		args = append(args, limit, project)
+	} else {
+		args = append(args, limit)
+	}
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
-		WHERE search_vector @@ plainto_tsquery('english', $1)
+		WHERE search_vector @@ plainto_tsquery('english', $1) `+scope+`
 		ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC
-		LIMIT $2`, query, limit)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("full text search %q: %w", query, err)
 	}
@@ -121,6 +134,46 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, 
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
 			&concepts, &filesRead, &filesModified); err != nil {
 			return nil, fmt.Errorf("scan session observation: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = jsonDecode(facts)
+		r.Observation.Concepts = jsonDecode(concepts)
+		r.Observation.FilesRead = jsonDecode(filesRead)
+		r.Observation.FilesModified = jsonDecode(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ObservationsForFile returns observations whose files_read or
+// files_modified mentions filePath — the read path for PreToolUse's
+// file-context hook. `?` is JSONB's native "does this string exist as a
+// top-level array element" operator — the Postgres analog of SQLite's
+// json_each membership check, and does not conflict with pgx's $N
+// placeholder syntax (pgx never treats a bare `?` as a placeholder).
+func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]store.SearchResult, error) {
+	rows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE project = $1
+		  AND (files_read ? $2 OR files_modified ? $2)
+		ORDER BY created_at_epoch DESC, id DESC
+		LIMIT $3`, project, filePath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("observations for file %q: %w", filePath, err)
+	}
+	defer rows.Close()
+
+	var out []store.SearchResult
+	for rows.Next() {
+		var r store.SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified []byte
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan file-context observation: %w", err)
 		}
 		nf.apply(&r.Observation)
 		r.Observation.Facts = jsonDecode(facts)

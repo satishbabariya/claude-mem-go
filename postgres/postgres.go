@@ -181,14 +181,23 @@ func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
 // backed by the HNSW index from Open's schema — real ANN search, not a
 // linear scan. Score is 1-distance so it matches the SQLite backend's
 // convention (higher = closer, same range as cosine similarity).
-func (s *Store) SemanticSearch(queryVec []float32, limit int) ([]store.VectorMatch, error) {
+//
+// project scopes the comparison set to one project when non-empty, for the
+// same cross-project-leak reason as Search.
+func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]store.VectorMatch, error) {
+	scope := ""
+	args := []any{pgvector.NewVector(queryVec), limit}
+	if project != "" {
+		scope = "AND project = $3"
+		args = append(args, project)
+	}
 	rows, err := s.db.Query(`
 		SELECT id, project, tool_name, type, title, subtitle, facts, narrative,
 		       concepts, files_read, files_modified, 1 - (embedding <=> $1) AS score
 		FROM observations
-		WHERE embedding IS NOT NULL
+		WHERE embedding IS NOT NULL `+scope+`
 		ORDER BY embedding <=> $1
-		LIMIT $2`, pgvector.NewVector(queryVec), limit)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("semantic search: %w", err)
 	}
