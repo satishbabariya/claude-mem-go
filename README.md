@@ -123,6 +123,18 @@ docker compose up -d
   `database/sql`'s default of unlimited) — the two together are what keep
   a burst of concurrent tool calls from being the only thing standing
   between this daemon and a shared Postgres server's `max_connections`.
+  `postgres.Open` also now retries its initial ping on a short backoff
+  (~7.75s worst case across 6 attempts) instead of failing permanently on
+  the very first attempt — every real caller (this daemon, every CLI hook,
+  the MCP server) passes a context with no deadline of its own, so without
+  an internal bound a startup race (this daemon, or a hook, starting a
+  beat before Postgres's own container finishes its healthcheck) would
+  otherwise hard-fail every single time it happened to lose that race.
+  Verified against the real docker-compose container, not simulated: the
+  container was stopped, `Open` was called, the container was restarted
+  ~1.5s into the retry window, and `Open` returned successfully instead of
+  failing on its first ping — confirmed by measuring that it actually took
+  over a second, not that it merely didn't error.
 - **hook** — the thin client Claude Code's `PostToolUse` hook actually
   invokes: forward stdin to the worker's socket, exit. Deliberately does
   *no* observation work itself — see "Why the worker/hook split" below.

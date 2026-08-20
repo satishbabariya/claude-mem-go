@@ -62,6 +62,18 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`postgres.Open` retries its initial connection** on a short backoff
+  (~7.75s worst case across 6 attempts) instead of failing permanently on
+  the very first ping. Every real caller (the worker daemon, every CLI
+  hook, the MCP server) passes a context with no deadline of its own, so a
+  common startup race — this daemon, or a hook, starting a beat before
+  Postgres's own container finishes its healthcheck — would otherwise
+  hard-fail every time it happened to lose that race; a real, sustained
+  outage is still the process supervisor's job (systemd/launchd's
+  `Restart=on-failure`), not this retry loop's. Verified against the real
+  docker-compose container: stopped it, called `Open`, restarted it
+  mid-retry, confirmed `Open` recovered instead of failing on the first
+  attempt.
 - **Real binary releases** — `.goreleaser.yaml` + a tag-triggered
   `.github/workflows/release.yml` cross-compile `claude-mem-go` for
   linux/darwin × amd64/arm64 and attach them (plus a `checksums.txt`) to a

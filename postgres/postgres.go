@@ -88,6 +88,46 @@ CREATE INDEX IF NOT EXISTS idx_observations_embedding_hnsw
 	ON observations USING hnsw (embedding vector_cosine_ops);
 `
 
+// connectRetryBackoff is Open's retry schedule for the initial ping — every
+// real caller in this project (the worker daemon, every CLI hook/subcommand,
+// the MCP server) passes context.Background() or a signal-only context with
+// no deadline of its own, so without an internal bound a genuinely-down
+// Postgres would either hang a hook past Claude Code's own timeout or hang
+// an interactive CLI command indefinitely. Sized to smooth a real, common
+// startup race — this daemon (or a hook) starting before Postgres's own
+// container finishes coming up (docker-compose.yml's healthcheck allows up
+// to 40s for that) — without turning a genuinely-down Postgres into a long
+// hang: ~7.75s worst case across 6 attempts, well inside every hook's
+// 10-30s timeout in hooks/hooks.json. A real, sustained outage is the
+// process supervisor's job (systemd/launchd's Restart=on-failure, see
+// deploy/), not this retry loop's.
+var connectRetryBackoff = []time.Duration{0, 250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+// pingWithRetry pings db on the schedule in backoff (the first entry is
+// always 0 — try immediately before ever sleeping), stopping early if ctx
+// is canceled/expires. Returns the last ping error if every attempt fails.
+func pingWithRetry(ctx context.Context, db *sql.DB, backoff []time.Duration) error {
+	var err error
+	for _, delay := range backoff {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+		if err = db.PingContext(ctx); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+	}
+	return err
+}
+
 // Open connects to dsn (a postgres:// URL) and ensures the schema exists.
 // embedDims must match whatever embedding model the caller will use with
 // SaveEmbedding — pass 0 to use DefaultEmbedDims.
@@ -118,7 +158,7 @@ func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingWithRetry(ctx, db, connectRetryBackoff); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
