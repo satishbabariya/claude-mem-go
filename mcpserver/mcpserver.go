@@ -166,6 +166,24 @@ func tools() []toolDef {
 			},
 		},
 		{
+			Name: "timeline",
+			Description: "Get chronological context AROUND one observation — depth_before/depth_after " +
+				"observations immediately before and after it, in order. Use after a search to see what led " +
+				"up to or followed a result, not just the result in isolation. Give it either \"anchor\" " +
+				"(an observation ID, e.g. from a prior search_observations result) directly, or a \"query\" " +
+				"to find the anchor automatically (the single best keyword match becomes the anchor).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"anchor":       map[string]any{"type": "integer", "description": "Observation ID to center the timeline on"},
+					"query":        map[string]any{"type": "string", "description": "Find the anchor automatically via keyword search, if \"anchor\" isn't given"},
+					"depth_before": map[string]any{"type": "integer", "description": "Observations to include before the anchor (default 3, max 100)"},
+					"depth_after":  map[string]any{"type": "integer", "description": "Observations to include after the anchor (default 3, max 100)"},
+					"project":      map[string]any{"type": "string", "description": "Look at a different project instead of the current one"},
+				},
+			},
+		},
+		{
 			Name: "add_observation",
 			Description: "Explicitly persist a fact, decision, or preference into claude-mem-go's memory — " +
 				"for something worth remembering that isn't the direct result of one tool call. Automatic " +
@@ -318,15 +336,18 @@ type toolCallParams struct {
 		Query       string   `json:"query"`
 		Limit       int      `json:"limit"`
 		AllProjects bool     `json:"all_projects"`
-		Project     string   `json:"project"`    // recent_observations, file_observations, add_observation: override the current project
-		SessionID   string   `json:"session_id"` // session_observations
-		FilePath    string   `json:"file_path"`  // file_observations
-		Title       string   `json:"title"`      // add_observation
-		Subtitle    string   `json:"subtitle"`   // add_observation
-		Narrative   string   `json:"narrative"`  // add_observation
-		Facts       []string `json:"facts"`      // add_observation
-		Concepts    []string `json:"concepts"`   // add_observation
-		IDs         []int64  `json:"ids"`        // get_observations
+		Project     string   `json:"project"`      // recent_observations, file_observations, add_observation: override the current project
+		SessionID   string   `json:"session_id"`   // session_observations
+		FilePath    string   `json:"file_path"`    // file_observations
+		Title       string   `json:"title"`        // add_observation
+		Subtitle    string   `json:"subtitle"`     // add_observation
+		Narrative   string   `json:"narrative"`    // add_observation
+		Facts       []string `json:"facts"`        // add_observation
+		Concepts    []string `json:"concepts"`     // add_observation
+		IDs         []int64  `json:"ids"`          // get_observations
+		Anchor      int64    `json:"anchor"`       // timeline
+		DepthBefore int      `json:"depth_before"` // timeline
+		DepthAfter  int      `json:"depth_after"`  // timeline
 	} `json:"arguments"`
 }
 
@@ -378,6 +399,9 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		result = s.runFile(scopedProject, params.Arguments.FilePath, limit)
 	case "get_observations":
 		result = s.runGetObservations(project, params.Arguments.IDs)
+	case "timeline":
+		result = s.runTimeline(scopedProject, params.Arguments.Anchor, params.Arguments.Query,
+			params.Arguments.DepthBefore, params.Arguments.DepthAfter)
 	case "add_observation":
 		result = s.runAddObservation(scopedProject, params.Arguments.Title, params.Arguments.Subtitle,
 			params.Arguments.Narrative, params.Arguments.Facts, params.Arguments.Concepts)
@@ -472,6 +496,54 @@ func (s *Server) runGetObservations(project string, ids []int64) toolCallResult 
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatFullObservations(results)}}}
 }
 
+// runTimeline is the chronological-context companion to search: real
+// claude-mem's own `timeline` tool exists as "step 2" of its own
+// search→timeline→get_observations pipeline ("get context around
+// results"), and this project's version covers the identical real need —
+// a search result in isolation doesn't say what led up to it or came
+// right after, and RecentByProject/BySessionID answer a different
+// question ("what's recent"/"what happened this session") than "what
+// surrounds this ONE specific observation."
+//
+// anchor is used directly if non-zero; otherwise query resolves one via a
+// single-result Search — the same "find it for me" convenience real
+// claude-mem's own timeline tool offers. Scoping and the cross-project
+// anchor check both happen inside Backend.Timeline itself, the same
+// single source of truth ByIDs/Search already rely on for their own
+// project-safety checks.
+func (s *Server) runTimeline(project string, anchor int64, query string, depthBefore, depthAfter int) toolCallResult {
+	if project == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+	if anchor == 0 && query == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline requires either an \"anchor\" (observation id) or a \"query\" to find one"}}}
+	}
+	if depthBefore <= 0 {
+		depthBefore = 3
+	}
+	if depthAfter <= 0 {
+		depthAfter = 3
+	}
+
+	if anchor == 0 {
+		matches, err := s.st.Search(project, query, 1)
+		if err != nil {
+			return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: resolving anchor via query failed: " + err.Error()}}}
+		}
+		if len(matches) == 0 {
+			return toolCallResult{Content: []toolContent{{Type: "text", Text: "No observations matched that query, so there's no anchor to build a timeline around."}}}
+		}
+		anchor = matches[0].ID
+	}
+
+	results, err := s.st.Timeline(project, anchor, depthBefore, depthAfter)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline failed: " + err.Error()}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatTimeline(results, anchor)}}}
+}
+
 // runAddObservation is the write side of this server's otherwise
 // read-only surface: every other tool reads what PostToolUse already
 // captured automatically. This lets Claude explicitly persist something
@@ -545,6 +617,30 @@ func formatSearchResults(results []store.SearchResult) string {
 	var b strings.Builder
 	for _, r := range results {
 		fmt.Fprintf(&b, "[%d] %s (%s, %s)\n", r.ID, r.Observation.Title, r.Project, r.ToolName)
+		if r.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, "    %s\n", r.Observation.Subtitle)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatTimeline is timeline's formatter — abbreviated like
+// formatSearchResults (title/subtitle only; use get_observations for full
+// detail on any one of these), but marks the anchor row with "→" so the
+// caller can see which one the before/after entries are actually relative
+// to, especially when it was resolved automatically from a query rather
+// than given directly.
+func formatTimeline(results []store.SearchResult, anchor int64) string {
+	if len(results) == 0 {
+		return "No observations found."
+	}
+	var b strings.Builder
+	for _, r := range results {
+		marker := " "
+		if r.ID == anchor {
+			marker = "→"
+		}
+		fmt.Fprintf(&b, "%s [%d] %s (%s, %s)\n", marker, r.ID, r.Observation.Title, r.Project, r.ToolName)
 		if r.Observation.Subtitle != "" {
 			fmt.Fprintf(&b, "    %s\n", r.Observation.Subtitle)
 		}

@@ -21,18 +21,20 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Seven tools, four kinds of job
+## Eight tools, five kinds of job
 
-claude-mem-go exposes seven MCP tools — simpler than a multi-step
-index/timeline/fetch pipeline, because this project's schema doesn't carry
-the token-cost concerns that pipeline exists to manage (no separate raw-vs-
-compressed representations to fetch in stages). Two are search (below);
-three are direct lookups when you already know what you want and don't
-need to search for it; one — `get_observations` — fetches full detail for
-IDs any of the others already gave you; one — `add_observation` — is the
-only *write* tool among them (see below). This skill is mainly about
-finding what's already remembered, but recognizing when a request actually
-needs `add_observation` instead of a search matters too:
+claude-mem-go exposes eight MCP tools — independently callable, not a
+mandatory staged pipeline the way real claude-mem's own
+search→timeline→get_observations sequence is (that staging exists to
+manage token cost across separate raw-vs-compressed representations this
+project's schema doesn't have). Two are search (below); three are direct
+lookups when you already know what you want and don't need to search for
+it; `get_observations` fetches full detail for IDs any of the others
+already gave you; `timeline` gets chronological context AROUND one
+result rather than the result in isolation; one — `add_observation` — is
+the only *write* tool among them (see below). This skill is mainly about
+finding what's already remembered, but recognizing when a request
+actually needs `add_observation` instead of a search matters too:
 
 - `recent_observations(limit?, project?)` — the current project's most
   recent observations, newest first. The same read path `SessionStart`'s
@@ -69,6 +71,24 @@ search. Capped at 100 IDs per call (the same "max 100" convention every
 other tool's `limit` uses) — this is a detail lookup for results a search
 already returned, not a bulk export; call it again in batches if there
 are genuinely more than 100 IDs worth reading.
+
+### `timeline` — context AROUND a result, not the result alone
+
+A search result in isolation doesn't say what led up to it or what
+happened right after. `timeline(anchor?, query?, depth_before?, depth_after?)`
+returns the anchor observation plus the observations immediately before
+and after it, in chronological order — give it an `anchor` (an
+observation ID, e.g. from a search result) directly, or a `query` to find
+one automatically (the single best keyword match becomes the anchor):
+
+```
+timeline(anchor=42, depth_before=3, depth_after=3)
+timeline(query="added rate limiting")   -- finds the anchor for you
+```
+
+Depths default to 3 each side, capped at 100. Use this when the user asks
+"what led up to X" or "what did we do right after Y," not when they just
+want to know what X or Y was — `get_observations` answers that.
 
 ### `search_observations` — exact terms
 
@@ -162,4 +182,9 @@ file_observations(file_path="src/auth/middleware.go")
 ```
 search_observations(query="rate limiting")   -> "[42] Added request throttling (proj, Bash)"
 get_observations(ids=[42])                   -> full narrative/facts/concepts/files for id 42
+```
+
+**"What led up to that" / "what happened right after" — context around a result, not the result alone:**
+```
+timeline(query="added rate limiting", depth_before=3, depth_after=3)
 ```

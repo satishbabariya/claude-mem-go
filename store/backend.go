@@ -41,6 +41,13 @@ type Backend interface {
 	// call) and wants full details the abbreviated list formats omit.
 	// Unknown IDs are silently omitted rather than erroring.
 	ByIDs(ids []int64) ([]SearchResult, error)
+	// Timeline returns up to depthBefore observations immediately before
+	// anchorID and up to depthAfter immediately after it, in chronological
+	// order with the anchor itself included — "what happened around this
+	// specific observation," the read path for the `timeline` MCP tool.
+	// Always scoped to the anchor's own project; project is a caller
+	// assertion checked against that, not an independent filter.
+	Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]SearchResult, error)
 	// Prune deletes observations older than cutoffEpoch (a Unix seconds
 	// timestamp), scoped to one project when non-empty or every project
 	// when empty. dryRun counts what WOULD be deleted without deleting

@@ -145,6 +145,9 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	if !found["get_observations"] {
 		t.Errorf("tools/list missing get_observations, got %v", names)
 	}
+	if !found["timeline"] {
+		t.Errorf("tools/list missing timeline, got %v", names)
+	}
 }
 
 func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
@@ -530,6 +533,87 @@ func TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError(t *testing.T) {
 	text := content["text"].(string)
 	if !strings.Contains(text, "exceeds") {
 		t.Errorf("error text = %q, want it to mention the limit being exceeded, not a raw driver error", text)
+	}
+}
+
+// TestToolsCallTimelineWithDirectAnchorReturnsSurroundingContext seeds a
+// known sequence and confirms timeline returns the anchor plus its real
+// neighbors, marked so the anchor is identifiable in the output — the
+// real "get context around one result" gap this tool closes, distinct
+// from recent_observations (which answers "what's recent," not "what
+// surrounds this specific one").
+func TestToolsCallTimelineWithDirectAnchorReturnsSurroundingContext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var anchorID int64
+	for _, title := range []string{"first", "second", "third", "fourth", "fifth"} {
+		res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", title, "x"),
+			store.Observation{Type: "discovery", Title: title}, 0)
+		if err != nil {
+			t.Fatalf("seed %s: %v", title, err)
+		}
+		if title == "third" {
+			anchorID = res.ID
+		}
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d,"depth_before":1,"depth_after":1}}}`, anchorID),
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "second") || !strings.Contains(text, "third") || !strings.Contains(text, "fourth") {
+		t.Fatalf("timeline around \"third\" = %q, want second/third/fourth present", text)
+	}
+	if strings.Contains(text, "first") || strings.Contains(text, "fifth") {
+		t.Fatalf("timeline with depth_before=1/depth_after=1 = %q, want first/fifth excluded (too far from the anchor)", text)
+	}
+	if !strings.Contains(text, "→") {
+		t.Errorf("timeline output = %q, want the anchor row marked with →", text)
+	}
+}
+
+// TestToolsCallTimelineResolvesAnchorFromQuery confirms the "no anchor
+// given, find one via query" convenience path real claude-mem's own
+// timeline tool offers the identical way.
+func TestToolsCallTimelineResolvesAnchorFromQuery(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "unrelated observation about kites"}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
+		store.Observation{Type: "discovery", Title: "rate limiting middleware added"}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"query":"rate limiting"}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "rate limiting middleware added") {
+		t.Fatalf("timeline resolved via query = %q, want the matched observation present as the anchor", text)
+	}
+}
+
+func TestToolsCallTimelineRequiresAnchorOrQuery(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("timeline with neither anchor nor query: want isError=true, got %v", resp[0])
 	}
 }
 

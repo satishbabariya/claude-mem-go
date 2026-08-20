@@ -190,7 +190,7 @@ docker compose up -d
   `-project` scopes to one project; the default (empty) searches every
   project in the store, since these are ad-hoc CLI lookups run by a human
   who may genuinely want that.
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing seven tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing eight tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` and `semantic_search_observations` (keyword and
   meaning-based search), `recent_observations`, `session_observations`,
@@ -257,6 +257,29 @@ docker compose up -d
   protocol boundary that an oversized request comes back as a clean
   `isError` tool result mentioning the limit, not a raw driver error
   leaking through.
+  Also **`timeline`** — chronological context AROUND one observation
+  (`depth_before`/`depth_after` observations immediately surrounding an
+  anchor), mirroring real claude-mem's own `timeline` tool ("step 2: get
+  context around results"). Answers a different question than
+  `recent_observations`/`session_observations`: not "what's recent" or
+  "what happened this session," but "what surrounds this ONE specific
+  observation" — the read path a search result in isolation can't answer
+  on its own. Give it an `anchor` (an observation ID) directly, or a
+  `query` to resolve one automatically via a single-result keyword search,
+  the same convenience real claude-mem's version offers. New
+  `Backend.Timeline` method in both backends, ordered by `id` (not
+  `created_at_epoch` like every other query) since id increases
+  monotonically with insertion order in both SQLite's rowid and Postgres's
+  `BIGSERIAL` — confirmed true in both, not assumed. Always scoped to the
+  anchor's own project rather than trusting the caller's project argument
+  at face value, closing off the same class of cross-project leak fixed
+  for `Search`/`ByIDs` earlier — verified with a dedicated regression test
+  seeding two projects with numerically-adjacent IDs and confirming the
+  timeline never crosses the boundary. Verified end to end against a real
+  `claude` CLI session for both the direct-anchor and query-resolution
+  paths: seeded a real chronological sequence, asked for context around
+  one specific item, and got back exactly its true neighbors with the
+  anchor correctly marked.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate

@@ -235,3 +235,94 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]stor
 	}
 	return out, rows.Err()
 }
+
+// Timeline mirrors store.Store's Timeline exactly, including the same
+// "always scoped to the anchor's own project" safety rule and the same
+// store.MaxTimelineDepth cap — see its doc comment for the full
+// reasoning. Ordered by id, same as the SQLite backend: BIGSERIAL
+// increases monotonically with insertion order here too, so "before/after
+// this row" is exact without needing a timestamp comparison.
+func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]store.SearchResult, error) {
+	if depthBefore > store.MaxTimelineDepth {
+		depthBefore = store.MaxTimelineDepth
+	}
+	if depthAfter > store.MaxTimelineDepth {
+		depthAfter = store.MaxTimelineDepth
+	}
+
+	anchorRows, err := s.ByIDs([]int64{anchorID})
+	if err != nil {
+		return nil, fmt.Errorf("timeline: %w", err)
+	}
+	if len(anchorRows) == 0 {
+		return nil, fmt.Errorf("timeline: anchor id %d not found", anchorID)
+	}
+	anchor := anchorRows[0]
+	if project != "" && anchor.Project != project {
+		return nil, fmt.Errorf("timeline: anchor id %d belongs to a different project", anchorID)
+	}
+
+	beforeRows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id < $1 AND project = $2
+		ORDER BY id DESC
+		LIMIT $3`, anchorID, anchor.Project, depthBefore)
+	if err != nil {
+		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
+	}
+	before, err := scanTimelineRows(beforeRows)
+	if err != nil {
+		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
+	}
+	for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
+		before[i], before[j] = before[j], before[i]
+	}
+
+	afterRows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id > $1 AND project = $2
+		ORDER BY id ASC
+		LIMIT $3`, anchorID, anchor.Project, depthAfter)
+	if err != nil {
+		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
+	}
+	after, err := scanTimelineRows(afterRows)
+	if err != nil {
+		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
+	}
+
+	out := make([]store.SearchResult, 0, len(before)+1+len(after))
+	out = append(out, before...)
+	out = append(out, anchor)
+	out = append(out, after...)
+	return out, nil
+}
+
+// scanTimelineRows is Timeline's own scan helper — see the SQLite
+// backend's identically-named function for why it isn't shared more
+// broadly across this file's other queries.
+func scanTimelineRows(rows *sql.Rows) ([]store.SearchResult, error) {
+	defer rows.Close()
+	var out []store.SearchResult
+	for rows.Next() {
+		var r store.SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified []byte
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan timeline row: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = jsonDecode(facts)
+		r.Observation.Concepts = jsonDecode(concepts)
+		r.Observation.FilesRead = jsonDecode(filesRead)
+		r.Observation.FilesModified = jsonDecode(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

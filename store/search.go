@@ -314,6 +314,122 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]Sear
 	return out, rows.Err()
 }
 
+// MaxTimelineDepth bounds Timeline's depthBefore/depthAfter — the same
+// "no legitimate caller needs more than a page" reasoning as
+// MaxIDsPerLookup, and for a query built from a caller-controlled integer
+// rather than a caller-controlled slice length, so there's no driver-level
+// placeholder-count failure mode here to reproduce; this cap exists purely
+// to keep one MCP call bounded, not to work around a driver limit.
+const MaxTimelineDepth = 100
+
+// Timeline returns up to depthBefore observations immediately before
+// anchorID and up to depthAfter immediately after it, in chronological
+// order, with the anchor itself included in the middle — the read path
+// for the `timeline` MCP tool, mirroring real claude-mem's own tool of the
+// same name ("get context around results"). Ordered by id, not
+// created_at_epoch like every other query in this file: id increases
+// monotonically with insertion order (SQLite's own rowid), and "the N rows
+// immediately before/after this specific row" is an exact relationship
+// expressed that way, rather than reconstructed from a timestamp that
+// could in principle collide across rows.
+//
+// Always scoped to the anchor's OWN project, not the caller's project
+// argument taken at face value — if a caller passes a project that
+// doesn't match the anchor's, that's almost certainly a caller mistake
+// (the anchor ID came from a different project's search) and Timeline
+// errors rather than silently ignoring it or, worse, ever pulling
+// before/after rows from some OTHER project than the one the anchor
+// actually lives in.
+func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]SearchResult, error) {
+	if depthBefore > MaxTimelineDepth {
+		depthBefore = MaxTimelineDepth
+	}
+	if depthAfter > MaxTimelineDepth {
+		depthAfter = MaxTimelineDepth
+	}
+
+	anchorRows, err := s.ByIDs([]int64{anchorID})
+	if err != nil {
+		return nil, fmt.Errorf("timeline: %w", err)
+	}
+	if len(anchorRows) == 0 {
+		return nil, fmt.Errorf("timeline: anchor id %d not found", anchorID)
+	}
+	anchor := anchorRows[0]
+	if project != "" && anchor.Project != project {
+		return nil, fmt.Errorf("timeline: anchor id %d belongs to a different project", anchorID)
+	}
+
+	beforeRows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id < ? AND project = ?
+		ORDER BY id DESC
+		LIMIT ?`, anchorID, anchor.Project, depthBefore)
+	if err != nil {
+		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
+	}
+	before, err := scanTimelineRows(beforeRows)
+	if err != nil {
+		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
+	}
+	// beforeRows came back newest-first (closest to the anchor first);
+	// reverse in place so the final result reads oldest-to-newest overall.
+	for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
+		before[i], before[j] = before[j], before[i]
+	}
+
+	afterRows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id > ? AND project = ?
+		ORDER BY id ASC
+		LIMIT ?`, anchorID, anchor.Project, depthAfter)
+	if err != nil {
+		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
+	}
+	after, err := scanTimelineRows(afterRows)
+	if err != nil {
+		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
+	}
+
+	out := make([]SearchResult, 0, len(before)+1+len(after))
+	out = append(out, before...)
+	out = append(out, anchor)
+	out = append(out, after...)
+	return out, nil
+}
+
+// scanTimelineRows is Timeline's own scan helper, not shared with the rest
+// of this file's queries (each already has its own inline scan loop,
+// matching this file's existing convention) — factored out only because
+// Timeline's before/after queries are otherwise identical to each other
+// and it would otherwise be the third copy of the exact same block within
+// one function.
+func scanTimelineRows(rows *sql.Rows) ([]SearchResult, error) {
+	defer rows.Close()
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified string
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan timeline row: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = parseJSONArray(facts)
+		r.Observation.Concepts = parseJSONArray(concepts)
+		r.Observation.FilesRead = parseJSONArray(filesRead)
+		r.Observation.FilesModified = parseJSONArray(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // parseJSONArray inverts jsonArray's encoding. A fact/concept is often a
 // full sentence and can contain commas, so this must be real JSON decoding,
 // not a naive split(",") — that would silently mis-parse most real facts.

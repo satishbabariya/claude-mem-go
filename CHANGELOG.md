@@ -62,6 +62,19 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`timeline`** — MCP tool #8: chronological context AROUND one
+  observation (`depth_before`/`depth_after` observations surrounding an
+  anchor), mirroring real claude-mem's own `timeline` tool ("step 2: get
+  context around results"). Give it an `anchor` directly or a `query` to
+  resolve one automatically via a single-result keyword search. New
+  `Backend.Timeline` method in both backends, ordered by `id` rather than
+  `created_at_epoch` (confirmed in both SQLite's rowid and Postgres's
+  `BIGSERIAL` that id increases monotonically with insertion order,
+  rather than assumed). Always scoped to the anchor's own project, not
+  the caller's project argument at face value — the same cross-project
+  leak class fixed for `Search`/`ByIDs` earlier, with its own dedicated
+  regression test. Verified end to end against a real `claude` CLI
+  session for both the direct-anchor and query-resolution paths.
 - **`get_observations`/`Backend.ByIDs` capped at 100 IDs per call**
   (`store.MaxIDsPerLookup`). Found the hard way: a real test against this
   project's own SQLite driver showed 100,000 IDs failing outright with a
