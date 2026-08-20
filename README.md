@@ -196,6 +196,15 @@ docker compose up -d
   check's own output back (worker/database/Ollama status), confirming
   `$CLAUDE_PLUGIN_ROOT` resolves correctly for a skill-invoked command, not
   just for hooks and the MCP server.
+- **skills/mem-prune and skills/mem-export** — surface `prune` and
+  `export`/`import` as `/mem-prune`/`/mem-export` the same way
+  `mem-doctor` surfaces `doctor`. `mem-prune`'s instructions are written to
+  treat this as the one genuinely destructive operation in the CLI: always
+  run the dry run first, show the count, and get explicit confirmation
+  before ever adding `-yes` — verified live, not just written and hoped
+  for: asked a real session to "clean up memories older than 1 day" and
+  confirmed it ran the dry run, reported the count, and asked whether to
+  actually delete rather than doing so on its own.
 - **doctor** — an operational health check: is the `claude` CLI on `PATH`,
   is the worker daemon reachable, is the database reachable, is Ollama
   reachable with the configured model actually pulled. Distinguishes

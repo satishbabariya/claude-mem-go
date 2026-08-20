@@ -24,8 +24,11 @@ than assumed correct.
 - **Worker observability** — activity counters (`worker-stats.json`)
   surfaced through `doctor`, where before there was only raw log text.
 - **`version` command** — build commit/time via Go's own VCS stamping.
-- **`doctor`** extended; **`mem-search`** and **`mem-doctor`** Claude Code
-  skills added.
+- **`doctor`** extended; **`mem-search`**, **`mem-doctor`**,
+  **`mem-prune`**, and **`mem-export`** Claude Code skills added —
+  `mem-prune`'s instructions treat `prune` as the one genuinely
+  destructive CLI operation, always dry-running and confirming before
+  ever passing `-yes`.
 - **Log rotation** (5MB cap, one prior generation) — logs had no cap
   before and could grow unbounded.
 - **Optional systemd/launchd templates** (`deploy/`) for supervising the
