@@ -168,7 +168,7 @@ docker compose up -d
   `-project` scopes to one project; the default (empty) searches every
   project in the store, since these are ad-hoc CLI lookups run by a human
   who may genuinely want that.
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing six tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing seven tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` and `semantic_search_observations` (keyword and
   meaning-based search), `recent_observations`, `session_observations`,
@@ -207,6 +207,24 @@ docker compose up -d
   and the CLI got it too. Pass `all_projects: true` to a search tool call
   to search everything on purpose, or `project: "..."` to `recent_observations`/
   `file_observations` to look at a different single project.
+  Also **`get_observations`** — fetch full details (narrative, facts,
+  concepts, files) for specific observation IDs, e.g. the `[id]` shown in
+  any list-shaped tool's abbreviated output. Every other tool's list format
+  deliberately shows only title/subtitle to keep results short (compared
+  against real claude-mem's own `get_observations`, which exists for the
+  identical reason: theirs is "step 3, fetch full details for filtered
+  IDs" after their `search`/`timeline` steps). Backed by a new
+  `Backend.ByIDs` method in both storage backends — SQLite via a
+  hand-built `IN (?,?,...)` placeholder list (`database/sql` gives it no
+  way to bind a whole slice as one placeholder), Postgres via pgx's native
+  `= ANY($1)` support for a plain `[]int64` argument, verified against the
+  live Docker container. Unknown IDs are silently omitted, not an error.
+  Scoped to the current project the same way `search_observations` is —
+  without that, a caller could read another project's observations just by
+  guessing or iterating IDs, the same cross-project leak class fixed for
+  `Search`/`SemanticSearch` earlier. Verified end to end against a real
+  `claude` CLI session (a live MCP tool call, not just a unit test) that
+  fetched a seeded observation's full narrative/facts/concepts by ID.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate

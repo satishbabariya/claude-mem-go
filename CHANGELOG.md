@@ -13,7 +13,7 @@ than assumed correct.
 
 - **Schema migrations** — a real, versioned `schema_migrations` framework
   shared by both backends, replacing ad hoc per-column upgrade checks.
-- **MCP tool surface** grew from 2 tools to 6: `recent_observations`,
+- **MCP tool surface** grew from 2 tools to 7: `recent_observations`,
   `session_observations`, `file_observations` alongside
   `search_observations`/`semantic_search_observations`, plus
   `add_observation` — the surface's only *write* tool, letting Claude
@@ -23,6 +23,15 @@ than assumed correct.
   own — it never embedded the new observation, so it was invisible to
   `semantic_search_observations` even though keyword search found it fine
   — fixed the same iteration, verified with a real Ollama-backed test.
+  Then **`get_observations`** — fetch full details (narrative, facts,
+  concepts, files) for specific IDs, closing the gap every other tool's
+  deliberately-abbreviated list output left: no way to see an
+  observation's full content without a separate CLI call outside the MCP
+  surface entirely. New `Backend.ByIDs` method backs it in both storage
+  backends (SQLite's hand-built `IN (?,?,...)`, Postgres's native
+  `= ANY($1)` array support), scoped to the current project the same way
+  `search_observations` is. Verified against a real `claude` CLI session,
+  not just a unit test.
 - **`PreToolUse` (file-context) and `Stop` (session summary) hooks wired**,
   closing two of the previously-unwired hooks.
 - **`prune`** — retention command (dry-run by default), and **`export`/

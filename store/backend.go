@@ -36,6 +36,11 @@ type Backend interface {
 	// files_modified mentions filePath — the read path for PreToolUse's
 	// file-context hook.
 	ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error)
+	// ByIDs fetches specific observations by ID — the read path for a
+	// caller that already has IDs (from a prior Search/RecentByProject
+	// call) and wants full details the abbreviated list formats omit.
+	// Unknown IDs are silently omitted rather than erroring.
+	ByIDs(ids []int64) ([]SearchResult, error)
 	// Prune deletes observations older than cutoffEpoch (a Unix seconds
 	// timestamp), scoped to one project when non-empty or every project
 	// when empty. dryRun counts what WOULD be deleted without deleting

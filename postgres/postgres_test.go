@@ -133,6 +133,45 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 	}
 }
 
+// TestPostgresByIDsFetchesExactRowsAndOmitsUnknownIDs verifies `= ANY($1)`
+// with a native Go []int64 arg actually works through pgx's stdlib driver
+// (not assumed from docs) — the SQLite backend needed a hand-built
+// `IN (?,?,...)` placeholder list for the identical lookup since
+// database/sql gives it no equivalent way to bind a whole slice.
+func TestPostgresByIDsFetchesExactRowsAndOmitsUnknownIDs(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	r1, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "a", project),
+		store.Observation{Type: "discovery", Title: "first", Narrative: "narrative one", Facts: []string{"fact a"}}, 0)
+	if err != nil {
+		t.Fatalf("Insert 1: %v", err)
+	}
+	r2, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "b", project),
+		store.Observation{Type: "discovery", Title: "second", Narrative: "narrative two"}, 0)
+	if err != nil {
+		t.Fatalf("Insert 2: %v", err)
+	}
+
+	results, err := st.ByIDs([]int64{r1.ID, r2.ID, 999999999})
+	if err != nil {
+		t.Fatalf("ByIDs: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("ByIDs returned %d results, want 2 (unknown id 999999999 should be silently omitted)", len(results))
+	}
+	byID := map[int64]store.SearchResult{}
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+	if got := byID[r1.ID].Observation.Facts; len(got) != 1 || got[0] != "fact a" {
+		t.Errorf("ByIDs facts for id=%d = %v, want [\"fact a\"]", r1.ID, got)
+	}
+	if got := byID[r2.ID].Observation.Narrative; got != "narrative two" {
+		t.Errorf("ByIDs narrative for id=%d = %q, want %q", r2.ID, got, "narrative two")
+	}
+}
+
 func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)

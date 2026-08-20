@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -140,6 +141,9 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	}
 	if !found["add_observation"] {
 		t.Errorf("tools/list missing add_observation, got %v", names)
+	}
+	if !found["get_observations"] {
+		t.Errorf("tools/list missing get_observations, got %v", names)
 	}
 }
 
@@ -446,6 +450,53 @@ func TestToolsCallFileObservationsWithNoFilePathIsAnError(t *testing.T) {
 	})
 	if !toolCallIsError(t, resp[0]) {
 		t.Fatalf("file_observations with no file_path: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallGetObservationsReturnsFullDetailAndScopesToProject covers
+// both of get_observations' real contracts at once: it must surface fields
+// (narrative, facts) the list-shaped tools deliberately omit, and it must
+// not leak another project's row just because the caller happened to guess
+// its ID — the same cross-project scoping search_observations/
+// semantic_search_observations were fixed for earlier this project.
+func TestToolsCallGetObservationsReturnsFullDetailAndScopesToProject(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ra, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "in A", Narrative: "the full story", Facts: []string{"fact one"}}, 0)
+	if err != nil {
+		t.Fatalf("seed a: %v", err)
+	}
+	rb, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
+		store.Observation{Type: "discovery", Title: "in B", Narrative: "someone else's story"}, 0)
+	if err != nil {
+		t.Fatalf("seed b: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_observations","arguments":{"ids":[%d,%d]}}}`, ra.ID, rb.ID),
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "the full story") || !strings.Contains(text, "fact one") {
+		t.Fatalf("get_observations did not surface narrative/facts: %q", text)
+	}
+	if strings.Contains(text, "someone else's story") {
+		t.Fatalf("get_observations leaked proj-b's row across the project boundary: %q", text)
+	}
+}
+
+func TestToolsCallGetObservationsRequiresNonEmptyIDs(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_observations","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("get_observations with no ids: want isError=true, got %v", resp[0])
 	}
 }
 

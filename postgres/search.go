@@ -145,6 +145,49 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, 
 	return out, rows.Err()
 }
 
+// ByIDs fetches specific observations by ID — the one lookup shape none of
+// the other read paths cover, for a caller that already has IDs (from a
+// prior Search/RecentByProject call) and wants full details (facts,
+// narrative, concepts, files) that the abbreviated list formats omit.
+// Unknown IDs are silently omitted rather than erroring. `= ANY($1)` with a
+// native Go []int64 arg is pgx's own array support (see pgx/v5's stdlib
+// driver docs) — no hand-built placeholder list needed, unlike SQLite's
+// `IN (?,?,...)` (database/sql gives SQLite no equivalent to bind a whole
+// slice as one placeholder).
+func (s *Store) ByIDs(ids []int64) ([]store.SearchResult, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("fetch observations by id: %w", err)
+	}
+	defer rows.Close()
+
+	var out []store.SearchResult
+	for rows.Next() {
+		var r store.SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified []byte
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan observation by id: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = jsonDecode(facts)
+		r.Observation.Concepts = jsonDecode(concepts)
+		r.Observation.FilesRead = jsonDecode(filesRead)
+		r.Observation.FilesModified = jsonDecode(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ObservationsForFile returns observations whose files_read or
 // files_modified mentions filePath — the read path for PreToolUse's
 // file-context hook. `?` is JSONB's native "does this string exist as a

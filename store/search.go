@@ -322,3 +322,55 @@ func parseJSONArray(raw string) []string {
 	_ = json.Unmarshal([]byte(raw), &out) // malformed input yields nil, not a panic
 	return out
 }
+
+// ByIDs fetches specific observations by ID, in no particular guaranteed
+// order beyond what SQLite happens to return — callers that need a stable
+// order (e.g. "in the order I asked for them") should sort client-side.
+// This is the one lookup shape none of the other read paths cover: every
+// other query is "what matches a query/project/session/file," but a caller
+// that already has IDs (from a prior search_observations or
+// recent_observations call) had no way to re-fetch their full details —
+// e.g. facts/concepts/files, which formatSearchResults deliberately omits
+// to keep list output short — without re-running the original query and
+// hoping the row is still in the page. Unknown IDs are silently omitted
+// rather than erroring, the same way a search for a query that matches
+// nothing returns an empty slice rather than failing.
+func (s *Store) ByIDs(ids []int64) ([]SearchResult, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE id IN (%s)`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("fetch observations by id: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified string
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan observation by id: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = parseJSONArray(facts)
+		r.Observation.Concepts = parseJSONArray(concepts)
+		r.Observation.FilesRead = parseJSONArray(filesRead)
+		r.Observation.FilesModified = parseJSONArray(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

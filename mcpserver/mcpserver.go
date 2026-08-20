@@ -153,6 +153,19 @@ func tools() []toolDef {
 			},
 		},
 		{
+			Name: "get_observations",
+			Description: "Fetch full details (narrative, facts, concepts, files) for specific observation IDs — " +
+				"the other tools' list output is deliberately abbreviated (title/subtitle only) to keep results " +
+				"short; use the [id] shown there with this tool to see everything about one or more of them.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Observation IDs to fetch (required)"},
+				},
+				"required": []string{"ids"},
+			},
+		},
+		{
 			Name: "add_observation",
 			Description: "Explicitly persist a fact, decision, or preference into claude-mem-go's memory — " +
 				"for something worth remembering that isn't the direct result of one tool call. Automatic " +
@@ -313,6 +326,7 @@ type toolCallParams struct {
 		Narrative   string   `json:"narrative"`  // add_observation
 		Facts       []string `json:"facts"`      // add_observation
 		Concepts    []string `json:"concepts"`   // add_observation
+		IDs         []int64  `json:"ids"`        // get_observations
 	} `json:"arguments"`
 }
 
@@ -362,6 +376,8 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		result = s.runSession(params.Arguments.SessionID, limit)
 	case "file_observations":
 		result = s.runFile(scopedProject, params.Arguments.FilePath, limit)
+	case "get_observations":
+		result = s.runGetObservations(project, params.Arguments.IDs)
 	case "add_observation":
 		result = s.runAddObservation(scopedProject, params.Arguments.Title, params.Arguments.Subtitle,
 			params.Arguments.Narrative, params.Arguments.Facts, params.Arguments.Concepts)
@@ -421,6 +437,39 @@ func (s *Server) runFile(project, filePath string, limit int) toolCallResult {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations failed: " + err.Error()}}}
 	}
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+// runGetObservations is the detail-lookup companion to every list-shaped
+// tool above (search_observations, recent_observations, etc.): their output
+// deliberately shows only title/subtitle to keep results short (see
+// formatSearchResults), so there was previously no way to see an
+// observation's narrative/facts/concepts/files without a separate CLI
+// invocation outside the MCP surface entirely.
+//
+// Scoped to the current project the same way search_observations is (via
+// the caller's own "all_projects" argument, already resolved into project
+// by the time this is called) — without that, a caller that merely guessed
+// or iterated IDs could read another project's observations out of this
+// single shared database, the same class of cross-project leak
+// Search/SemanticSearch were fixed for earlier.
+func (s *Server) runGetObservations(project string, ids []int64) toolCallResult {
+	if len(ids) == 0 {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "get_observations requires a non-empty \"ids\" argument"}}}
+	}
+	results, err := s.st.ByIDs(ids)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "get_observations failed: " + err.Error()}}}
+	}
+	if project != "" {
+		scoped := results[:0]
+		for _, r := range results {
+			if r.Project == project {
+				scoped = append(scoped, r)
+			}
+		}
+		results = scoped
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatFullObservations(results)}}}
 }
 
 // runAddObservation is the write side of this server's otherwise
@@ -498,6 +547,41 @@ func formatSearchResults(results []store.SearchResult) string {
 		fmt.Fprintf(&b, "[%d] %s (%s, %s)\n", r.ID, r.Observation.Title, r.Project, r.ToolName)
 		if r.Observation.Subtitle != "" {
 			fmt.Fprintf(&b, "    %s\n", r.Observation.Subtitle)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatFullObservations is get_observations' formatter — the one place
+// this server prints narrative/facts/concepts/files, deliberately omitted
+// from formatSearchResults/formatVectorMatches to keep list output short.
+func formatFullObservations(results []store.SearchResult) string {
+	if len(results) == 0 {
+		return "No observations found for those ids (wrong id, already pruned, or belongs to a different project)."
+	}
+	var b strings.Builder
+	for i, r := range results {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[%d] %s (%s, %s)\n", r.ID, r.Observation.Title, r.Project, r.ToolName)
+		if r.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, "Subtitle: %s\n", r.Observation.Subtitle)
+		}
+		if r.Observation.Narrative != "" {
+			fmt.Fprintf(&b, "Narrative: %s\n", r.Observation.Narrative)
+		}
+		if len(r.Observation.Facts) > 0 {
+			fmt.Fprintf(&b, "Facts: %s\n", strings.Join(r.Observation.Facts, "; "))
+		}
+		if len(r.Observation.Concepts) > 0 {
+			fmt.Fprintf(&b, "Concepts: %s\n", strings.Join(r.Observation.Concepts, ", "))
+		}
+		if len(r.Observation.FilesRead) > 0 {
+			fmt.Fprintf(&b, "Files read: %s\n", strings.Join(r.Observation.FilesRead, ", "))
+		}
+		if len(r.Observation.FilesModified) > 0 {
+			fmt.Fprintf(&b, "Files modified: %s\n", strings.Join(r.Observation.FilesModified, ", "))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
