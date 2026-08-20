@@ -1,0 +1,6 @@
+/claude-mem-go
+*.db
+*.db-*
+*.sock
+*.log
+.claude/settings.json
