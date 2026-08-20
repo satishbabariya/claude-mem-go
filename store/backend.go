@@ -22,6 +22,10 @@ type Backend interface {
 	// context subcommand): the actual "memory" half of claude-mem, as
 	// opposed to the on-demand Search/SemanticSearch tools.
 	RecentByProject(project string, limit int) ([]SearchResult, error)
+	// BySessionID returns every observation recorded for one Claude Code
+	// session, oldest first — the read path for Stop-hook session
+	// summarization: what actually happened this session, in order.
+	BySessionID(sessionID string, limit int) ([]SearchResult, error)
 	Close() error
 }
 

@@ -207,6 +207,42 @@ func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, erro
 	return out, rows.Err()
 }
 
+// BySessionID returns every observation recorded for one session, oldest
+// first — the read path for Stop-hook session summarization: the narrative
+// arc of what happened, not a ranked search.
+func (s *Store) BySessionID(sessionID string, limit int) ([]SearchResult, error) {
+	rows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE session_id = ?
+		ORDER BY created_at_epoch ASC, id ASC
+		LIMIT ?`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("observations for session %q: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified string
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan session observation: %w", err)
+		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = parseJSONArray(facts)
+		r.Observation.Concepts = parseJSONArray(concepts)
+		r.Observation.FilesRead = parseJSONArray(filesRead)
+		r.Observation.FilesModified = parseJSONArray(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // parseJSONArray inverts jsonArray's encoding. A fact/concept is often a
 // full sentence and can contain commas, so this must be real JSON decoding,
 // not a naive split(",") — that would silently mis-parse most real facts.

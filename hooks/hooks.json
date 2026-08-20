@@ -33,6 +33,19 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" stop",
+            "async": true,
+            "timeout": 120
+          }
+        ]
+      }
     ]
   }
 }

@@ -98,6 +98,40 @@ func TestRecentByProjectHandlesNullNarrative(t *testing.T) {
 	}
 }
 
+func TestBySessionIDOrdersOldestFirstAndScopesToSession(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	first, err := st.Insert("session-a", "proj", "Bash", ContentHash("session-a", "Bash", "1", "1"), Observation{Type: "discovery", Title: "first thing"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	second, err := st.Insert("session-a", "proj", "Bash", ContentHash("session-a", "Bash", "2", "2"), Observation{Type: "discovery", Title: "second thing"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	// A different session must never leak into session-a's history.
+	if _, err := st.Insert("session-b", "proj", "Bash", ContentHash("session-b", "Bash", "3", "3"), Observation{Type: "discovery", Title: "other session"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	results, err := st.BySessionID("session-a", 10)
+	if err != nil {
+		t.Fatalf("BySessionID: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("BySessionID returned %d results, want 2", len(results))
+	}
+	if results[0].ID != first.ID || results[1].ID != second.ID {
+		t.Fatalf("BySessionID order = [%d, %d], want oldest first [%d, %d]",
+			results[0].ID, results[1].ID, first.ID, second.ID)
+	}
+}
+
 func TestRecentByProjectEmptyForUnknownProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := Open(dbPath)

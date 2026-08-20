@@ -73,6 +73,36 @@ func BuildPrompt(tc transcript.ToolCall) string {
 	return b.String()
 }
 
+// BuildSummaryPrompt asks the model to synthesize one session-level
+// observation out of the individual tool-call observations already
+// recorded for that session (see store.Backend.BySessionID) — the Stop-hook
+// analog of BuildPrompt: real claude-mem's "summarize" mode, condensing a
+// whole session's user_prompt/last_assistant_message into one narrative,
+// reimplemented here from what's actually persisted per turn instead of
+// re-reading the raw transcript.
+func BuildSummaryPrompt(observations []store.SearchResult) string {
+	var b strings.Builder
+	b.WriteString("Here are the observations recorded during this session, in order:\n\n")
+	for i, r := range observations {
+		fmt.Fprintf(&b, "%d. [%s] %s", i+1, r.Observation.Type, r.Observation.Title)
+		if r.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nSynthesize these into a single session-level summary. ")
+	b.WriteString("Respond with exactly this shape (omit a list's items if there are none):\n\n")
+	b.WriteString("<observation>\n")
+	b.WriteString("  <type>summary</type>\n")
+	b.WriteString("  <title>short title for the whole session</title>\n")
+	b.WriteString("  <subtitle>one-line detail</subtitle>\n")
+	b.WriteString("  <facts>\n    <fact>...</fact>\n    <fact>...</fact>\n  </facts>\n")
+	b.WriteString("  <narrative>one paragraph describing what was accomplished this session</narrative>\n")
+	b.WriteString("  <concepts>\n    <concept>...</concept>\n  </concepts>\n")
+	b.WriteString("</observation>\n")
+	return b.String()
+}
+
 // Turn is one completed observation turn: the structured Observation, the
 // underlying Session's raw Result (session id, cost, cache stats), or an
 // error if the turn failed or didn't parse.
@@ -115,7 +145,18 @@ func New(ctx context.Context, model string) (*Observer, error) {
 // plainly) a parse failure when the model didn't reply in the requested
 // shape.
 func (o *Observer) Observe(tc transcript.ToolCall) (Turn, error) {
-	r, err := o.sess.Send(BuildPrompt(tc))
+	return o.sendAndParse(BuildPrompt(tc))
+}
+
+// Summarize sends a session's already-recorded observations as one turn and
+// returns the synthesized session-level observation — the Stop-hook path
+// (see BuildSummaryPrompt).
+func (o *Observer) Summarize(observations []store.SearchResult) (Turn, error) {
+	return o.sendAndParse(BuildSummaryPrompt(observations))
+}
+
+func (o *Observer) sendAndParse(prompt string) (Turn, error) {
+	r, err := o.sess.Send(prompt)
 	if err != nil {
 		return Turn{}, classify.Spawn(err)
 	}

@@ -67,6 +67,13 @@ docker compose up -d
   distinctive marker was seeded directly into the database, and a real
   `claude -p` session — with no tools, asked only about its own injected
   context — correctly reported it back verbatim.
+- **stop** — the `Stop` hook: synthesizes everything recorded during one
+  session into a single `type=summary` observation (real claude-mem's
+  "summarize" step). Idempotent the same way ingestion is — the key is the
+  session_id alone, so a session that ends more than once (or a Stop that
+  fires twice) still gets exactly one summary, verified by running it twice
+  against the same real session and confirming the second call recognized
+  the duplicate and did nothing.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
@@ -95,12 +102,15 @@ claude plugin marketplace add /path/to/claude-mem-go --scope project
 claude plugin install claude-mem-go@claude-mem-go-local --scope project
 ```
 
-All three hook events and the MCP server were confirmed live through this
-exact mechanism (not `--mcp-config`/manual settings): `SessionStart` starts
-the worker and injects context, `PostToolUse` reaches the worker and
-persists a real observation, and `search_observations` returns real rows
-through the plugin-bundled `.mcp.json` — all in one project-scoped install/
-uninstall cycle, cleaned up afterward.
+`SessionStart`, `PostToolUse`, and the MCP server were confirmed live
+through this exact mechanism (not `--mcp-config`/manual settings):
+`SessionStart` starts the worker and injects context, `PostToolUse` reaches
+the worker and persists a real observation, and `search_observations`
+returns real rows through the plugin-bundled `.mcp.json` — all in one
+project-scoped install/uninstall cycle, cleaned up afterward. `Stop` (session
+summarization) is wired into the same `hooks/hooks.json` and was verified
+directly against real, already-persisted session observations rather than
+re-run through a full plugin install cycle.
 
 ### Why the worker/hook split
 
@@ -150,6 +160,11 @@ terminal, so these logs are the only way to see what they did).
   plugin (hooks + a bundled MCP server, validated with `claude plugin
   validate` and installed end to end), but claude-mem's broader surface
   (skills, slash commands) has no analog here yet.
+- **`Setup`, `PreToolUse`, and `UserPromptSubmit` aren't wired** — real
+  claude-mem uses these for version-checking, per-file context on `Read`,
+  and session-init respectively. `SessionStart`+`PostToolUse`+`Stop` cover
+  capture, recall, and summarization; these three are lower-value without
+  claude-mem's modes/knowledge-graph system, which also has no analog here.
 
 ## Testing
 

@@ -227,6 +227,33 @@ func TestPostgresRecentByProjectHandlesNullNarrative(t *testing.T) {
 	}
 }
 
+func TestPostgresBySessionIDOrdersOldestFirst(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	sessionID := fmt.Sprintf("session-%d", time.Now().UnixNano())
+
+	first, err := st.Insert(sessionID, project, "Bash", store.ContentHash(sessionID, "Bash", "1", project), store.Observation{Type: "discovery", Title: "first"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	second, err := st.Insert(sessionID, project, "Bash", store.ContentHash(sessionID, "Bash", "2", project), store.Observation{Type: "discovery", Title: "second"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	results, err := st.BySessionID(sessionID, 10)
+	if err != nil {
+		t.Fatalf("BySessionID: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("BySessionID returned %d results, want 2", len(results))
+	}
+	if results[0].ID != first.ID || results[1].ID != second.ID {
+		t.Fatalf("BySessionID order = [%d, %d], want oldest first [%d, %d]",
+			results[0].ID, results[1].ID, first.ID, second.ID)
+	}
+}
+
 func TestPostgresSemanticSearchDimensionMismatchErrors(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
