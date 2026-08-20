@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"claude-mem-go/backend"
 	"claude-mem-go/embed"
 	"claude-mem-go/hook"
 	"claude-mem-go/mcpserver"
@@ -79,7 +80,7 @@ func cmdWorker(args []string) int {
 	model := fs.String("model", "haiku", "model alias for observer sessions")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(empty to skip embedding — observations are still persisted, just not semantically searchable)")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket to listen on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	fs.Parse(args)
@@ -118,7 +119,7 @@ func cmdStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings (empty to skip)")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	fs.Parse(args)
@@ -200,7 +201,7 @@ func cmdHook(args []string) int {
 func cmdIngest(args []string) int {
 	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	transcriptPath := fs.String("transcript", "", "transcript .jsonl path; "+
 		"defaults to the most recently modified one under ~/.claude/projects/*/*.jsonl")
 	limit := fs.Int("limit", 3, "how many real tool_use/tool_result pairs to ingest")
@@ -237,7 +238,7 @@ func cmdIngest(args []string) int {
 	}
 	defer obs.Close()
 
-	st, err := store.Open(*dbPath)
+	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -291,7 +292,7 @@ func cmdIngest(args []string) int {
 
 func cmdSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 10, "max results")
 	fs.Parse(args)
 
@@ -301,7 +302,7 @@ func cmdSearch(args []string) int {
 	}
 	query := fs.Arg(0)
 
-	st, err := store.Open(*dbPath)
+	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -328,7 +329,7 @@ func cmdSearch(args []string) int {
 
 func cmdSemanticSearch(args []string) int {
 	fs := flag.NewFlagSet("semantic-search", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(must match the model used when ingesting, or scores will be meaningless)")
 	limit := fs.Int("limit", 10, "max results")
@@ -346,7 +347,7 @@ func cmdSemanticSearch(args []string) int {
 		return 1
 	}
 
-	st, err := store.Open(*dbPath)
+	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -376,7 +377,7 @@ func cmdSemanticSearch(args []string) int {
 // line there would corrupt the stream for whatever real client is reading it.
 func cmdMCP(args []string) int {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for "+
 		"semantic_search_observations (empty disables that tool)")
 	fs.Parse(args)

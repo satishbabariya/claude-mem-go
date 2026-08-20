@@ -24,6 +24,7 @@ import (
 
 	claudeagent "claude-agent-sdk-go"
 
+	"claude-mem-go/backend"
 	"claude-mem-go/classify"
 	"claude-mem-go/embed"
 	"claude-mem-go/observer"
@@ -184,9 +185,9 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		}
 	}
 
-	st, err := store.Open(d.DBPath)
+	st, err := backend.Open(ctx, d.DBPath, 0)
 	if err != nil {
-		d.Log.Printf("FAILED opening sqlite store at %s: %v", d.DBPath, err)
+		d.Log.Printf("FAILED opening store at %s: %v", d.DBPath, err)
 		return
 	}
 	defer st.Close()

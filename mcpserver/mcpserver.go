@@ -18,12 +18,14 @@ package mcpserver
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"strings"
 
+	"claude-mem-go/backend"
 	"claude-mem-go/embed"
 	"claude-mem-go/store"
 )
@@ -110,7 +112,7 @@ type Server struct {
 	EmbedModel string // empty disables semantic_search_observations
 	Log        *log.Logger
 
-	st *store.Store
+	st store.Backend
 }
 
 // Run reads newline-delimited JSON-RPC requests from r and writes responses
@@ -119,7 +121,7 @@ type Server struct {
 // pipes stay open for as long as the client keeps them (potentially a
 // whole Claude Code session).
 func (s *Server) Run(r io.Reader, w io.Writer) error {
-	st, err := store.Open(s.DBPath)
+	st, err := backend.Open(context.Background(), s.DBPath, 0)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

@@ -27,7 +27,27 @@ idea in the abstract.
 ```
 transcript / hook payload  →  observer (claude-agent-sdk-go Session)  →  classify
                                                                             │
-                                                            store (SQLite: FTS5 + vectors)
+                                                       store.Backend (SQLite or Postgres)
+```
+
+`store.Backend` is one interface with two implementations, selected by what
+the `-db` flag looks like:
+
+- **SQLite** (default, zero dependencies) — a file path. FTS5 keyword
+  search, brute-force cosine similarity for semantic search.
+- **Postgres + pgvector** (`postgres://...` DSN) — real full-text search
+  (`tsvector`/GIN, no hand-written query sanitizer needed — Postgres
+  tokenizes punctuation like the hyphen in "claude-mem" sanely by default,
+  unlike SQLite's FTS5) and a real ANN index (HNSW) for semantic search
+  instead of a linear scan. `docker-compose.yml` brings up
+  `pgvector/pgvector:pg16`; every claim above (the HNSW index actually gets
+  used, not just created; the hyphen query that broke FTS5 works here
+  without a workaround) was checked with `EXPLAIN` and real queries against
+  that container, not assumed.
+
+```sh
+docker compose up -d
+./claude-mem-go ingest -db "postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
 ```
 
 - **worker** — a persistent daemon, meant to be started once (see `start`)
@@ -84,9 +104,10 @@ terminal, so these logs are the only way to see what they did).
 
 ## Known limitations
 
-- **Semantic search is brute-force cosine similarity**, not an ANN index —
-  fine at the scale one project's observations realistically reach,
-  won't scale to millions of rows the way a real vector DB would.
+- **Semantic search is brute-force cosine similarity only on the SQLite
+  backend** — fine at the scale one project's observations realistically
+  reach, won't scale to millions of rows. The Postgres backend has a real
+  HNSW ANN index instead; use it once scale is an actual concern.
 - **The SQLite schema is a narrower subset** of claude-mem's real
   `observations` table (40+ migrations' worth of sync/origin-device
   bookkeeping and an FTS5 shadow table are not replicated here) — this
@@ -99,9 +120,19 @@ terminal, so these logs are the only way to see what they did).
 ## Testing
 
 ```sh
-go test ./...          # all packages that don't need `claude`/Ollama at all
+go test ./...          # all packages that don't need `claude`/Ollama/Docker
 go test ./... -race
+
+docker compose up -d   # then postgres/... runs against the real container
+go test ./postgres/... -v
 ```
+
+`postgres/`'s tests skip cleanly (not fail) when nothing is listening at
+`localhost:55432` — start `docker compose up -d` first if you want them to
+actually run. They're real integration tests against a live container, not
+mocks: dedup, hyphenated-query full-text search, and vector-similarity
+ranking (with a control vector orthogonal to the query, confirming rank
+order rather than just "no error") all execute real SQL.
 
 Packages with pure logic (`classify`, `pool`, `store`, `transcript`,
 `observer`'s retry policy, `worker`'s spawn-lock) have real unit tests.
