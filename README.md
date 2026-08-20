@@ -34,7 +34,19 @@ transcript / hook payload  →  observer (claude-agent-sdk-go Session)  →  cla
 the `-db` flag looks like:
 
 - **SQLite** (default, zero dependencies) — a file path. FTS5 keyword
-  search, brute-force cosine similarity for semantic search.
+  search, brute-force cosine similarity for semantic search. Opened with
+  WAL journal mode, a 5s busy-timeout, and foreign keys on — all three
+  fixed real, reproduced problems: this project's actual shape is the
+  worker daemon and every CLI subcommand each opening their own connection
+  to the same file, and the default rollback-journal mode's exclusive
+  write lock made a second concurrent writer fail immediately with
+  "database is locked." Separately, SQLite's foreign-key enforcement
+  defaults to off regardless of what the schema declares, which meant
+  `observation_vectors`' `ON DELETE CASCADE` had never actually fired —
+  `prune` was silently leaving orphaned embedding rows behind. Both
+  applied via DSN params (`_journal_mode`, `_busy_timeout`,
+  `_foreign_keys`), not a one-time `PRAGMA` `Exec` call, since the latter
+  only reaches whichever single pooled connection happens to run it.
 - **Postgres + pgvector** (`postgres://...` DSN) — real full-text search
   (`tsvector`/GIN, no hand-written query sanitizer needed — Postgres
   tokenizes punctuation like the hyphen in "claude-mem" sanely by default,
@@ -179,7 +191,19 @@ docker compose up -d
   gets fixed on reopen, and `prune` then works against it. Also tested
   against a live Postgres container (no shadow table there, but still
   verified the generated `search_vector` and `embedding` columns are
-  genuinely gone after a prune, not just the row).
+  genuinely gone after a prune, not just the row). A second, more serious
+  bug shipped in the same original commit and was caught the next
+  iteration: `created_at_epoch` is stamped in **milliseconds**
+  (`now.UnixMilli()`, both backends), but `cmdPrune`'s cutoff was computed
+  in **seconds** (`time.Now().AddDate(...).Unix()`) — a ~1000x mismatch
+  that made `created_at_epoch < cutoff` false for every row that ever
+  existed, so `prune` silently deleted nothing, ever, for any real
+  `-older-than-days` value. Every existing `Prune` unit test had backdated
+  rows by hand to small, unit-agnostic numbers, so none of them could have
+  caught a caller using the wrong unit; the regression test that closes
+  this (`TestPruneCutoffUnitsMatchInsertsRealTimestamp`, both backends)
+  inserts through the real `Insert` path instead, and the CLI fix was
+  re-verified against a real backdated row through the actual binary.
 - **Observability** — the worker daemon's only introspection used to be
   raw log lines (`worker.log`, and the per-hook logs). It now also writes
   a small `~/.claude-mem-go/worker-stats.json` snapshot after every

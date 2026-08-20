@@ -779,7 +779,15 @@ func cmdPrune(args []string) int {
 		return 2
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -*olderThanDays).Unix()
+	// created_at_epoch is stored in MILLISECONDS (see store.go's/postgres.go's
+	// Insert — both stamp now.UnixMilli(), not now.Unix()). A seconds-based
+	// cutoff here would be ~1000x smaller than any real row's timestamp,
+	// making created_at_epoch < cutoff false for every row that ever
+	// existed — prune would silently delete nothing, ever, for any
+	// reasonable -older-than-days value. Caught by a real Insert-backed
+	// test, not the hand-picked epoch values the earlier unit tests used
+	// (which were unit-agnostic and couldn't have caught this).
+	cutoff := time.Now().AddDate(0, 0, -*olderThanDays).UnixMilli()
 
 	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {

@@ -152,10 +152,35 @@ CREATE INDEX IF NOT EXISTS idx_observations_type ON observations(type);
 CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at_epoch DESC);
 `
 
+// sqliteDSNParams are modernc.org/sqlite's shorthand DSN query params,
+// applied on every physical connection the pool opens — not a one-time
+// PRAGMA Exec call, which would only ever reach whichever single pooled
+// connection happened to run it, leaving any other connection the pool
+// opens later unconfigured. Two real, reproduced problems, both fixed by
+// this:
+//
+//   - Without _journal_mode=WAL (+_busy_timeout), two genuinely concurrent
+//     writers on the same file — exactly this project's real shape, since
+//     the worker daemon and every CLI subcommand each open their own
+//     *sql.DB against the same file — hit "database is locked" (SQLITE_BUSY)
+//     immediately under the default rollback-journal mode's exclusive write
+//     lock. Reproduced directly: one connection holding an open write
+//     transaction made a second connection's INSERT fail outright.
+//   - Without _foreign_keys=on, observation_vectors' ON DELETE CASCADE
+//     never fires — SQLite's foreign-key enforcement defaults to OFF, full
+//     stop, regardless of the schema declaring the constraint. Reproduced
+//     directly: Prune-ing an observation with a saved embedding left its
+//     observation_vectors row behind, orphaned, forever.
+const sqliteDSNParams = "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
+
 // Open opens (creating if needed) the sqlite file at path and ensures the
 // schema exists.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("sqlite", path+sep+sqliteDSNParams)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

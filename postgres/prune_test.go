@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"claude-mem-go/store"
 )
@@ -145,5 +146,33 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 		if m.ID == old.ID {
 			t.Fatalf("SemanticSearch after prune still returned the pruned row (id=%d)", old.ID)
 		}
+	}
+}
+
+// TestPostgresPruneCutoffUnitsMatchInsertsRealTimestamp is the Postgres
+// half of the real cutoff-unit bug regression (see store's
+// prune_units_test.go): Insert stamps created_at_epoch with
+// time.Now().UnixMilli() here too (postgres.go), so a caller's cutoff
+// must be in the same unit — cmd's cmdPrune originally used
+// time.Now().AddDate(...).Unix() (seconds), a ~1000x mismatch that made
+// prune silently delete nothing, ever. Uses a real Insert-stamped row,
+// not a hand-picked epoch value, so a unit mismatch would actually show
+// up here the way it wouldn't in the other, unit-agnostic Prune tests.
+func TestPostgresPruneCutoffUnitsMatchInsertsRealTimestamp(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "a", project),
+		store.Observation{Type: "discovery", Title: "inserted with a real timestamp"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	cutoff := time.Now().AddDate(0, 0, 1).UnixMilli()
+	n, err := st.Prune(project, cutoff, true)
+	if err != nil {
+		t.Fatalf("Prune (dry run): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("Prune found %d rows older than tomorrow (in milliseconds), want 1 — "+
+			"a real Insert-stamped row not being found points at a unit mismatch", n)
 	}
 }
