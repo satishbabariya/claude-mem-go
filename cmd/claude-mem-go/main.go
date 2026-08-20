@@ -90,12 +90,11 @@ func usage() {
 }
 
 func openLog(name string) *log.Logger {
-	f, err := os.OpenFile(store.DefaultHome()+"/"+name,
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	w, err := newRotatingWriter(store.DefaultHome()+"/"+name, defaultMaxLogBytes)
 	if err != nil {
 		return log.New(os.Stderr, "", log.LstdFlags)
 	}
-	return log.New(f, "", log.LstdFlags)
+	return log.New(w, "", log.LstdFlags)
 }
 
 func cmdWorker(args []string) int {

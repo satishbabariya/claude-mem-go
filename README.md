@@ -295,7 +295,14 @@ go build -o claude-mem-go ./cmd/claude-mem-go
 
 Data lives in `~/.claude-mem-go/` — `observations.db`, `worker.sock`,
 and `worker.log` / `start.log` / `hook.log` (hooks run detached from any
-terminal, so these logs are the only way to see what they did).
+terminal, so these logs are the only way to see what they did). Every log
+file rotates at 5MB, keeping one prior generation (`name.log.1`) — there
+was no cap at all before this, and `worker.log` in particular gets a new
+line on every `PostToolUse` event for as long as the daemon runs, which is
+meant to be months. Verified against a real running daemon, not just unit
+tests: grew a real `worker.log` past the cap by hand, restarted the
+daemon, and confirmed it rotated the oversized file to `worker.log.1` and
+started a fresh one on its very first log line.
 
 ## Known limitations
 
