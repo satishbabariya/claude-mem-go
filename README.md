@@ -83,6 +83,22 @@ docker compose up -d
   Claude Code itself — can call directly. Wire format confirmed against a
   real `claude` session, not assumed from the spec (see `mcpserver/`'s doc
   comment); end-to-end tool calls verified against the real CLI too.
+- **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
+  Claude when to reach for `search_observations` vs.
+  `semantic_search_observations`. Validated with `claude plugin validate
+  --strict`, and verified live: installed the plugin, ran `/mem-search
+  claude-mem installation` in a real session, and confirmed via the MCP
+  server's own log that a genuine `tools/call` fired — not a hallucinated
+  answer.
+- **doctor** — an operational health check: is the `claude` CLI on `PATH`,
+  is the worker daemon reachable, is the database reachable, is Ollama
+  reachable with the configured model actually pulled. Distinguishes
+  critical failures (exit 1 — nothing works without these) from
+  informational ones (worker not running is fine, `start` launches it
+  lazily; no Ollama just means no semantic search). Verified against real
+  failures, not just the happy path: a genuinely unreachable Postgres DSN
+  correctly exits 1, and an unpulled Ollama model correctly downgrades to
+  a warning rather than a failure.
 
 ## Installing as a Claude Code plugin
 
@@ -156,10 +172,6 @@ terminal, so these logs are the only way to see what they did).
   bookkeeping and an FTS5 shadow table are not replicated here) — this
   persists what an observation actually *contains* plus a content-hash
   dedup key, not claude-mem's full multi-device sync machinery.
-- **No slash commands/skills yet** — this is a real, installable Claude Code
-  plugin (hooks + a bundled MCP server, validated with `claude plugin
-  validate` and installed end to end), but claude-mem's broader surface
-  (skills, slash commands) has no analog here yet.
 - **`Setup`, `PreToolUse`, and `UserPromptSubmit` aren't wired** — real
   claude-mem uses these for version-checking, per-file context on `Read`,
   and session-init respectively. `SessionStart`+`PostToolUse`+`Stop` cover

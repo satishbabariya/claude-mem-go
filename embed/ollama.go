@@ -76,6 +76,40 @@ func (c *Client) Embed(text string) ([]float32, error) {
 	return er.Embedding, nil
 }
 
+type tagsResponse struct {
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
+}
+
+// Ping checks that Ollama is reachable and that c.Model is actually pulled —
+// the read path for `claude-mem-go doctor`. Cheaper than a real Embed() call
+// (no inference cost) and more diagnostic: it distinguishes "server not
+// running" from "server running but this model was never pulled," which
+// Embed's own error message can only guess at from an empty-embedding
+// response.
+func (c *Client) Ping() error {
+	resp, err := c.HTTP.Get(c.BaseURL + "/api/tags")
+	if err != nil {
+		return fmt.Errorf("ollama not reachable at %s (is `ollama serve` running?): %w", c.BaseURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ollama at %s returned status %d", c.BaseURL, resp.StatusCode)
+	}
+
+	var tr tagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return fmt.Errorf("decode ollama /api/tags response: %w", err)
+	}
+	for _, m := range tr.Models {
+		if m.Name == c.Model || strings.HasPrefix(m.Name, c.Model+":") {
+			return nil
+		}
+	}
+	return fmt.Errorf("ollama is running but model %q is not pulled (`ollama pull %s`)", c.Model, c.Model)
+}
+
 // ObservationText builds the text an observation's embedding is computed
 // from: title, subtitle, narrative, and facts joined into one blob. Takes
 // plain fields rather than a store.Observation so this package doesn't need
