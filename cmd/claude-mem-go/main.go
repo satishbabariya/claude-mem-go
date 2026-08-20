@@ -17,6 +17,7 @@
 //	claude-mem-go doctor          — check that the claude CLI, worker, database, and Ollama are all reachable
 //	claude-mem-go file-context    — PreToolUse hook (Read): inject prior memory about the specific file being read
 //	claude-mem-go prune           — delete observations older than a cutoff (dry-run by default; retention has no other story)
+//	claude-mem-go version         — print the build's commit/time, for correlating a bug report with an exact build
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -75,6 +77,8 @@ func main() {
 		os.Exit(cmdFileContext(os.Args[2:]))
 	case "prune":
 		os.Exit(cmdPrune(os.Args[2:]))
+	case "version":
+		os.Exit(cmdVersion(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -611,7 +615,8 @@ func cmdDoctor(args []string) int {
 
 	critical := true
 
-	fmt.Println("claude-mem-go doctor")
+	buildInfo, _ := debug.ReadBuildInfo()
+	fmt.Println("doctor —", buildVersionString(buildInfo))
 	fmt.Println()
 
 	if path, err := claudeagent.FindClaudeExecutable(); err != nil {

@@ -184,6 +184,15 @@ docker compose up -d
   correctly exits 1, and an unpulled Ollama model correctly downgrades to
   a warning rather than a failure. Also surfaces the worker's own activity
   (see below) when available.
+- **version** — prints the exact commit and build time via Go's own
+  `runtime/debug.ReadBuildInfo()` (VCS stamping is on by default since Go
+  1.18 — no ldflags wiring, no version file to keep in sync, no CI change
+  needed), including a `-dirty` marker if the tree had uncommitted changes
+  at build time. There was no way to answer "what build is this" at all
+  before this — no version flag, no way to correlate a bug report with an
+  exact build. `doctor`'s header prints the same string. This is also
+  `cmd/claude-mem-go`'s first test file — every other package already had
+  coverage; this one didn't.
 - **prune** — deletes observations older than a cutoff; there was no
   retention story at all before this, meaning the store only ever grows.
   Dry-run by default (`-older-than-days N` alone just reports a count);
