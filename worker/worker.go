@@ -195,12 +195,20 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
-	id, err := st.Insert(in.SessionID, project, in.ToolName, turn.Observation, turn.Result.CostUSD)
+	hash := store.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
+	res, err := st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
 		d.Log.Printf("FAILED sqlite insert: %v", err)
 		return
 	}
-	d.Log.Printf("persisted observations.id=%d title=%q cost=$%.4f", id, turn.Observation.Title, turn.Result.CostUSD)
+	if !res.Inserted {
+		// Not an error — a hook can legitimately fire more than once for the
+		// same event (documented as at-least-once delivery), and re-ingesting
+		// an already-processed transcript should be a no-op, not a duplicate.
+		d.Log.Printf("duplicate observation (same tool call already persisted as id=%d), skipped", res.ID)
+		return
+	}
+	d.Log.Printf("persisted observations.id=%d title=%q cost=$%.4f", res.ID, turn.Observation.Title, turn.Result.CostUSD)
 
 	if d.EmbedModel == "" {
 		return
@@ -212,10 +220,10 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		// Additive only — keyword search on the row just inserted still
 		// works without it. A missing/unreachable Ollama must not undo a
 		// successful observation.
-		d.Log.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", id, err)
+		d.Log.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
 		return
 	}
-	if err := st.SaveEmbedding(id, vec); err != nil {
-		d.Log.Printf("saving embedding for observations.id=%d failed: %v", id, err)
+	if err := st.SaveEmbedding(res.ID, vec); err != nil {
+		d.Log.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 	}
 }

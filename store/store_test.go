@@ -132,10 +132,14 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		Facts:     []string{"Reproduced with 12 goroutines", "Fixed with a buffered channel"},
 		Narrative: "A concurrency bug was found and fixed.",
 	}
-	id, err := st.Insert("session-1", "my-project", "Bash", o, 0.01)
+	res, err := st.Insert("session-1", "my-project", "Bash", ContentHash("session-1", "Bash", "ls -la", "file1 file2"), o, 0.01)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
+	if !res.Inserted {
+		t.Fatal("first Insert of a new content_hash reported Inserted=false")
+	}
+	id := res.ID
 
 	count, err := st.CountByProject("my-project")
 	if err != nil {
@@ -174,14 +178,15 @@ func TestSaveEmbeddingAndSemanticSearchRoundTrip(t *testing.T) {
 	}
 	defer st.Close()
 
-	id1, err := st.Insert("s1", "proj", "Bash", Observation{Type: "discovery", Title: "about cats"}, 0)
+	res1, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "cmd-a", "out-a"), Observation{Type: "discovery", Title: "about cats"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	id2, err := st.Insert("s1", "proj", "Bash", Observation{Type: "discovery", Title: "about dogs"}, 0)
+	res2, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "cmd-b", "out-b"), Observation{Type: "discovery", Title: "about dogs"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
+	id1, id2 := res1.ID, res2.ID
 
 	// Fake embeddings: id1 close to the query vector, id2 orthogonal to it.
 	if err := st.SaveEmbedding(id1, []float32{1, 0, 0}); err != nil {

@@ -43,6 +43,11 @@ transcript / hook payload  →  observer (claude-agent-sdk-go Session)  →  cla
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
   (local embeddings + cosine similarity) search over what's been persisted.
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing `search_observations`
+  and `semantic_search_observations` as tools any MCP client — including
+  Claude Code itself — can call directly. Wire format confirmed against a
+  real `claude` session, not assumed from the spec (see `mcpserver/`'s doc
+  comment); end-to-end tool calls verified against the real CLI too.
 
 ### Why the worker/hook split
 
@@ -68,6 +73,9 @@ go build -o claude-mem-go ./cmd/claude-mem-go
 # Wired into a project via .claude/settings.json (see .claude/settings.json.example):
 ./claude-mem-go start   # idempotent — safe to call from every SessionStart
 ./claude-mem-go hook     # what PostToolUse actually invokes
+
+# As an MCP server (see .mcp.json.example):
+./claude-mem-go mcp
 ```
 
 Data lives in `~/.claude-mem-go/` — `observations.db`, `worker.sock`,
@@ -80,11 +88,13 @@ terminal, so these logs are the only way to see what they did).
   fine at the scale one project's observations realistically reach,
   won't scale to millions of rows the way a real vector DB would.
 - **The SQLite schema is a narrower subset** of claude-mem's real
-  `observations` table (40+ migrations' worth of sync/dedup/content-hash
-  columns are not replicated here) — this persists what an observation
-  actually *contains*, not claude-mem's full sync/dedup machinery.
-- **No MCP server / skills surface yet** — this covers the
-  capture-and-search loop, not claude-mem's full plugin surface.
+  `observations` table (40+ migrations' worth of sync/origin-device
+  bookkeeping and an FTS5 shadow table are not replicated here) — this
+  persists what an observation actually *contains* plus a content-hash
+  dedup key, not claude-mem's full multi-device sync machinery.
+- **No skills surface** — the MCP server exposes search/recall as tools;
+  claude-mem's broader plugin surface (skills, slash commands) has no
+  analog here yet.
 
 ## Testing
 

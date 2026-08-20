@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // This is deliberately a SELF-CONTAINED fts5 table (no content=/content_rowid=
@@ -52,6 +53,39 @@ CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
 	VALUES ('delete', old.id, old.title, old.subtitle, old.narrative, old.facts, old.concepts);
 END;
 `
+
+// sanitizeFTSQuery turns a plain user query into safe FTS5 MATCH syntax.
+//
+// Found the hard way, not anticipated: FTS5's query parser treats bareword
+// punctuation specially — "claude-mem" (a hyphen, arguably the single most
+// likely real query against THIS project) fails outright with "no such
+// column: mem", because a bare "-" prefixes a NOT-clause / column filter in
+// FTS5's grammar. The same problem applies to any bareword containing `:`,
+// `(`, `)`, `"`, or `*`. Quoting each bareword as a phrase sidesteps all of
+// that — FTS5 tokenizes quoted content with the same tokenizer used at index
+// time, so "claude-mem" and claude-mem still match identically, just without
+// the raw text ever reaching the operator grammar.
+//
+// AND/OR/NOT are preserved unquoted so boolean queries keep working (e.g.
+// "monetization OR sqlite" — verified against a real query in this project's
+// own testing) — FTS5 only recognizes those three keywords as operators when
+// they appear in uppercase and unquoted, so this only intercepts genuine
+// boolean usage, not e.g. a search for the word "and".
+func sanitizeFTSQuery(query string) string {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return `""` // an empty phrase matches nothing, rather than erroring on an empty MATCH string
+	}
+	for i, f := range fields {
+		switch f {
+		case "AND", "OR", "NOT":
+			continue
+		default:
+			fields[i] = `"` + strings.ReplaceAll(f, `"`, `""`) + `"`
+		}
+	}
+	return strings.Join(fields, " ")
+}
 
 func ensureFTS(db *sql.DB) error {
 	if _, err := db.Exec(createFTSSQL); err != nil {
@@ -90,7 +124,7 @@ func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 		JOIN observations o ON o.id = f.rowid
 		WHERE observations_fts MATCH ?
 		ORDER BY rank
-		LIMIT ?`, query, limit)
+		LIMIT ?`, sanitizeFTSQuery(query), limit)
 	if err != nil {
 		return nil, fmt.Errorf("fts5 search %q: %w", query, err)
 	}

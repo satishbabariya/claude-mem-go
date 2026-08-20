@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claude-mem-go": {
+      "command": "/path/to/claude-mem-go",
+      "args": ["mcp"]
+    }
+  }
+}

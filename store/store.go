@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS observations (
 	cost_usd          REAL NOT NULL DEFAULT 0,
 	created_at        TEXT NOT NULL,
 	created_at_epoch  INTEGER NOT NULL
+	-- content_hash is added by ensureContentHashColumn (dedup.go), not here:
+	-- a brand-new database gets it as part of the same call, but a database
+	-- created before this column existed needs ALTER TABLE, not CREATE TABLE
+	-- IF NOT EXISTS (which is a no-op once the table already exists).
 );
 CREATE INDEX IF NOT EXISTS idx_observations_session ON observations(session_id);
 CREATE INDEX IF NOT EXISTS idx_observations_project ON observations(project);
@@ -159,6 +163,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	if err := ensureContentHashColumn(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate content_hash: %w", err)
+	}
 	if err := ensureFTS(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create fts schema: %w", err)
@@ -174,24 +182,51 @@ func jsonArray(items []string) string {
 	return string(b)
 }
 
+// InsertResult reports whether Insert actually created a new row or found
+// one already there with the same ContentHash — the caller (worker/ingest)
+// needs to know which happened: a duplicate is not an error, but it also
+// shouldn't be double-counted or re-embedded.
+type InsertResult struct {
+	ID       int64
+	Inserted bool // false: a row with this ContentHash already existed; ID is that row's.
+}
+
 // Insert persists one observation, JSON-encoding facts/concepts/files_*
-// exactly like ResponseProcessor.ts's broadcast record does.
-func (s *Store) Insert(sessionID, project, toolName string, o Observation, costUSD float64) (int64, error) {
+// exactly like ResponseProcessor.ts's broadcast record does. contentHash
+// (see ContentHash) is the idempotency key: inserting the same hash twice
+// is a no-op that returns the original row, not a duplicate.
+func (s *Store) Insert(sessionID, project, toolName, contentHash string, o Observation, costUSD float64) (InsertResult, error) {
 	now := time.Now()
 	res, err := s.db.Exec(
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
-			 concepts, files_read, files_modified, cost_usd, created_at, created_at_epoch)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 concepts, files_read, files_modified, cost_usd, created_at, created_at_epoch, content_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(content_hash) DO NOTHING`,
 		sessionID, project, toolName, o.Type, o.Title, o.Subtitle,
 		jsonArray(o.Facts), o.Narrative, jsonArray(o.Concepts),
 		jsonArray(o.FilesRead), jsonArray(o.FilesModified),
-		costUSD, now.Format(time.RFC3339), now.UnixMilli(),
+		costUSD, now.Format(time.RFC3339), now.UnixMilli(), contentHash,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("insert observation: %w", err)
+		return InsertResult{}, fmt.Errorf("insert observation: %w", err)
 	}
-	return res.LastInsertId()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return InsertResult{}, fmt.Errorf("insert observation, checking rows affected: %w", err)
+	}
+	if affected == 0 {
+		var id int64
+		if err := s.db.QueryRow(`SELECT id FROM observations WHERE content_hash = ?`, contentHash).Scan(&id); err != nil {
+			return InsertResult{}, fmt.Errorf("look up existing observation for duplicate content_hash: %w", err)
+		}
+		return InsertResult{ID: id, Inserted: false}, nil
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return InsertResult{}, err
+	}
+	return InsertResult{ID: id, Inserted: true}, nil
 }
 
 // CountByProject is a small read-path check useful for verifying a round

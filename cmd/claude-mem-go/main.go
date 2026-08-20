@@ -11,6 +11,7 @@
 //	claude-mem-go ingest   — one-shot: read a real transcript, observe N tool calls, persist them
 //	claude-mem-go search           — full-text (keyword) search over persisted observations (FTS5)
 //	claude-mem-go semantic-search  — meaning-based search via local Ollama embeddings + cosine similarity
+//	claude-mem-go mcp              — MCP server exposing search/semantic-search as tools (stdio transport)
 package main
 
 import (
@@ -27,6 +28,7 @@ import (
 
 	"claude-mem-go/embed"
 	"claude-mem-go/hook"
+	"claude-mem-go/mcpserver"
 	"claude-mem-go/observer"
 	"claude-mem-go/store"
 	"claude-mem-go/transcript"
@@ -51,6 +53,8 @@ func main() {
 		os.Exit(cmdSearch(os.Args[2:]))
 	case "semantic-search":
 		os.Exit(cmdSemanticSearch(os.Args[2:]))
+	case "mcp":
+		os.Exit(cmdMCP(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -251,12 +255,17 @@ func cmdIngest(args []string) int {
 		fmt.Printf("turn %d: session=%s cost=$%.4f title=%q\n",
 			i+1, turn.Result.SessionID, turn.Result.CostUSD, turn.Observation.Title)
 
-		id, err := st.Insert(turn.Result.SessionID, project, tc.ToolName, turn.Observation, turn.Result.CostUSD)
+		hash := store.ContentHash(turn.Result.SessionID, tc.ToolName, tc.ToolInput, tc.ToolOutput)
+		res, err := st.Insert(turn.Result.SessionID, project, tc.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: sqlite insert failed: %v\n", err)
 			continue
 		}
-		fmt.Printf("  -> persisted as observations.id=%d\n", id)
+		if !res.Inserted {
+			fmt.Printf("  -> already ingested as observations.id=%d (same tool call, skipped duplicate)\n", res.ID)
+			continue
+		}
+		fmt.Printf("  -> persisted as observations.id=%d\n", res.ID)
 
 		if *embedModel == "" {
 			continue
@@ -271,7 +280,7 @@ func cmdIngest(args []string) int {
 			fmt.Fprintf(os.Stderr, "  WARNING: embedding failed, semantic search won't find this one: %v\n", err)
 			continue
 		}
-		if err := st.SaveEmbedding(id, vec); err != nil {
+		if err := st.SaveEmbedding(res.ID, vec); err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: saving embedding failed: %v\n", err)
 			continue
 		}
@@ -358,6 +367,25 @@ func cmdSemanticSearch(args []string) int {
 		if r.Observation.Subtitle != "" {
 			fmt.Printf("     %s\n", r.Observation.Subtitle)
 		}
+	}
+	return 0
+}
+
+// cmdMCP runs the MCP stdio server. Diagnostics go to a log file, never
+// stdout — stdout is the JSON-RPC protocol channel, and a single stray log
+// line there would corrupt the stream for whatever real client is reading it.
+func cmdMCP(args []string) int {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite database path")
+	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for "+
+		"semantic_search_observations (empty disables that tool)")
+	fs.Parse(args)
+
+	l := openLog("mcp.log")
+	srv := &mcpserver.Server{DBPath: *dbPath, EmbedModel: *embedModel, Log: l}
+	if err := srv.Run(os.Stdin, os.Stdout); err != nil {
+		l.Printf("server exited: %v", err)
+		return 1
 	}
 	return 0
 }
