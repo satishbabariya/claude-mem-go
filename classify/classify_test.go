@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	claudeagent "claude-agent-sdk-go"
+	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 )
 
 func intp(i int) *int { return &i }

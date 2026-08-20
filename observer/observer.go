@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	claudeagent "claude-agent-sdk-go"
+	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"claude-mem-go/classify"
 	"claude-mem-go/store"

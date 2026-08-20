@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"time"
 
-	claudeagent "claude-agent-sdk-go"
+	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"claude-mem-go/backend"
 	"claude-mem-go/classify"

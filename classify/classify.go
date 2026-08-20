@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"strings"
 
-	claudeagent "claude-agent-sdk-go"
+	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 )
 
 // Kind mirrors ProviderErrorClass in provider-errors.ts.

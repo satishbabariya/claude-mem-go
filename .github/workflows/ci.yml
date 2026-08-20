@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Only the postgres/... package needs this — every other package's
+    # tests are pure logic or a temp-file SQLite db (see README's Testing
+    # section). No `claude` CLI or Ollama needed anywhere in this suite;
+    # those are verified by hand against the real thing, documented in the
+    # project history, not run in CI.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: claudemem
+          POSTGRES_PASSWORD: claudemem
+          POSTGRES_DB: claudemem
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U claudemem -d claudemem"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build
+        run: go build -o claude-mem-go ./cmd/claude-mem-go
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format check
+        run: |
+          diff="$(gofmt -l .)"
+          if [ -n "$diff" ]; then
+            echo "gofmt found unformatted files:"
+            echo "$diff"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./... -race -v
+        env:
+          CLAUDE_MEM_GO_TEST_POSTGRES_DSN: postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable
+
+      - name: Validate plugin manifest
+        run: |
+          npm install -g @anthropic-ai/claude-code 2>/dev/null || true
+          if command -v claude >/dev/null 2>&1; then
+            claude plugin validate .
+          else
+            echo "claude CLI not available in CI — skipping plugin manifest validation"
+          fi
