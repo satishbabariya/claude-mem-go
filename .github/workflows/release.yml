@@ -1,0 +1,39 @@
+name: Release
+
+# vX.Y.Z tags only — pushing every commit through this would create a
+# GitHub Release on every push, which is not what a tag-triggered release
+# workflow is for. CI (ci.yml) already builds/tests every push; this
+# workflow's only job is turning a deliberately-tagged commit into real
+# downloadable binaries.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser's changelog step is disabled (see .goreleaser.yaml),
+          # but full history is what makes `vcs.revision`/`vcs.time` (which
+          # `version`/`doctor` print, via runtime/debug.ReadBuildInfo)
+          # resolve correctly rather than however a shallow clone's HEAD
+          # happens to look.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

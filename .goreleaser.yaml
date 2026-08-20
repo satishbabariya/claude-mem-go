@@ -1,0 +1,69 @@
+# Real binary releases — this project had none before: installing meant
+# `go build` locally, then pointing the plugin at that binary by hand (see
+# README's "Development" section). Every push already builds and tests via
+# .github/workflows/ci.yml; this is the same binary, cross-compiled for
+# every platform Claude Code actually runs on, attached to a GitHub Release
+# on every `vX.Y.Z` tag push (.github/workflows/release.yml).
+#
+# Deliberately NOT wired into the plugin's hooks.json yet — that still
+# points at "$CLAUDE_PLUGIN_ROOT/claude-mem-go" (a locally-built binary),
+# and switching it to fetch a matching release asset is a real, separate
+# change (a Setup-hook download-if-missing step, the same shape real
+# claude-mem's own Setup hook covers) that deserves its own verification
+# pass rather than riding along with "does goreleaser produce working
+# binaries at all."
+version: 2
+
+project_name: claude-mem-go
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: claude-mem-go
+    main: ./cmd/claude-mem-go
+    binary: claude-mem-go
+    # CGO_ENABLED=0 is a real constraint, not a default left in place:
+    # modernc.org/sqlite is pure Go (this project's whole reason for using
+    # it over mattn/go-sqlite3 — see store's doc comments), and pgx/v5 is a
+    # pure Go Postgres driver too. Nothing here needs cgo, so a static
+    # binary that cross-compiles cleanly without a C toolchain per target
+    # is a correctness property of the dependency choices, not a shortcut.
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      # -s -w strips debug info/symbol tables (smaller binaries; this isn't
+      # a debug build). Deliberately does NOT set -X for version info —
+      # buildVersionString (cmd/claude-mem-go/version.go) reads Go's own
+      # runtime/debug.ReadBuildInfo() vcs.* settings instead, which survive
+      # a normal `go build` inside a git checkout without any ldflags
+      # wiring at all, cross-compiled or not.
+      - -s -w
+
+archives:
+  - id: claude-mem-go
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - CHANGELOG.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+# Real release notes come from CHANGELOG.md (hand-written, "what actually
+# changed and why" — see its own header comment), not an auto-generated
+# commit-message dump; disabling goreleaser's own changelog generation
+# avoids ending up with two competing, inconsistent versions of "what
+# changed."
+changelog:
+  disable: true

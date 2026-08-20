@@ -49,6 +49,14 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **Real binary releases** — `.goreleaser.yaml` + a tag-triggered
+  `.github/workflows/release.yml` cross-compile `claude-mem-go` for
+  linux/darwin × amd64/arm64 and attach them (plus a `checksums.txt`) to a
+  real GitHub Release on every `vX.Y.Z` tag push. Before this, installing
+  meant `go build` locally with no other option. Verified with a real
+  snapshot build (no tag needed): all four targets compiled, and the
+  darwin/arm64 binary was extracted and actually run — `version` and
+  `doctor` both worked correctly.
 - **`doctor`** extended; **`mem-search`**, **`mem-doctor`**,
   **`mem-prune`**, and **`mem-export`** Claude Code skills added —
   `mem-prune`'s instructions treat `prune` as the one genuinely

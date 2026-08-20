@@ -400,6 +400,36 @@ summarization) is wired into the same `hooks/hooks.json` and was verified
 directly against real, already-persisted session observations rather than
 re-run through a full plugin install cycle.
 
+### Releases
+
+Installing used to mean `go build` locally, every time, with no other
+option. `.goreleaser.yaml` + `.github/workflows/release.yml` close that gap:
+pushing a `vX.Y.Z` tag cross-compiles `claude-mem-go` for
+linux/darwin × amd64/arm64 (`CGO_ENABLED=0` — a real constraint, not a
+default left in place: both `modernc.org/sqlite` and `pgx/v5` are pure Go,
+this project's whole reason for choosing them, so nothing here needs a C
+toolchain per target) and attaches the archives plus a `checksums.txt` to a
+real GitHub Release. Release notes are `CHANGELOG.md` itself, not an
+auto-generated commit dump — this project already maintains one by hand
+for exactly this reason.
+
+Verified locally with a real snapshot build (`goreleaser release
+--snapshot --clean --skip=publish`, no tag or publish needed) — all four
+targets actually compiled, and the darwin/arm64 archive's binary was
+extracted and run for real: `version` printed a correct commit/build-time
+string (Go's own VCS stamping — see `version.go` — needs no ldflags
+wiring, cross-compiled or not), and `doctor` ran its full real checklist
+against a fresh temp database. The workflow YAML passed `actionlint`
+before being committed, the same discipline `ci.yml` was checked with.
+
+Deliberately **not yet wired into `hooks/hooks.json`** — that still points
+at a locally-built `$CLAUDE_PLUGIN_ROOT/claude-mem-go`, and switching it to
+fetch a matching release asset automatically (a `Setup`-hook
+download-if-missing step, the same shape real claude-mem's own `Setup`
+hook covers for its version-check) is a real, separate change that
+deserves its own verification pass rather than riding along with "does the
+release pipeline produce working binaries at all."
+
 ### Why the worker/hook split
 
 An earlier version had the `PostToolUse` hook call the observer directly.
