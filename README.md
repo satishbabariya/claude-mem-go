@@ -50,6 +50,22 @@ docker compose up -d
 ./claude-mem-go ingest -db "postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
 ```
 
+- **Schema migrations** (`migrate/`) — a real, versioned schema-migration
+  framework shared by both backends: a `schema_migrations` table records
+  which numbered, idempotent migrations have run, so the next schema change
+  has somewhere to go instead of either re-editing a `CREATE TABLE` that
+  production databases already ran once, or repeating the bespoke
+  "check `PRAGMA table_info`, `ALTER` if missing" pattern SQLite's
+  `content_hash` column used before this existed. Both backends' existing
+  schema steps (SQLite: the initial table, `content_hash`, the FTS5 index,
+  the vector table; Postgres: the initial table + indexes) are now
+  registered migrations rather than unconditional statements re-run on
+  every `Open`. Verified against a real upgrade path, not just unit tests:
+  a simulated pre-migration-framework SQLite database (missing both the
+  `content_hash` column and the `schema_migrations` table itself) correctly
+  migrates forward on reopen, and a live Postgres container correctly
+  records its migration once and doesn't re-apply it on a second `Open`.
+
 - **worker** — a persistent daemon, meant to be started once (see `start`)
   and left running. Listens on a Unix socket, processes PostToolUse
   payloads through a bounded `pool` of observer sessions.
@@ -186,11 +202,13 @@ terminal, so these logs are the only way to see what they did).
   backend** — fine at the scale one project's observations realistically
   reach, won't scale to millions of rows. The Postgres backend has a real
   HNSW ANN index instead; use it once scale is an actual concern.
-- **The SQLite schema is a narrower subset** of claude-mem's real
-  `observations` table (40+ migrations' worth of sync/origin-device
-  bookkeeping and an FTS5 shadow table are not replicated here) — this
-  persists what an observation actually *contains* plus a content-hash
-  dedup key, not claude-mem's full multi-device sync machinery.
+- **The schema is a narrower subset** of claude-mem's real `observations`
+  table (40+ migrations' worth of sync/origin-device bookkeeping and an
+  FTS5 shadow table are not replicated here) — this persists what an
+  observation actually *contains* plus a content-hash dedup key, not
+  claude-mem's full multi-device sync machinery. What's no longer a gap:
+  a real versioned migration path for whatever gets added next (see
+  "Schema migrations" above) — neither backend had one before.
 - **`Setup` and `UserPromptSubmit` aren't wired** — real claude-mem uses
   these for version-checking and session-init respectively.
   `SessionStart`+`PreToolUse`+`PostToolUse`+`Stop` now cover recall (both

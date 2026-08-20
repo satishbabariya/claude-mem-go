@@ -159,17 +159,9 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	if _, err := db.Exec(createTableSQL); err != nil {
+	if err := runMigrations(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("create schema: %w", err)
-	}
-	if err := ensureContentHashColumn(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate content_hash: %w", err)
-	}
-	if err := ensureFTS(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create fts schema: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 	return &Store{db: db}, nil
 }

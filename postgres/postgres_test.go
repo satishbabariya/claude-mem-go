@@ -312,3 +312,37 @@ func TestPostgresSemanticSearchDimensionMismatchErrors(t *testing.T) {
 		t.Fatal("SaveEmbedding with the wrong vector dimensionality: want an error, got nil")
 	}
 }
+
+// TestPostgresOpenRecordsMigrationAndReopenDoesNotReapply is the Postgres
+// half of the schema-versioning framework's regression coverage (see
+// migrate/migrate_test.go and store/migrations_test.go for the shared
+// runner and the SQLite side) — this backend never had ANY migration
+// tracking before, just an unconditional idempotent schema block re-run on
+// every Open. Confirms schema_migrations actually gets populated against
+// a real container, and that reopening doesn't insert a duplicate row.
+func TestPostgresOpenRecordsMigrationAndReopenDoesNotReapply(t *testing.T) {
+	st := openTestStore(t)
+
+	var count1 int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&count1); err != nil {
+		t.Fatalf("count schema_migrations after first Open: %v", err)
+	}
+	if count1 != 1 {
+		t.Fatalf("schema_migrations has %d rows for version 1, want exactly 1", count1)
+	}
+	st.Close()
+
+	st2, err := Open(context.Background(), testDSN(), DefaultEmbedDims)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	defer st2.Close()
+
+	var count2 int
+	if err := st2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&count2); err != nil {
+		t.Fatalf("count schema_migrations after second Open: %v", err)
+	}
+	if count2 != 1 {
+		t.Fatalf("schema_migrations has %d rows for version 1 after reopening, want 1 (no duplicate from re-applying)", count2)
+	}
+}

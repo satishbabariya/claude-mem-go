@@ -26,6 +26,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pgvector/pgvector-go"
 
+	"claude-mem-go/migrate"
 	"claude-mem-go/store"
 )
 
@@ -102,9 +103,19 @@ func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf(schemaSQL, embedDims)); err != nil {
+	migrations := []migrate.Migration{
+		{
+			Version: 1,
+			Name:    "initial observations table + indexes",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx, fmt.Sprintf(schemaSQL, embedDims))
+				return err
+			},
+		},
+	}
+	if err := migrate.Run(ctx, db, migrate.PostgresPlaceholder, migrations); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("create schema: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 	return &Store{db: db}, nil
 }

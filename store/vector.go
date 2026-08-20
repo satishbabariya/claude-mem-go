@@ -50,9 +50,8 @@ func decodeVector(b []byte, dims int) ([]float32, error) {
 
 // SaveEmbedding stores vec for an already-persisted observation.
 func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
-	if _, err := s.db.Exec(createVectorTableSQL); err != nil {
-		return fmt.Errorf("create vector schema: %w", err)
-	}
+	// observation_vectors is guaranteed to exist by Open's migrations
+	// (see store/migrations.go) — no need to create it lazily here.
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO observation_vectors (observation_id, dims, embedding) VALUES (?, ?, ?)`,
 		observationID, len(vec), encodeVector(vec),
@@ -95,10 +94,8 @@ type VectorMatch struct {
 // same cross-project-leak reason as Search (this store is one shared
 // database across every project ever recorded on the machine).
 func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]VectorMatch, error) {
-	if _, err := s.db.Exec(createVectorTableSQL); err != nil {
-		return nil, fmt.Errorf("create vector schema: %w", err)
-	}
-
+	// observation_vectors is guaranteed to exist by Open's migrations
+	// (see store/migrations.go) — no need to create it lazily here.
 	query := `
 		SELECT v.observation_id, v.dims, v.embedding,
 		       o.project, o.tool_name, o.type, o.title, o.subtitle,

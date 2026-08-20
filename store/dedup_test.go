@@ -112,6 +112,13 @@ func TestEnsureContentHashColumnMigratesPreExistingRows(t *testing.T) {
 	if _, err := st.db.Exec(`DROP INDEX IF EXISTS idx_observations_content_hash`); err != nil {
 		t.Fatalf("drop index: %v", err)
 	}
+	// A real pre-migration-framework database also predates
+	// schema_migrations itself — without dropping it too, Open would see
+	// migration 2 already recorded and skip re-running it, even though the
+	// column it's supposed to add was just removed below.
+	if _, err := st.db.Exec(`DROP TABLE IF EXISTS schema_migrations`); err != nil {
+		t.Fatalf("drop schema_migrations: %v", err)
+	}
 	if _, err := st.db.Exec(`
 		CREATE TABLE observations_legacy (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, project TEXT NOT NULL,
