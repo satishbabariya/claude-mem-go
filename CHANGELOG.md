@@ -19,7 +19,10 @@ than assumed correct.
   `add_observation` — the surface's only *write* tool, letting Claude
   explicitly persist something worth remembering that isn't the direct
   result of one tool call (closing a real gap real claude-mem's own
-  `observation_add` tool covers).
+  `observation_add` tool covers). Its first version had a real gap of its
+  own — it never embedded the new observation, so it was invisible to
+  `semantic_search_observations` even though keyword search found it fine
+  — fixed the same iteration, verified with a real Ollama-backed test.
 - **`PreToolUse` (file-context) and `Stop` (session summary) hooks wired**,
   closing two of the previously-unwired hooks.
 - **`prune`** — retention command (dry-run by default), and **`export`/

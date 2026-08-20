@@ -451,7 +451,26 @@ func (s *Server) runAddObservation(project, title, subtitle, narrative string, f
 		return toolCallResult{Content: []toolContent{{Type: "text",
 			Text: fmt.Sprintf("Already remembered (id=%d) — an identical observation (same title and narrative) was already added this session.", res.ID)}}}
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: fmt.Sprintf("Remembered (id=%d): %s", res.ID, title)}}}
+
+	// Additive only, same as worker.process's own embedding step: keyword
+	// search on the row just inserted already works without this, and a
+	// missing/unreachable Ollama must not undo a successful add. Without
+	// this, a manually-added observation would be a second-class citizen
+	// next to automatic capture — findable by search_observations/
+	// recent_observations, but invisible to semantic_search_observations.
+	embedNote := ""
+	if s.EmbedModel != "" {
+		text := embed.ObservationText(title, subtitle, narrative, facts)
+		if vec, embedErr := embed.NewClient(s.EmbedModel).Embed(text); embedErr != nil {
+			s.Log.Printf("add_observation: embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, embedErr)
+			embedNote = " (embedding failed, so semantic search won't find it — keyword search still will)"
+		} else if saveErr := s.st.SaveEmbedding(res.ID, vec); saveErr != nil {
+			s.Log.Printf("add_observation: saving embedding for observations.id=%d failed: %v", res.ID, saveErr)
+			embedNote = " (embedding failed, so semantic search won't find it — keyword search still will)"
+		}
+	}
+
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: fmt.Sprintf("Remembered (id=%d): %s%s", res.ID, title, embedNote)}}}
 }
 
 func (s *Server) runSemanticSearch(project, query string, limit int) toolCallResult {

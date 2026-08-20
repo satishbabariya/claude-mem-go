@@ -177,11 +177,18 @@ docker compose up -d
   same session is a no-op, not a duplicate. `SessionID` here is generated
   once per MCP server process (Claude Code spawns one per session, so this
   is the natural per-session scope an MCP tool call has no other way to
-  carry). Wire format confirmed against a real `claude` session, not
-  assumed from the spec (see `mcpserver/`'s doc comment); every tool's
-  end-to-end call verified against the real CLI, not just unit-tested —
-  including a live plugin install exercising the newer lookup tools and
-  `add_observation` against real seeded/added rows.
+  carry). Also embeds the new observation the same way automatic capture
+  does (when an embed model is configured) — the first version of this
+  tool didn't, a real gap that made a manually-added observation invisible
+  to `semantic_search_observations` even though `search_observations`
+  found it fine; fixed and locked in with a real Ollama-backed test (skips
+  cleanly when Ollama isn't reachable, the same pattern `postgres_test.go`
+  uses for a missing container). Wire format confirmed against a real
+  `claude` session, not assumed from the spec (see `mcpserver/`'s doc
+  comment); every tool's end-to-end call verified against the real CLI,
+  not just unit-tested — including a live plugin install where a manually
+  added observation was found afterward through `semantic_search_observations`
+  by meaning, not keyword overlap.
   Scoped to the current project by default (derived from the server
   process's cwd) — this store is one shared database across every project
   ever recorded on the machine, so an unscoped search is a real

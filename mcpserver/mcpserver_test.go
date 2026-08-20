@@ -9,8 +9,23 @@ import (
 	"strings"
 	"testing"
 
+	"claude-mem-go/embed"
 	"claude-mem-go/store"
 )
+
+// testEmbedModel skips (not fails) a test when Ollama isn't reachable —
+// this project's CI never runs it (see README's Testing section), and a
+// missing local dependency should skip cleanly rather than break `go test
+// ./...` for someone who hasn't started it, the same pattern
+// postgres_test.go uses for a missing Postgres container.
+func testEmbedModel(t *testing.T) string {
+	t.Helper()
+	const model = "nomic-embed-text"
+	if err := embed.NewClient(model).Ping(); err != nil {
+		t.Skipf("Ollama not reachable with model %q: %v", model, err)
+	}
+	return model
+}
 
 // newTestServer opens a fresh sqlite db seeded with one observation, so
 // tests exercise real store.Search rather than a mock.
@@ -469,6 +484,42 @@ func TestToolsCallAddObservationPersistsAndIsFindable(t *testing.T) {
 // add_observation twice with the same title/narrative in the same server
 // process (same SessionID) is a no-op the second time, not a duplicate —
 // the same content-hash idempotency automatic capture already relies on.
+// TestToolsCallAddObservationIsSemanticallySearchable is the regression
+// test for a real gap in add_observation's first version: it inserted the
+// row but never embedded it, unlike automatic capture (worker.process),
+// which always does when an embed model is configured. That made a
+// manually-added observation a second-class citizen — findable by
+// keyword search, invisible to semantic search. Uses a real Ollama call,
+// skipping cleanly if it isn't reachable (see testEmbedModel).
+func TestToolsCallAddObservationIsSemanticallySearchable(t *testing.T) {
+	model := testEmbedModel(t)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"switched the database to Postgres for production scale","narrative":"local SQLite could not keep up with concurrent writes"}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if strings.Contains(text, "embedding failed") {
+		t.Fatalf("add_observation reported an embedding failure even though Ollama is reachable: %q", text)
+	}
+
+	s2 := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"semantic_search_observations","arguments":{"query":"why did we move off of sqlite"}}}`,
+	})
+	semanticText := toolCallText(t, resp2[0])
+	if !strings.Contains(semanticText, "Postgres for production scale") {
+		t.Fatalf("semantic_search_observations after add_observation = %q, want the manually-added row to be found by meaning, not just keywords", semanticText)
+	}
+}
+
 func TestToolsCallAddObservationIsIdempotentWithinASession(t *testing.T) {
 	s, dbPath := newTestServer(t)
 	s.Project = "proj"
