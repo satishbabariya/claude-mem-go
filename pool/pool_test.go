@@ -7,6 +7,35 @@ import (
 	"time"
 )
 
+// TestNewClampsNegativeAndZeroToOne is the regression test for a real bug
+// found by hand, not anticipated: Go's own make(chan T, n) panics with
+// "makechan: size out of range" for a negative n, so New(-1) — reachable
+// from a mistyped or computed `-max-concurrent` flag — crashed the
+// worker daemon at startup, before it ever bound its socket. Zero has a
+// quieter but equally real failure mode (every Acquire would block
+// forever), covered here too.
+func TestNewClampsNegativeAndZeroToOne(t *testing.T) {
+	for _, n := range []int{-1, -100, 0} {
+		p := New(n)
+		if got := p.Capacity(); got != 1 {
+			t.Errorf("New(%d).Capacity() = %d, want 1 (clamped)", n, got)
+		}
+		// Confirm the pool is actually usable, not just reporting a
+		// plausible-looking capacity — Acquire must return promptly.
+		done := make(chan struct{})
+		go func() {
+			p.Acquire()
+			p.Release()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Errorf("New(%d): Acquire did not return — pool isn't actually usable after clamping", n)
+		}
+	}
+}
+
 // TestMaxConcurrency verifies the pool never lets more than N holders run
 // at once, using a shared counter sampled while every goroutine is inside
 // its critical section — the actual property Pool exists to guarantee, not

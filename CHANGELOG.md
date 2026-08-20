@@ -62,6 +62,19 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`pool.New` clamps a non-positive `maxConcurrent` instead of crashing
+  the worker daemon at startup.** Go's own `make(chan T, n)` panics with
+  "makechan: size out of range" for a negative `n`, so
+  `worker -max-concurrent -1` (a mistyped or computed flag) crashed
+  before the daemon ever bound its socket — confirmed against a real
+  running process. Zero has a quieter but equally real failure mode
+  (every `Acquire` blocks forever instead of crashing). Now clamps
+  anything below 1 to 1. Also fixed a smaller bug this surfaced: the
+  startup log printed the *raw* flag value, not the pool's real
+  (possibly clamped) capacity — `doctor`'s own stats already used the
+  real value and were never wrong, but the log line claiming
+  `max_concurrent=-1` while the pool actually ran at capacity 1 was a
+  real inconsistency. Verified against a real running worker.
 - **Every `Backend` method taking a `limit` now clamps a negative value,
   and — the more consequential fix — the worker daemon and MCP server now
   recover from a panic instead of crashing the whole process.** Auditing

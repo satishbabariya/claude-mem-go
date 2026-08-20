@@ -15,7 +15,22 @@ type Pool struct {
 }
 
 // New creates a Pool allowing maxConcurrent concurrent holders.
+//
+// maxConcurrent below 1 is clamped to 1, not passed straight through — a
+// real, reproducible bug found by hand, not anticipated: Go's own
+// `make(chan T, n)` panics with "makechan: size out of range" for a
+// negative n, so `pool.New(-1)` (e.g. a mistyped or computed
+// `-max-concurrent` flag reaching the worker daemon at startup) crashed
+// the process before it ever bound its socket. Zero has a quieter but
+// equally real failure mode: a zero-capacity semaphore can never be
+// acquired, so every single Acquire call would block forever — a
+// permanent hang instead of a crash, not meaningfully better. Both clamp
+// to the same safe floor since neither has a sane non-degenerate meaning
+// for "how many observer sessions run at once."
 func New(maxConcurrent int) *Pool {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
 	return &Pool{sem: make(chan struct{}, maxConcurrent)}
 }
 

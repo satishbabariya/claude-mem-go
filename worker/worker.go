@@ -170,8 +170,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.Log.Printf("worker metrics listening on http://%s/metrics", d.MetricsAddr)
 	}
 
+	// p.Capacity(), not d.MaxConcurrent: pool.New clamps a non-positive
+	// value to 1 rather than passing it straight through (see its own doc
+	// comment — a negative value crashes Go's make(chan) outright), so
+	// logging the raw flag value here would claim a max_concurrent that
+	// doesn't match what the pool is actually enforcing.
 	d.Log.Printf("worker daemon up, pid=%d, listening on %s, max_concurrent=%d",
-		os.Getpid(), d.SocketPath, d.MaxConcurrent)
+		os.Getpid(), d.SocketPath, p.Capacity())
 
 	for {
 		conn, err := ln.Accept()

@@ -611,6 +611,25 @@ process survives and a real caller gets a clean error instead of a dead
 connection), and a live `claude` CLI session confirming the MCP server
 stays alive and keeps serving requests correctly afterward.
 
+Auditing every other caller-supplied integer while already in this
+territory found one more, in `pool.New` this time: Go's own
+`make(chan T, n)` panics with `"makechan: size out of range"` for a
+negative `n`, so `worker -max-concurrent -1` (a mistyped or computed
+flag) crashed the daemon at **startup**, before it ever bound its
+socket — confirmed by hand against a real running worker process. Zero
+has a quieter but equally real failure mode: a zero-capacity semaphore
+can never be acquired, so every `Acquire` call would block forever
+instead of crashing. `pool.New` now clamps anything below 1 to 1. Also
+fixed a smaller, related observability bug this surfaced: the startup
+log line printed the *raw* `-max-concurrent` flag value, not the pool's
+actual (possibly clamped) capacity — `doctor`'s own `pool=X/Y` stats
+already used the real `pool.Capacity()` and were never wrong, but the
+one log line calling itself `max_concurrent=-1` while the pool was
+really running at capacity 1 was a real, if cosmetic, inconsistency.
+Verified against a real running worker: started one with
+`-max-concurrent -1`, confirmed it stayed alive (rather than crashing)
+and its own startup log correctly reported `max_concurrent=1`.
+
 ## Quick start
 
 ```sh
