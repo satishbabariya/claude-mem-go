@@ -62,10 +62,13 @@ func cmdDoctor(args []string) int {
 	}
 
 	redactedDBPath := store.RedactDSN(*dbPath)
-	if st, err := backend.Open(context.Background(), *dbPath, 0); err != nil {
+	var st store.Backend
+	if opened, err := backend.Open(context.Background(), *dbPath, 0); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false
 	} else {
+		st = opened
+		defer st.Close()
 		if _, cerr := st.CountByProject(""); cerr != nil {
 			fmt.Printf("✘ database (%s) opened but a query failed: %v\n", redactedDBPath, cerr)
 			critical = false
@@ -90,13 +93,30 @@ func cmdDoctor(args []string) int {
 			}
 			fmt.Println()
 		}
-		st.Close()
 	}
 
-	if err := embed.NewClient(*embedModel).Ping(); err != nil {
+	client := embed.NewClient(*embedModel)
+	if err := client.Ping(); err != nil {
 		fmt.Printf("… semantic search unavailable: %v (keyword search still works)\n", err)
 	} else {
 		fmt.Printf("✔ Ollama reachable, model %q pulled — semantic search available\n", *embedModel)
+		// embedding_dims_consistent (above) only catches internal
+		// disagreement between stored embeddings — it says nothing about
+		// whether what's stored actually matches the model that's live
+		// RIGHT NOW. A store embedded entirely under a since-replaced
+		// model would report "consistent" while every single embedding is
+		// silently unsearchable under the current one. A real probe embed
+		// (the only way to learn what this model's dimension actually is;
+		// nothing here maintains a name-to-dimension lookup table) plus
+		// the exact same query `reembed` uses (capped at 1 row — this is
+		// a cheap presence check, not a full scan) catches that case too.
+		if st != nil {
+			if probe, perr := client.Embed("dimension probe"); perr == nil {
+				if needing, nerr := st.ObservationsNeedingEmbedding("", int64(len(probe)), 0, 1); nerr == nil && len(needing) > 0 {
+					fmt.Printf("… some observations need (re-)embedding with the current model (%d dims) — run `reembed` for a full count and to fix it\n", len(probe))
+				}
+			}
+		}
 	}
 
 	fmt.Println()

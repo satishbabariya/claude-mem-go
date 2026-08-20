@@ -18,6 +18,7 @@
 //	claude-mem-go doctor          — check that the claude CLI, worker, database, and Ollama are all reachable
 //	claude-mem-go file-context    — PreToolUse hook (Read): inject prior memory about the specific file being read
 //	claude-mem-go prune           — delete observations older than a cutoff (dry-run by default; retention has no other story)
+//	claude-mem-go reembed         — re-embed observations with no embedding or a stale dimension (dry-run by default; remediates doctor's embedding_dims_consistent finding)
 //	claude-mem-go version         — print the build's commit/time, for correlating a bug report with an exact build
 //	claude-mem-go export          — dump every observation as JSON Lines (backup, and the SQLite<->Postgres migration path)
 //	claude-mem-go import          — restore/migrate a file written by export; idempotent (matched by content_hash)
@@ -63,6 +64,8 @@ func main() {
 		os.Exit(cmdFileContext(os.Args[2:]))
 	case "prune":
 		os.Exit(cmdPrune(os.Args[2:]))
+	case "reembed":
+		os.Exit(cmdReembed(os.Args[2:]))
 	case "version":
 		os.Exit(cmdVersion(os.Args[2:]))
 	case "export":

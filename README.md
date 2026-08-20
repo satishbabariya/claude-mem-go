@@ -296,15 +296,18 @@ docker compose up -d
   check's own output back (worker/database/Ollama status), confirming
   `$CLAUDE_PLUGIN_ROOT` resolves correctly for a skill-invoked command, not
   just for hooks and the MCP server.
-- **skills/mem-prune and skills/mem-export** — surface `prune` and
-  `export`/`import` as `/mem-prune`/`/mem-export` the same way
-  `mem-doctor` surfaces `doctor`. `mem-prune`'s instructions are written to
-  treat this as the one genuinely destructive operation in the CLI: always
-  run the dry run first, show the count, and get explicit confirmation
-  before ever adding `-yes` — verified live, not just written and hoped
-  for: asked a real session to "clean up memories older than 1 day" and
+- **skills/mem-prune, skills/mem-export, and skills/mem-reembed** —
+  surface `prune`, `export`/`import`, and `reembed` as
+  `/mem-prune`/`/mem-export`/`/mem-reembed` the same way `mem-doctor`
+  surfaces `doctor`. `mem-prune`'s instructions are written to treat this
+  as the one genuinely destructive operation in the CLI: always run the
+  dry run first, show the count, and get explicit confirmation before
+  ever adding `-yes` — verified live, not just written and hoped for:
+  asked a real session to "clean up memories older than 1 day" and
   confirmed it ran the dry run, reported the count, and asked whether to
-  actually delete rather than doing so on its own.
+  actually delete rather than doing so on its own. `mem-reembed`'s
+  instructions apply the identical dry-run-first discipline for a
+  different reason: not destructive, but a real Ollama API cost per row.
 - **doctor** — an operational health check: is the `claude` CLI on `PATH`,
   is the worker daemon reachable, is the database reachable, is Ollama
   reachable with the configured model actually pulled. Distinguishes
@@ -410,6 +413,27 @@ docker compose up -d
   this (`TestPruneCutoffUnitsMatchInsertsRealTimestamp`, both backends)
   inserts through the real `Insert` path instead, and the CLI fix was
   re-verified against a real backdated row through the actual binary.
+- **reembed** — the remediation half of `doctor`'s
+  `embedding_dims_consistent` finding: detecting a stale/missing embedding
+  was one thing, but there was no way to actually fix it short of
+  re-ingesting from scratch. Finds every observation with no embedding at
+  all, or one whose stored dimension doesn't match the currently
+  configured model's real dimension (learned via a probe embed call —
+  nothing here maintains a model-name-to-dimension lookup table), and
+  re-embeds it. Dry-run by default like `prune` (real Ollama API cost per
+  row, even though nothing is ever deleted), `-yes` to actually do it,
+  `-project` to scope it. `doctor` itself now does the same probe-and-
+  check: `embedding_dims_consistent=true` alone only catches internal
+  disagreement between *stored* embeddings — a store embedded entirely
+  under a since-replaced model would report "consistent" while every
+  single embedding is silently unsearchable under the model that's
+  actually live right now, which the plain histogram check can't see.
+  Verified end to end with real Ollama calls, not mocked: seeded one
+  observation with a stale 384-dim embedding and one never embedded at
+  all, confirmed `doctor` flagged both the internal-consistency case AND
+  (separately) the live-model mismatch, ran `reembed -yes`, confirmed
+  both fixed, and confirmed via `semantic-search` that the previously
+  stale observation is now actually findable and correctly ranked.
 - **Observability** — the worker daemon's only introspection used to be
   raw log lines (`worker.log`, and the per-hook logs). It now also writes
   a small `~/.claude-mem-go/worker-stats.json` snapshot after every

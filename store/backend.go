@@ -48,6 +48,12 @@ type Backend interface {
 	// Always scoped to the anchor's own project; project is a caller
 	// assertion checked against that, not an independent filter.
 	Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]SearchResult, error)
+	// ObservationsNeedingEmbedding returns observations with no embedding
+	// at all, or whose stored embedding dimension doesn't match
+	// expectedDims — the read path for the `reembed` CLI command, the
+	// remediation half of HealthDetails' embedding_dims_consistent
+	// finding. Paginated like ExportAll (id > afterID, oldest first).
+	ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]SearchResult, error)
 	// Prune deletes observations older than cutoffEpoch (a Unix seconds
 	// timestamp), scoped to one project when non-empty or every project
 	// when empty. dryRun counts what WOULD be deleted without deleting

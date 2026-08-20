@@ -62,6 +62,22 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`reembed`** — the remediation half of `doctor`'s
+  `embedding_dims_consistent` finding: finds every observation with no
+  embedding or a stale dimension and re-embeds it with the current model
+  (dry-run by default, `-yes` to actually do it, same discipline as
+  `prune` — a real Ollama API cost per row even though nothing is ever
+  deleted). `doctor` also now cross-checks against the *live* model's
+  real dimension (via a probe embed call), not just internal consistency
+  among stored embeddings — a store embedded entirely under a
+  since-replaced model would otherwise report "consistent" while every
+  embedding is silently unsearchable under the model that's actually
+  active. New `skills/mem-reembed` surfaces it as `/mem-reembed`. Verified
+  end to end with real Ollama calls: seeded a stale-dims row and a
+  never-embedded row, confirmed `doctor` flagged both cases, ran
+  `reembed -yes`, confirmed both fixed, and confirmed via
+  `semantic-search` that the previously stale observation is now
+  findable and correctly ranked.
 - **`HealthDetails` now catches a real, previously-silent failure mode:
   inconsistent embedding dimensions.** If the configured Ollama embedding
   model ever changes, `SemanticSearch`'s cosine similarity returns -1 (its
