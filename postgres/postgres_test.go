@@ -173,6 +173,60 @@ func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	}
 }
 
+func TestPostgresRecentByProjectOrdersNewestFirst(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	older, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "1", project), store.Observation{Type: "discovery", Title: "older"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	newer, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "2", project), store.Observation{Type: "discovery", Title: "newer"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	results, err := st.RecentByProject(project, 10)
+	if err != nil {
+		t.Fatalf("RecentByProject: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("RecentByProject returned %d results, want 2", len(results))
+	}
+	if results[0].ID != newer.ID || results[1].ID != older.ID {
+		t.Fatalf("RecentByProject order = [%d, %d], want newest first [%d, %d]",
+			results[0].ID, results[1].ID, newer.ID, older.ID)
+	}
+}
+
+// TestPostgresRecentByProjectHandlesNullNarrative is the same regression
+// test as the SQLite backend's: title/subtitle/narrative are nullable, and
+// the scan code must not assume otherwise.
+func TestPostgresRecentByProjectHandlesNullNarrative(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	hash := store.ContentHash("s1", "Bash", "null-case", project)
+
+	if _, err := st.db.Exec(
+		`INSERT INTO observations (session_id, project, tool_name, type, title, content_hash, created_at_epoch)
+		 VALUES ('s1', $1, 'Bash', 'discovery', 'title only, no subtitle or narrative', $2, 1)`,
+		project, hash,
+	); err != nil {
+		t.Fatalf("insert row with NULL narrative/subtitle: %v", err)
+	}
+
+	results, err := st.RecentByProject(project, 10)
+	if err != nil {
+		t.Fatalf("RecentByProject with a NULL narrative row: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Observation.Narrative != "" {
+		t.Fatalf("Narrative = %q, want empty string for a NULL column", results[0].Observation.Narrative)
+	}
+}
+
 func TestPostgresSemanticSearchDimensionMismatchErrors(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)

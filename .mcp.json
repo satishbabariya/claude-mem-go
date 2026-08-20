@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "claude-mem-go": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "exec \"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" mcp"]
+    }
+  }
+}

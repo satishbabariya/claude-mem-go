@@ -17,6 +17,11 @@ type Backend interface {
 	Search(query string, limit int) ([]SearchResult, error)
 	SaveEmbedding(observationID int64, vec []float32) error
 	SemanticSearch(queryVec []float32, limit int) ([]VectorMatch, error)
+	// RecentByProject returns a project's most recent observations, newest
+	// first — the read path for SessionStart context injection (see the
+	// context subcommand): the actual "memory" half of claude-mem, as
+	// opposed to the on-demand Search/SemanticSearch tools.
+	RecentByProject(project string, limit int) ([]SearchResult, error)
 	Close() error
 }
 

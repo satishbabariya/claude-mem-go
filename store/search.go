@@ -113,6 +113,26 @@ type SearchResult struct {
 	ToolName    string
 }
 
+// nullableTextFields scans title/subtitle/narrative — nullable TEXT columns
+// in the schema — into sql.NullString rather than directly into a plain Go
+// string. Found the hard way: a hand-inserted test row that omitted
+// narrative (leaving it SQL NULL, which the schema permits) failed every
+// query that read it with "converting NULL to string is unsupported." The
+// normal Insert() path always supplies at least an empty string, so this
+// never surfaced through ordinary use — but a nullable column that the scan
+// code can't actually handle NULL for is a latent bug regardless of how
+// unlikely a real trigger is, and RecentByProject (a brand new query at the
+// time this was found) hit it on the very first manually-seeded row.
+type nullableTextFields struct {
+	title, subtitle, narrative sql.NullString
+}
+
+func (n nullableTextFields) apply(o *Observation) {
+	o.Title = n.title.String
+	o.Subtitle = n.subtitle.String
+	o.Narrative = n.narrative.String
+}
+
 // Search runs an FTS5 MATCH query across title/subtitle/narrative/facts/
 // concepts, ranked by bm25 (FTS5's built-in relevance function — lower is
 // better, so ORDER BY rank ascending is "best match first").
@@ -133,12 +153,51 @@ func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 	var out []SearchResult
 	for rows.Next() {
 		var r SearchResult
+		var nf nullableTextFields
 		var facts, concepts, filesRead, filesModified string
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&r.Observation.Title, &r.Observation.Subtitle, &facts, &r.Observation.Narrative,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
 			&concepts, &filesRead, &filesModified); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
+		nf.apply(&r.Observation)
+		r.Observation.Facts = parseJSONArray(facts)
+		r.Observation.Concepts = parseJSONArray(concepts)
+		r.Observation.FilesRead = parseJSONArray(filesRead)
+		r.Observation.FilesModified = parseJSONArray(filesModified)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentByProject returns a project's most recent observations, newest
+// first — a plain indexed query (idx_observations_project +
+// idx_observations_created), not FTS5; this is "what happened lately here,"
+// not a search.
+func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, error) {
+	rows, err := s.db.Query(`
+		SELECT id, session_id, project, tool_name, type, title, subtitle,
+		       facts, narrative, concepts, files_read, files_modified
+		FROM observations
+		WHERE project = ?
+		ORDER BY created_at_epoch DESC, id DESC
+		LIMIT ?`, project, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent observations for project %q: %w", project, err)
+	}
+	defer rows.Close()
+
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var nf nullableTextFields
+		var facts, concepts, filesRead, filesModified string
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
+			&concepts, &filesRead, &filesModified); err != nil {
+			return nil, fmt.Errorf("scan recent observation: %w", err)
+		}
+		nf.apply(&r.Observation)
 		r.Observation.Facts = parseJSONArray(facts)
 		r.Observation.Concepts = parseJSONArray(concepts)
 		r.Observation.FilesRead = parseJSONArray(filesRead)

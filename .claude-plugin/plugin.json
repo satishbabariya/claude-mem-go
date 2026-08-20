@@ -1,0 +1,22 @@
+{
+  "name": "claude-mem-go",
+  "version": "0.1.0",
+  "description": "Go reimplementation of claude-mem's capture-compress-persist-search-recall loop, built on claude-agent-sdk-go instead of the closed-source npm SDK",
+  "author": {
+    "name": "satishbabariya"
+  },
+  "repository": "https://github.com/satishbabariya/claude-mem-go",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "memory",
+    "mcp",
+    "plugin",
+    "go",
+    "sqlite",
+    "postgres",
+    "pgvector"
+  ],
+  "homepage": "https://github.com/satishbabariya/claude-mem-go#readme"
+}

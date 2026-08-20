@@ -197,12 +197,14 @@ func (s *Store) SemanticSearch(queryVec []float32, limit int) ([]store.VectorMat
 	var out []store.VectorMatch
 	for rows.Next() {
 		var m store.VectorMatch
+		var nf nullableTextFields
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&m.ID, &m.Project, &m.ToolName, &m.Observation.Type,
-			&m.Observation.Title, &m.Observation.Subtitle, &facts, &m.Observation.Narrative,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative,
 			&concepts, &filesRead, &filesModified, &m.Score); err != nil {
 			return nil, fmt.Errorf("scan semantic search row: %w", err)
 		}
+		nf.apply(&m.Observation)
 		m.Observation.Facts = jsonDecode(facts)
 		m.Observation.Concepts = jsonDecode(concepts)
 		m.Observation.FilesRead = jsonDecode(filesRead)

@@ -111,12 +111,14 @@ func (s *Store) SemanticSearch(queryVec []float32, limit int) ([]VectorMatch, er
 		var dims int
 		var blob []byte
 		var facts, concepts, filesRead, filesModified string
+		var nf nullableTextFields
 		var m VectorMatch
 		if err := rows.Scan(&m.ID, &dims, &blob,
-			&m.Project, &m.ToolName, &m.Observation.Type, &m.Observation.Title, &m.Observation.Subtitle,
-			&facts, &m.Observation.Narrative, &concepts, &filesRead, &filesModified); err != nil {
+			&m.Project, &m.ToolName, &m.Observation.Type, &nf.title, &nf.subtitle,
+			&facts, &nf.narrative, &concepts, &filesRead, &filesModified); err != nil {
 			return nil, fmt.Errorf("scan embedding row: %w", err)
 		}
+		nf.apply(&m.Observation)
 		vec, err := decodeVector(blob, dims)
 		if err != nil {
 			return nil, err

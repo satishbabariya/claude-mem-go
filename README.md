@@ -59,6 +59,14 @@ docker compose up -d
 - **start** — idempotent daemon launcher for `SessionStart`: spawns a
   detached worker if one isn't already running, using a `worker-spawn-gate.ts`-style
   lockfile so concurrent sessions starting at once don't spawn duplicates.
+- **context** — the other `SessionStart` hook, and the piece that makes
+  this project actually function as *memory* rather than an on-demand
+  search tool: it looks up the current project's most recent observations
+  and injects them as context Claude sees automatically, before anyone asks
+  for anything. Verified against a real session, not just unit-tested: a
+  distinctive marker was seeded directly into the database, and a real
+  `claude -p` session — with no tools, asked only about its own injected
+  context — correctly reported it back verbatim.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
@@ -68,6 +76,31 @@ docker compose up -d
   Claude Code itself — can call directly. Wire format confirmed against a
   real `claude` session, not assumed from the spec (see `mcpserver/`'s doc
   comment); end-to-end tool calls verified against the real CLI too.
+
+## Installing as a Claude Code plugin
+
+`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` +
+`hooks/hooks.json` + `.mcp.json` make this a real, installable Claude Code
+plugin — not just something wired by hand-editing `.claude/settings.json`.
+Validated with the real CLI, and installed/exercised end to end at
+**project scope** (never user/machine-wide — that would affect every other
+Claude Code session on the box, not just a test):
+
+```sh
+go build -o claude-mem-go ./cmd/claude-mem-go
+claude plugin validate .                                          # manifest sanity check
+
+# From inside a project you want claude-mem-go active in:
+claude plugin marketplace add /path/to/claude-mem-go --scope project
+claude plugin install claude-mem-go@claude-mem-go-local --scope project
+```
+
+All three hook events and the MCP server were confirmed live through this
+exact mechanism (not `--mcp-config`/manual settings): `SessionStart` starts
+the worker and injects context, `PostToolUse` reaches the worker and
+persists a real observation, and `search_observations` returns real rows
+through the plugin-bundled `.mcp.json` — all in one project-scoped install/
+uninstall cycle, cleaned up afterward.
 
 ### Why the worker/hook split
 
@@ -113,9 +146,10 @@ terminal, so these logs are the only way to see what they did).
   bookkeeping and an FTS5 shadow table are not replicated here) — this
   persists what an observation actually *contains* plus a content-hash
   dedup key, not claude-mem's full multi-device sync machinery.
-- **No skills surface** — the MCP server exposes search/recall as tools;
-  claude-mem's broader plugin surface (skills, slash commands) has no
-  analog here yet.
+- **No slash commands/skills yet** — this is a real, installable Claude Code
+  plugin (hooks + a bundled MCP server, validated with `claude plugin
+  validate` and installed end to end), but claude-mem's broader surface
+  (skills, slash commands) has no analog here yet.
 
 ## Testing
 

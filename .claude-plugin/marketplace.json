@@ -1,0 +1,16 @@
+{
+  "name": "claude-mem-go-local",
+  "owner": {
+    "name": "satishbabariya"
+  },
+  "metadata": {
+    "description": "Local marketplace for claude-mem-go"
+  },
+  "plugins": [
+    {
+      "name": "claude-mem-go",
+      "source": ".",
+      "description": "Go reimplementation of claude-mem's capture-compress-persist-search-recall loop"
+    }
+  ]
+}

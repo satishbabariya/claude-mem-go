@@ -1,4 +1,5 @@
 {
+  "description": "claude-mem-go hooks",
   "hooks": {
     "SessionStart": [
       {
@@ -6,12 +7,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/claude-mem-go start",
+            "shell": "bash",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" start",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "/path/to/claude-mem-go context",
+            "shell": "bash",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" context",
             "timeout": 10
           }
         ]
@@ -23,7 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/claude-mem-go hook",
+            "shell": "bash",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" hook",
             "async": true,
             "timeout": 120
           }
