@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  claude-mem-go worker daemon — a macOS launchd user agent, for anyone who
+  wants the daemon supervised independent of any single Claude Code
+  session (see README.md's "Known limitations" and
+  deploy/systemd/claude-mem-go-worker.service's comment for the Linux
+  equivalent and the full rationale — this is the optional macOS
+  counterpart, not required for normal use).
+
+  Install (replace /path/to/claude-mem-go below with your actual binary
+  path — `which claude-mem-go` or wherever you built it):
+
+    mkdir -p ~/Library/LaunchAgents
+    cp deploy/launchd/com.claude-mem-go.worker.plist ~/Library/LaunchAgents/
+    # edit the ProgramArguments path below to point at your real binary
+    launchctl load -w ~/Library/LaunchAgents/com.claude-mem-go.worker.plist
+    launchctl list | grep claude-mem-go
+
+  To stop and remove:
+
+    launchctl unload -w ~/Library/LaunchAgents/com.claude-mem-go.worker.plist
+    rm ~/Library/LaunchAgents/com.claude-mem-go.worker.plist
+
+  Logs still go to ~/.claude-mem-go/worker.log — StandardOutPath/
+  StandardErrorPath below only catch anything printed before the daemon
+  gets that far (a bad flag, a crash before opening its own log).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.claude-mem-go.worker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/path/to/claude-mem-go</string>
+		<string>worker</string>
+		<string>-model</string>
+		<string>haiku</string>
+		<string>-embed-model</string>
+		<string>nomic-embed-text</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/tmp/claude-mem-go-worker.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/claude-mem-go-worker.stderr.log</string>
+</dict>
+</plist>

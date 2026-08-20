@@ -336,6 +336,35 @@ tests: grew a real `worker.log` past the cap by hand, restarted the
 daemon, and confirmed it rotated the oversized file to `worker.log.1` and
 started a fresh one on its very first log line.
 
+## Running the worker as a supervised service (optional)
+
+By default, the worker daemon only ever starts lazily: `start` (invoked
+from `SessionStart`) spawns it if it isn't already running, guarded by a
+spawn lock so concurrent sessions starting at once don't race. That's
+fine for normal use, but it means a crashed daemon, or a machine reboot
+with no Claude Code session active to trigger the next `SessionStart`,
+leaves memory capture silently dead until something starts a session
+again.
+
+`deploy/systemd/claude-mem-go-worker.service` (Linux, user-level
+systemd) and `deploy/launchd/com.claude-mem-go.worker.plist` (macOS
+launchd user agent) are optional templates for supervising it
+independently — install either one and the daemon restarts itself on
+crash and comes back after a reboot, with no conflict with `start`'s own
+lazy-launch logic (`start` checks whether a worker is already reachable
+before spawning one, so having a supervisor keep it running just means
+that check always finds one already there). See the comments at the top
+of each file for install steps.
+
+Verified for real, not just written and assumed: the systemd unit was
+checked with `systemd-analyze verify` in a real systemd container (Docker
+— its `%h` specifier resolves correctly, and the file parses clean); the
+launchd plist was actually loaded on a real macOS machine, confirmed the
+supervised process came up and answered `doctor` on its own socket, then
+killed the process directly and confirmed `KeepAlive` relaunched it
+within seconds — genuine crash recovery, not assumed from the plist's own
+claimed behavior.
+
 ## Known limitations
 
 - **Semantic search is brute-force cosine similarity only on the SQLite

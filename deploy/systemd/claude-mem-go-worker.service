@@ -1,0 +1,40 @@
+# claude-mem-go worker daemon — a user-level systemd unit, for anyone who
+# wants the daemon supervised independent of any single Claude Code
+# session, rather than only ever started lazily from SessionStart (see
+# README.md's "Known limitations": the default `start` command has no
+# supervision story at all — a crashed daemon, or a reboot with no active
+# Claude Code session, leaves memory capture silently dead until the next
+# SessionStart).
+#
+# This is optional. `start`/SessionStart's spawn-lock-guarded lazy launch
+# already works fine for normal use and coexists with this unit without
+# conflict: `start` checks whether the worker is already reachable before
+# spawning one, so having systemd keep it running just means that check
+# always finds one already there.
+#
+# Install (replace /path/to/claude-mem-go with your actual binary path —
+# `which claude-mem-go` or wherever you built it):
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/claude-mem-go-worker.service ~/.config/systemd/user/
+#   # edit the ExecStart line below to point at your real binary
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-mem-go-worker
+#   systemctl --user status claude-mem-go-worker
+#
+# Logs still go to ~/.claude-mem-go/worker.log (see README's "Observability"
+# section) — this unit doesn't change where the daemon logs to, only who
+# supervises the process.
+
+[Unit]
+Description=claude-mem-go worker daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-mem-go worker -model haiku -embed-model nomic-embed-text
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
