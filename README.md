@@ -463,6 +463,24 @@ fix is what's here: a daemon started once and left running (detached via
 `Setsid` so it survives its own launcher exiting too), with hooks doing
 nothing but a fire-and-forget local socket write.
 
+Both sides of that socket write are now bounded (`hook.MaxPayloadBytes`,
+8MB — matching the MCP server's own JSON-RPC line cap): `hook.Forward`
+rejects an oversized payload outright rather than sending it, and the
+worker daemon's own socket read enforces the identical bound as
+defense-in-depth. Without this, an abnormally large `tool_response` (a
+`Bash` command that cats a multi-gigabyte file, a `Read` of a huge log)
+had no upper bound at all — a real risk specifically because the worker
+is one long-lived process every project on the machine shares, so a
+single pathological tool call could balloon its memory for every other
+session using it too, and would otherwise get stringified verbatim into
+an observer prompt at a real per-token API cost. An oversized payload is
+rejected whole, not truncated — a truncated JSON hook payload is corrupt,
+not just short, so there's no safe partial-forward here. Verified against
+a real running (isolated, throwaway) daemon: sent an 8MB+100-byte payload
+over its actual socket, confirmed the daemon logged a rejection and
+stayed alive, then sent a normal-sized payload through the same daemon
+and confirmed it processed normally afterward.
+
 ## Quick start
 
 ```sh

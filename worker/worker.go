@@ -29,6 +29,7 @@ import (
 	"claude-mem-go/backend"
 	"claude-mem-go/classify"
 	"claude-mem-go/embed"
+	"claude-mem-go/hook"
 	"claude-mem-go/observer"
 	"claude-mem-go/pool"
 	"claude-mem-go/store"
@@ -188,9 +189,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 // client's exit cannot kill.
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	raw, err := io.ReadAll(bufio.NewReader(conn))
+	// hook.MaxPayloadBytes, not unbounded: hook.Forward already enforces
+	// this on the client side, but this daemon is the one long-lived
+	// process every project on the machine shares — a future or
+	// different client writing to this socket without going through
+	// Forward must not be able to balloon its memory with a single
+	// abnormally large payload. LimitReader+1 so the size check below can
+	// tell "exactly at the cap" apart from "over it" without needing to
+	// buffer more than one byte past the limit.
+	raw, err := io.ReadAll(io.LimitReader(bufio.NewReader(conn), hook.MaxPayloadBytes+1))
 	if err != nil {
 		d.Log.Printf("FAILED reading from client: %v", err)
+		return
+	}
+	if len(raw) > hook.MaxPayloadBytes {
+		d.Log.Printf("REJECTED payload exceeding %d bytes from a client (likely an abnormally large tool_response) — not processing", hook.MaxPayloadBytes)
 		return
 	}
 	go d.process(ctx, raw)

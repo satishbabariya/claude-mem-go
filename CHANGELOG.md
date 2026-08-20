@@ -62,6 +62,18 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **Hook payloads are now size-bounded** (`hook.MaxPayloadBytes`, 8MB,
+  matching the MCP server's own JSON-RPC line cap) on both ends of the
+  worker socket. Before this, an abnormally large `tool_response` (a
+  `Bash` command catting a multi-gigabyte file) had no upper bound at
+  all — a real risk specifically because the worker daemon is one
+  long-lived process every project on the machine shares, so a single
+  pathological tool call could balloon its memory for every other
+  session using it too. Rejected whole, not truncated (a truncated JSON
+  hook payload is corrupt, not just short). Verified against a real
+  running daemon: sent an oversized payload over its actual socket,
+  confirmed it logged a rejection and stayed alive, then confirmed a
+  normal-sized payload right after processed correctly.
 - **Skill docs re-synced with the actual tool surface** — `mem-search`
   still said "six tools" and never mentioned `get_observations` at all
   (added a whole iteration earlier and simply never back-filled into the

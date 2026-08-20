@@ -7,6 +7,7 @@
 package hook
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -15,6 +16,18 @@ import (
 // DialTimeout bounds how long Forward waits to reach the worker daemon.
 // Short on purpose: a hook process is meant to return almost instantly:
 const DialTimeout = 500 * time.Millisecond
+
+// MaxPayloadBytes bounds a single hook payload — this client's stdin read
+// (Forward) and the worker daemon's own socket read (handleConn) both
+// enforce it, so an abnormally large tool_response (a Bash command that
+// cats a multi-gigabyte file, a Read of a huge log) can't balloon memory
+// in the one long-lived daemon process every project on the machine
+// shares, and can't get stringified verbatim into an observer prompt at a
+// real per-token API cost. Matches mcpserver's own JSON-RPC line cap
+// (8MB) — no real observation this project has ever produced needs
+// anywhere near this much, so the cap only ever fires on the pathological
+// case it exists for.
+const MaxPayloadBytes = 8 * 1024 * 1024
 
 // Forward reads all of r (typically os.Stdin) and writes it to the worker
 // daemon's Unix socket at socketPath, then returns the byte count sent.
@@ -26,13 +39,19 @@ const DialTimeout = 500 * time.Millisecond
 // log or the database, not this return value.
 //
 // If the daemon isn't reachable (not started, wrong socket path, crashed),
-// Forward returns an error the caller should log, not surface as a Claude
-// Code-visible hook failure — a missing daemon must never block or fail
-// the tool call that triggered this hook.
+// or the payload exceeds MaxPayloadBytes, Forward returns an error the
+// caller should log, not surface as a Claude Code-visible hook failure —
+// a missing daemon, or one abnormally large tool call, must never block or
+// fail the tool call that triggered this hook. An oversized payload is
+// rejected outright rather than truncated: a truncated JSON hook payload
+// is corrupt, not just short, so there is no safe partial-forward here.
 func Forward(socketPath string, r io.Reader) (bytesSent int, err error) {
-	raw, err := io.ReadAll(r)
+	raw, err := io.ReadAll(io.LimitReader(r, MaxPayloadBytes+1))
 	if err != nil {
 		return 0, err
+	}
+	if len(raw) > MaxPayloadBytes {
+		return 0, fmt.Errorf("hook payload exceeds %d bytes, not forwarding (likely an abnormally large tool_response)", MaxPayloadBytes)
 	}
 
 	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
