@@ -50,6 +50,15 @@ docker compose up -d
 ./claude-mem-go ingest -db "postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
 ```
 
+  `sslmode=disable` above is for the local Docker Compose container only
+  (it's on `localhost`, nothing else can see that traffic). Every DSN
+  example in this repo uses it for the same reason — pgx's `stdlib` driver
+  already honors the standard libpq `sslmode` parameter, so no code change
+  is needed to use TLS, just don't copy `sslmode=disable` into a DSN that
+  crosses a real network: use `sslmode=require` (encrypted, no certificate
+  verification) or `sslmode=verify-full` (encrypted and verified,
+  recommended for anything production) against a real Postgres instance.
+
 - **Schema migrations** (`migrate/`) — a real, versioned schema-migration
   framework shared by both backends: a `schema_migrations` table records
   which numbered, idempotent migrations have run, so the next schema change
