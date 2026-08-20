@@ -30,6 +30,10 @@ than assumed correct.
   neither existed before.
 - **Worker observability** — activity counters (`worker-stats.json`)
   surfaced through `doctor`, where before there was only raw log text.
+  Also, optionally, a real Prometheus `/metrics` endpoint
+  (`-metrics-addr`) serving the same counters for a real monitoring
+  stack to scrape — opt-in, since it's the one thing about the worker
+  that listens on more than a Unix socket.
 - **`version` command** — build commit/time via Go's own VCS stamping.
 - **`doctor`** extended; **`mem-search`**, **`mem-doctor`**,
   **`mem-prune`**, and **`mem-export`** Claude Code skills added —

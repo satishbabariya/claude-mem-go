@@ -318,7 +318,15 @@ docker compose up -d
   just unit tests: restarted the worker with the instrumented binary, sent
   it a real `PostToolUse` payload over its actual Unix socket, and
   confirmed both the stats file and `doctor`'s output reflected the real
-  persisted observation.
+  persisted observation. The worker also optionally serves the same data
+  in Prometheus text exposition format — `-metrics-addr 127.0.0.1:9090`
+  (passed to `start` too, which forwards it to the worker it spawns)
+  starts an HTTP listener at `http://<addr>/metrics`; empty (the default)
+  disables it entirely, since this is the one thing about this daemon that
+  listens on more than a Unix socket. Verified against a real running
+  daemon: started one with `-metrics-addr` set, curled `/metrics` before
+  and after sending it a real event over its actual socket, and confirmed
+  `claude_mem_go_worker_processed_total` went from 0 to 1.
 - **Embedding retries once on a transient failure** — `classify`/`worker.go`
   already retry the main observer call once on a transient/rate-limit
   failure, but `embed.Client.Embed` had no equivalent: a single network

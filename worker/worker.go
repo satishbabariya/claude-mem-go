@@ -19,6 +19,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -57,6 +58,12 @@ type Daemon struct {
 	// a real daemon always wants it, so cmd's daemon construction sets it to
 	// DefaultStatsPath()).
 	StatsPath string
+	// MetricsAddr, when non-empty, serves d.Stats() in Prometheus text
+	// format at "<MetricsAddr>/metrics" — see metrics.go. Empty (the
+	// default) disables it entirely: this is the one thing about this
+	// daemon that listens on more than a Unix socket, so it's opt-in, not
+	// on by default.
+	MetricsAddr string
 
 	sessions *sessionCache
 	counters statsCounters
@@ -143,6 +150,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 	}()
+
+	if d.MetricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", MetricsHandler(d))
+		metricsSrv := &http.Server{Addr: d.MetricsAddr, Handler: mux}
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				d.Log.Printf("FAILED serving metrics on %s: %v", d.MetricsAddr, err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = metricsSrv.Shutdown(shutdownCtx)
+		}()
+		d.Log.Printf("worker metrics listening on http://%s/metrics", d.MetricsAddr)
+	}
 
 	d.Log.Printf("worker daemon up, pid=%d, listening on %s, max_concurrent=%d",
 		os.Getpid(), d.SocketPath, d.MaxConcurrent)

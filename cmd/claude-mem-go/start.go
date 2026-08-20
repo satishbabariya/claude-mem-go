@@ -21,6 +21,7 @@ func cmdStart(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
+	metricsAddr := fs.String("metrics-addr", "", "if set, the spawned worker serves Prometheus metrics at http://<addr>/metrics")
 	fs.Parse(args)
 
 	l := openLog("start.log")
@@ -58,6 +59,9 @@ func cmdStart(args []string) int {
 		"-db", *dbPath,
 		"-socket", *socketPath,
 		"-max-concurrent", strconv.Itoa(*maxConcurrent),
+	}
+	if *metricsAddr != "" {
+		workerArgs = append(workerArgs, "-metrics-addr", *metricsAddr)
 	}
 	if err := worker.SpawnDetached(self, workerArgs); err != nil {
 		l.Printf("FAILED to spawn worker: %v", err)

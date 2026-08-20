@@ -18,6 +18,7 @@ func cmdWorker(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket to listen on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
+	metricsAddr := fs.String("metrics-addr", "", "if set, serve Prometheus metrics at http://<addr>/metrics (e.g. 127.0.0.1:9090); empty disables it")
 	fs.Parse(args)
 
 	d := &worker.Daemon{
@@ -28,6 +29,7 @@ func cmdWorker(args []string) int {
 		MaxConcurrent: *maxConcurrent,
 		Log:           openLog("worker.log"),
 		StatsPath:     worker.DefaultStatsPath(),
+		MetricsAddr:   *metricsAddr,
 	}
 
 	// Graceful shutdown: SIGTERM/SIGINT cancel the context Run() watches,

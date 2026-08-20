@@ -33,6 +33,8 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/claude-mem-go worker -model haiku -embed-model nomic-embed-text
+# Add -metrics-addr 127.0.0.1:9090 to the line above to serve Prometheus
+# metrics at http://127.0.0.1:9090/metrics — opt-in, off by default.
 Restart=on-failure
 RestartSec=5
 

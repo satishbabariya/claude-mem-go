@@ -38,6 +38,8 @@
 		<string>haiku</string>
 		<string>-embed-model</string>
 		<string>nomic-embed-text</string>
+		<!-- Add <string>-metrics-addr</string><string>127.0.0.1:9090</string>
+		     here to serve Prometheus metrics — opt-in, off by default. -->
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
