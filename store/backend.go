@@ -54,6 +54,13 @@ type Backend interface {
 	// actually happened, not when they were re-imported. Also what makes
 	// export+import double as the SQLite<->Postgres migration path.
 	ImportRow(row ExportRow) (InsertResult, error)
+	// HealthDetails returns backend-specific operational facts `doctor`
+	// prints — details generic to this interface can't surface, because
+	// they're about how each backend actually runs (SQLite's PRAGMA
+	// settings; Postgres's connection pool utilization, pgvector
+	// extension version, and whether its HNSW index still exists), not
+	// what it stores.
+	HealthDetails() (map[string]string, error)
 	Close() error
 }
 

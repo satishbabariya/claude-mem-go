@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"runtime/debug"
+	"sort"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
@@ -70,6 +71,24 @@ func cmdDoctor(args []string) int {
 			critical = false
 		} else {
 			fmt.Printf("✔ database reachable (%s)\n", redactedDBPath)
+		}
+		// Informational only, never critical on its own — a detail like
+		// hnsw_index_exists=false is a real problem worth surfacing, but
+		// it's a degraded-performance signal, not "nothing works."
+		if details, herr := st.HealthDetails(); herr == nil {
+			keys := make([]string, 0, len(details))
+			for k := range details {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			fmt.Print("  ")
+			for i, k := range keys {
+				if i > 0 {
+					fmt.Print(" ")
+				}
+				fmt.Printf("%s=%s", k, details[k])
+			}
+			fmt.Println()
 		}
 		st.Close()
 	}

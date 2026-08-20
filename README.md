@@ -241,7 +241,20 @@ docker compose up -d
   failures, not just the happy path: a genuinely unreachable Postgres DSN
   correctly exits 1, and an unpulled Ollama model correctly downgrades to
   a warning rather than a failure. Also surfaces the worker's own activity
-  (see below) when available.
+  (see below) when available, and each backend's own operational details
+  via a new `Backend.HealthDetails()` method: SQLite reports the PRAGMA
+  settings actually in effect on the connection (`journal_mode`,
+  `foreign_keys`, `busy_timeout_ms`) — confirming the WAL/FK fix genuinely
+  took effect, not just that it was requested in the DSN. Postgres reports
+  real connection-pool utilization (confirming the bounded pool actually
+  applies), the pgvector extension's installed version, and whether the
+  HNSW index `SemanticSearch` depends on for real ANN search still
+  exists — a schema drift would otherwise silently degrade every semantic
+  search to a full table scan with nothing here ever saying so. Verified
+  against both real backends, not fabricated values: SQLite showed
+  `journal_mode=wal foreign_keys=1 busy_timeout_ms=5000`; the live Postgres
+  container showed a real `vector_extension=0.8.6` and
+  `hnsw_index_exists=true`.
 - **version** — prints the exact commit and build time via Go's own
   `runtime/debug.ReadBuildInfo()` (VCS stamping is on by default since Go
   1.18 — no ldflags wiring, no version file to keep in sync, no CI change

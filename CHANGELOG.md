@@ -35,6 +35,11 @@ than assumed correct.
   stack to scrape — opt-in, since it's the one thing about the worker
   that listens on more than a Unix socket.
 - **`version` command** — build commit/time via Go's own VCS stamping.
+- **`Backend.HealthDetails()`** — backend-specific facts `doctor` now
+  prints: SQLite's real PRAGMA settings at runtime (confirming the
+  WAL/foreign-keys fix actually took effect); Postgres's real connection
+  pool utilization, pgvector extension version, and whether the HNSW
+  index real ANN search depends on still exists.
 - **`doctor`** extended; **`mem-search`**, **`mem-doctor`**,
   **`mem-prune`**, and **`mem-export`** Claude Code skills added —
   `mem-prune`'s instructions treat `prune` as the one genuinely
