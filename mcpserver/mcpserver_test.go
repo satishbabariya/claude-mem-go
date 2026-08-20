@@ -114,6 +114,15 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	if !found["semantic_search_observations"] {
 		t.Errorf("tools/list missing semantic_search_observations, got %v", names)
 	}
+	if !found["recent_observations"] {
+		t.Errorf("tools/list missing recent_observations, got %v", names)
+	}
+	if !found["session_observations"] {
+		t.Errorf("tools/list missing session_observations, got %v", names)
+	}
+	if !found["file_observations"] {
+		t.Errorf("tools/list missing file_observations, got %v", names)
+	}
 }
 
 func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
@@ -247,6 +256,178 @@ func TestSearchObservationsScopesToServerProject(t *testing.T) {
 	text2 := resp2[0]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	if !strings.Contains(text2, "project-a") || !strings.Contains(text2, "project-b") {
 		t.Fatalf("all_projects:true should see both projects, got: %q", text2)
+	}
+}
+
+// toolCallText extracts the single text content block from a tools/call
+// JSON-RPC response — the shape every one of this server's tool handlers
+// returns on success.
+func toolCallText(t *testing.T, resp map[string]any) string {
+	t.Helper()
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no result: %v", resp)
+	}
+	if isErr, _ := result["isError"].(bool); isErr {
+		t.Fatalf("tool call reported isError: %v", result)
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("got %d content blocks, want 1: %v", len(content), result)
+	}
+	return content[0].(map[string]any)["text"].(string)
+}
+
+func toolCallIsError(t *testing.T, resp map[string]any) bool {
+	t.Helper()
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no result: %v", resp)
+	}
+	isErr, _ := result["isError"].(bool)
+	return isErr
+}
+
+// TestToolsCallRecentObservationsScopesToServerProjectOrOverride locks in
+// both recent_observations behaviors: it uses the server's current project
+// by default (the same "recent" read path SessionStart's context injection
+// already relies on, now reachable on demand), and an explicit "project"
+// argument overrides that.
+func TestToolsCallRecentObservationsScopesToServerProjectOrOverride(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
+		t.Fatalf("seed proj-a: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
+		store.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
+		t.Fatalf("seed proj-b: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "project A") || strings.Contains(text, "project B") {
+		t.Fatalf("recent_observations defaulted to the server project incorrectly: %q", text)
+	}
+
+	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{"project":"proj-b"}}}`,
+	})
+	text2 := toolCallText(t, resp2[0])
+	if !strings.Contains(text2, "project B") || strings.Contains(text2, "project A") {
+		t.Fatalf("recent_observations with an explicit project override did not switch projects: %q", text2)
+	}
+}
+
+// TestToolsCallRecentObservationsWithNoProjectIsAnError confirms the
+// failure mode is a clear tool error, not a silent empty result that
+// looks identical to "this project has no observations yet."
+func TestToolsCallRecentObservationsWithNoProjectIsAnError(t *testing.T) {
+	s, _ := newTestServer(t) // Project left unset
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("recent_observations with no server project and no override: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallSessionObservationsReturnsOnlyThatSessionInOrder is the MCP
+// surface for the exact read path the Stop hook's session summary uses
+// (BySessionID) — oldest first, and scoped to one session, not a project.
+func TestToolsCallSessionObservationsReturnsOnlyThatSessionInOrder(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := st.Insert("session-x", "proj", "Bash", store.ContentHash("session-x", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "first thing in session x"}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.Insert("session-x", "proj", "Bash", store.ContentHash("session-x", "Bash", "b", "2"),
+		store.Observation{Type: "discovery", Title: "second thing in session x"}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.Insert("session-y", "proj", "Bash", store.ContentHash("session-y", "Bash", "c", "3"),
+		store.Observation{Type: "discovery", Title: "something in session y"}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_observations","arguments":{"session_id":"session-x"}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if strings.Contains(text, "session y") {
+		t.Fatalf("session_observations for session-x leaked a session-y row: %q", text)
+	}
+	firstIdx := strings.Index(text, "first thing")
+	secondIdx := strings.Index(text, "second thing")
+	if firstIdx == -1 || secondIdx == -1 || firstIdx > secondIdx {
+		t.Fatalf("session_observations not oldest-first: %q", text)
+	}
+}
+
+func TestToolsCallSessionObservationsWithNoSessionIDIsAnError(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_observations","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("session_observations with no session_id: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallFileObservationsFindsMentionsScopedToProject is the on-
+// demand MCP surface for the same lookup the PreToolUse file-context hook
+// already runs automatically (ObservationsForFile) — exact match, scoped
+// to a project, with the same server-project-or-override rule as
+// recent_observations.
+func TestToolsCallFileObservationsFindsMentionsScopedToProject(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-a", "Read", store.ContentHash("s1", "Read", "a", "1"),
+		store.Observation{Type: "discovery", Title: "read main.go in A", FilesRead: []string{"main.go"}}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-b", "Read", store.ContentHash("s1", "Read", "b", "2"),
+		store.Observation{Type: "discovery", Title: "read main.go in B", FilesRead: []string{"main.go"}}, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_observations","arguments":{"file_path":"main.go"}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "in A") || strings.Contains(text, "in B") {
+		t.Fatalf("file_observations did not scope to the server project: %q", text)
+	}
+}
+
+func TestToolsCallFileObservationsWithNoFilePathIsAnError(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_observations","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("file_observations with no file_path: want isError=true, got %v", resp[0])
 	}
 }
 

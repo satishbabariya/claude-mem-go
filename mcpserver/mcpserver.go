@@ -93,6 +93,46 @@ func tools() []toolDef {
 				"required": []string{"query"},
 			},
 		},
+		{
+			Name: "recent_observations",
+			Description: "The most recent observations for the current project, newest first — " +
+				"what happened lately, without a search query. Same read path SessionStart's automatic " +
+				"context injection uses.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit":   map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"project": map[string]any{"type": "string", "description": "Look at a different project instead of the current one"},
+				},
+			},
+		},
+		{
+			Name:        "session_observations",
+			Description: "Every observation recorded for one Claude Code session, oldest first — what actually happened during that session, in order.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{"type": "string", "description": "The session_id to look up"},
+					"limit":      map[string]any{"type": "integer", "description": "Max results (default 10)"},
+				},
+				"required": []string{"session_id"},
+			},
+		},
+		{
+			Name: "file_observations",
+			Description: "Prior observations that mention a specific file (read or modified) in the current " +
+				"project — the same lookup the PreToolUse file-context hook runs automatically before a Read, " +
+				"available on demand for any file, not just the one about to be read.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Path as it appears in files_read/files_modified (exact match, not a substring)"},
+					"limit":     map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"project":   map[string]any{"type": "string", "description": "Look at a different project instead of the current one"},
+				},
+				"required": []string{"file_path"},
+			},
+		},
 	}
 }
 
@@ -212,6 +252,9 @@ type toolCallParams struct {
 		Query       string `json:"query"`
 		Limit       int    `json:"limit"`
 		AllProjects bool   `json:"all_projects"`
+		Project     string `json:"project"`    // recent_observations, file_observations: override the current project
+		SessionID   string `json:"session_id"` // session_observations
+		FilePath    string `json:"file_path"`  // file_observations
 	} `json:"arguments"`
 }
 
@@ -238,12 +281,29 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		project = ""
 	}
 
+	// recent_observations and file_observations take their own optional
+	// "project" argument (a different project on purpose), separate from
+	// search's "all_projects" escape hatch (every project at once) — the
+	// two tools have different shapes of override because "all recent
+	// observations across every project, unscoped" isn't a coherent
+	// request the way "search everything" is.
+	scopedProject := s.Project
+	if params.Arguments.Project != "" {
+		scopedProject = params.Arguments.Project
+	}
+
 	var result toolCallResult
 	switch params.Name {
 	case "search_observations":
 		result = s.runSearch(project, params.Arguments.Query, limit)
 	case "semantic_search_observations":
 		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
+	case "recent_observations":
+		result = s.runRecent(scopedProject, limit)
+	case "session_observations":
+		result = s.runSession(params.Arguments.SessionID, limit)
+	case "file_observations":
+		result = s.runFile(scopedProject, params.Arguments.FilePath, limit)
 	default:
 		return s.errorReply(req, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -254,6 +314,50 @@ func (s *Server) runSearch(project, query string, limit int) toolCallResult {
 	results, err := s.st.Search(project, query, limit)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+// runRecent, runSession, and runFile all reuse RecentByProject/BySessionID/
+// ObservationsForFile — the exact same Backend methods SessionStart's
+// context injection, the Stop hook's session summary, and the PreToolUse
+// file-context hook already rely on. They needed no new store code, only
+// an MCP surface: the same recall these hooks push automatically was not
+// previously reachable on demand.
+func (s *Server) runRecent(project string, limit int) toolCallResult {
+	if project == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+	results, err := s.st.RecentByProject(project, limit)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "recent_observations failed: " + err.Error()}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+func (s *Server) runSession(sessionID string, limit int) toolCallResult {
+	if sessionID == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_observations requires a \"session_id\" argument"}}}
+	}
+	results, err := s.st.BySessionID(sessionID, limit)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_observations failed: " + err.Error()}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+func (s *Server) runFile(project, filePath string, limit int) toolCallResult {
+	if project == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+	if filePath == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations requires a \"file_path\" argument"}}}
+	}
+	results, err := s.st.ObservationsForFile(project, filePath, limit)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations failed: " + err.Error()}}}
 	}
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
 }

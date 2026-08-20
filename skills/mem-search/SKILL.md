@@ -19,12 +19,31 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Two tools, two different jobs
+## Five tools, two kinds of job
 
-claude-mem-go exposes exactly two MCP tools — simpler than a multi-step
+claude-mem-go exposes five MCP tools — simpler than a multi-step
 index/timeline/fetch pipeline, because this project's schema doesn't carry
 the token-cost concerns that pipeline exists to manage (no separate raw-vs-
-compressed representations to fetch in stages).
+compressed representations to fetch in stages). Two are search (below);
+three are direct lookups when you already know what you want and don't
+need to search for it:
+
+- `recent_observations(limit?, project?)` — the current project's most
+  recent observations, newest first. The same read path `SessionStart`'s
+  automatic context injection already uses, reachable on demand (e.g. for
+  a project other than the current one, via `project`).
+- `session_observations(session_id, limit?)` — every observation from one
+  Claude Code session, oldest first. Use when the user asks "what did we
+  do in that session" and you have (or can find) the session_id.
+- `file_observations(file_path, limit?, project?)` — prior observations
+  that mention a specific file being read or modified. The same lookup the
+  `PreToolUse` hook already runs automatically right before a `Read`, on
+  demand for any file, not just the one about to be read.
+
+Reach for these THREE first when the question doesn't need a query at
+all — "what's recent," "what happened last session," "what do we know
+about this file" don't benefit from full-text or semantic matching, they
+just need the right rows.
 
 ### `search_observations` — exact terms
 
@@ -80,4 +99,19 @@ search_observations(query="rate limiting")      -> no results
 semantic_search_observations(query="rate limiting")  -> may still find
   an observation titled "Added request throttling" even with zero
   shared keywords
+```
+
+**"What have we been doing lately" — no query needed:**
+```
+recent_observations(limit=10)
+```
+
+**"What did we do in that other session" — a direct lookup, not a search:**
+```
+session_observations(session_id="<the session_id>")
+```
+
+**"What do we already know about this file" — before or instead of reading it:**
+```
+file_observations(file_path="src/auth/middleware.go")
 ```
