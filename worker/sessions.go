@@ -140,3 +140,9 @@ func (c *sessionCache) size() int {
 	defer c.mu.Unlock()
 	return len(c.byID)
 }
+
+// poolInFlight and poolCapacity expose the underlying pool's utilization —
+// part of the worker's observability surface (see Daemon.Stats), not used
+// for any control-flow decision here.
+func (c *sessionCache) poolInFlight() int { return c.pool.InFlight() }
+func (c *sessionCache) poolCapacity() int { return c.pool.Capacity() }

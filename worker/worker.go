@@ -51,8 +51,36 @@ type Daemon struct {
 	SocketPath    string
 	MaxConcurrent int // mirrors CLAUDE_MEM_MAX_CONCURRENT_AGENTS's default of 2
 	Log           *log.Logger
+	// StatsPath is where Stats snapshots are written after every processed
+	// event — see stats.go. Empty disables writing (tests mostly want this;
+	// a real daemon always wants it, so cmd's daemon construction sets it to
+	// DefaultStatsPath()).
+	StatsPath string
 
 	sessions *sessionCache
+	counters statsCounters
+}
+
+// Stats returns a snapshot of the daemon's current activity and
+// concurrency utilization — see stats.go's Stats type. Safe to call
+// concurrently with Run/process.
+func (d *Daemon) Stats() Stats {
+	cachedSessions, poolInFlight, poolCapacity := 0, 0, 0
+	if d.sessions != nil {
+		cachedSessions = d.sessions.size()
+		poolInFlight = d.sessions.poolInFlight()
+		poolCapacity = d.sessions.poolCapacity()
+	}
+	return d.counters.snapshot(cachedSessions, poolInFlight, poolCapacity)
+}
+
+func (d *Daemon) recordStats() {
+	if d.StatsPath == "" {
+		return
+	}
+	if err := writeStatsFile(d.StatsPath, d.Stats()); err != nil {
+		d.Log.Printf("FAILED writing stats file %s: %v", d.StatsPath, err)
+	}
 }
 
 // Run binds the socket and accepts connections until the listener errors
@@ -135,11 +163,15 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		d.Log.Printf("skip: no tool_name (hook_event_name=%s)", in.Event)
 		return
 	}
+	// Stats are written once after every genuine work attempt below — not
+	// for the two early-return cases above, which counted nothing.
+	defer d.recordStats()
 
 	queueStart := time.Now()
 	entry, err := d.sessions.getOrCreate(ctx, in.SessionID)
 	if err != nil {
 		d.Log.Printf("FAILED to get/create observer session for %s: %v", in.SessionID, err)
+		d.counters.observerErrors.Add(1)
 		return
 	}
 	queued := time.Since(queueStart)
@@ -181,6 +213,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		}
 		if turnErr != nil {
 			d.Log.Printf("FAILED observer turn: %v", turnErr)
+			d.counters.observerErrors.Add(1)
 			return
 		}
 	}
@@ -188,6 +221,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	st, err := backend.Open(ctx, d.DBPath, 0)
 	if err != nil {
 		d.Log.Printf("FAILED opening store at %s: %v", d.DBPath, err)
+		d.counters.insertErrors.Add(1)
 		return
 	}
 	defer st.Close()
@@ -200,6 +234,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	res, err := st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
 		d.Log.Printf("FAILED sqlite insert: %v", err)
+		d.counters.insertErrors.Add(1)
 		return
 	}
 	if !res.Inserted {
@@ -207,9 +242,12 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		// same event (documented as at-least-once delivery), and re-ingesting
 		// an already-processed transcript should be a no-op, not a duplicate.
 		d.Log.Printf("duplicate observation (same tool call already persisted as id=%d), skipped", res.ID)
+		d.counters.duplicates.Add(1)
 		return
 	}
 	d.Log.Printf("persisted observations.id=%d title=%q cost=$%.4f", res.ID, turn.Observation.Title, turn.Result.CostUSD)
+	d.counters.processed.Add(1)
+	d.counters.touch()
 
 	if d.EmbedModel == "" {
 		return
@@ -222,9 +260,11 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		// works without it. A missing/unreachable Ollama must not undo a
 		// successful observation.
 		d.Log.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
+		d.counters.embedErrors.Add(1)
 		return
 	}
 	if err := st.SaveEmbedding(res.ID, vec); err != nil {
 		d.Log.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
+		d.counters.embedErrors.Add(1)
 	}
 }

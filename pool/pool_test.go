@@ -68,3 +68,31 @@ func TestReleaseFreesASlot(t *testing.T) {
 		t.Fatal("Acquire did not return after the only slot was released — Release did not free it")
 	}
 }
+
+func TestInFlightAndCapacityReflectRealState(t *testing.T) {
+	p := New(2)
+	if got := p.Capacity(); got != 2 {
+		t.Fatalf("Capacity() = %d, want 2", got)
+	}
+	if got := p.InFlight(); got != 0 {
+		t.Fatalf("InFlight() on a fresh pool = %d, want 0", got)
+	}
+
+	p.Acquire()
+	if got := p.InFlight(); got != 1 {
+		t.Fatalf("InFlight() after one Acquire = %d, want 1", got)
+	}
+	p.Acquire()
+	if got := p.InFlight(); got != 2 {
+		t.Fatalf("InFlight() after two Acquires = %d, want 2", got)
+	}
+
+	p.Release()
+	if got := p.InFlight(); got != 1 {
+		t.Fatalf("InFlight() after one Release = %d, want 1", got)
+	}
+	p.Release()
+	if got := p.InFlight(); got != 0 {
+		t.Fatalf("InFlight() after both Released = %d, want 0", got)
+	}
+}

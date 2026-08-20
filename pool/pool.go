@@ -25,3 +25,15 @@ func (p *Pool) Acquire() { p.sem <- struct{}{} }
 // Release frees a slot acquired with Acquire. Callers should always
 // `defer p.Release()` right after a successful Acquire.
 func (p *Pool) Release() { <-p.sem }
+
+// InFlight reports how many slots are currently held — the pool's only
+// piece of runtime introspection, added so a caller (the worker daemon's
+// stats snapshot) can report concurrency utilization instead of it being
+// entirely opaque from outside. Safe to call concurrently with
+// Acquire/Release: len() on a channel is a supported concurrent read, and
+// this is a point-in-time snapshot, not a value anything should
+// synchronize on.
+func (p *Pool) InFlight() int { return len(p.sem) }
+
+// Capacity is the maxConcurrent this Pool was created with.
+func (p *Pool) Capacity() int { return cap(p.sem) }

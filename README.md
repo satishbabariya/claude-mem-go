@@ -142,7 +142,19 @@ docker compose up -d
   lazily; no Ollama just means no semantic search). Verified against real
   failures, not just the happy path: a genuinely unreachable Postgres DSN
   correctly exits 1, and an unpulled Ollama model correctly downgrades to
-  a warning rather than a failure.
+  a warning rather than a failure. Also surfaces the worker's own activity
+  (see below) when available.
+- **Observability** — the worker daemon's only introspection used to be
+  raw log lines (`worker.log`, and the per-hook logs). It now also writes
+  a small `~/.claude-mem-go/worker-stats.json` snapshot after every
+  processed event: counts of observations persisted / deduped / failed at
+  each stage (observer, insert, embedding), plus live pool utilization
+  (`pool.InFlight()`/`Capacity()`) and cached-session count. `doctor` reads
+  and prints it when present. Verified against a real running daemon, not
+  just unit tests: restarted the worker with the instrumented binary, sent
+  it a real `PostToolUse` payload over its actual Unix socket, and
+  confirmed both the stats file and `doctor`'s output reflected the real
+  persisted observation.
 
 ## Installing as a Claude Code plugin
 

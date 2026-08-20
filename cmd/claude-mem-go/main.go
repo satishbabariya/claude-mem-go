@@ -108,6 +108,7 @@ func cmdWorker(args []string) int {
 		SocketPath:    *socketPath,
 		MaxConcurrent: *maxConcurrent,
 		Log:           openLog("worker.log"),
+		StatsPath:     worker.DefaultStatsPath(),
 	}
 
 	// Graceful shutdown: SIGTERM/SIGINT cancel the context Run() watches,
@@ -621,6 +622,19 @@ func cmdDoctor(args []string) int {
 		fmt.Printf("✔ worker daemon reachable at %s\n", *socketPath)
 	} else {
 		fmt.Printf("… worker daemon not running at %s (not necessarily a problem — `start` launches it lazily from SessionStart)\n", *socketPath)
+	}
+
+	// Informational only, never critical: a missing stats file just means
+	// the worker hasn't processed anything yet (or predates this feature),
+	// not that anything is broken.
+	if stats, err := worker.ReadStatsFile(worker.DefaultStatsPath()); err == nil {
+		fmt.Printf("… worker activity: processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d",
+			stats.Processed, stats.Duplicates, stats.ObserverErrors, stats.InsertErrors, stats.EmbedErrors,
+			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions)
+		if stats.LastActivityAt != "" {
+			fmt.Printf(" last_activity=%s", stats.LastActivityAt)
+		}
+		fmt.Println()
 	}
 
 	if st, err := backend.Open(context.Background(), *dbPath, 0); err != nil {
