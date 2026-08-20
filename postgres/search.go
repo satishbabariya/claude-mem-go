@@ -153,10 +153,18 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, 
 // native Go []int64 arg is pgx's own array support (see pgx/v5's stdlib
 // driver docs) — no hand-built placeholder list needed, unlike SQLite's
 // `IN (?,?,...)` (database/sql gives SQLite no equivalent to bind a whole
-// slice as one placeholder).
+// slice as one placeholder), so this backend doesn't actually hit the same
+// "too many SQL variables" failure SQLite's ByIDs does — but the same
+// store.MaxIDsPerLookup bound applies anyway, for parity: a caller
+// shouldn't see a different effective limit depending on which backend
+// happens to be active, and no legitimate caller needs more than a page of
+// IDs from a single detail lookup regardless of backend.
 func (s *Store) ByIDs(ids []int64) ([]store.SearchResult, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if len(ids) > store.MaxIDsPerLookup {
+		return nil, fmt.Errorf("ByIDs: %d ids exceeds the %d-id limit per call", len(ids), store.MaxIDsPerLookup)
 	}
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,

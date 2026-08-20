@@ -172,6 +172,24 @@ func TestPostgresByIDsFetchesExactRowsAndOmitsUnknownIDs(t *testing.T) {
 	}
 }
 
+// TestPostgresByIDsRejectsTooManyIDs confirms this backend enforces the
+// identical store.MaxIDsPerLookup bound the SQLite backend needs for a
+// real driver limitation — this backend's `= ANY($1)` has no such
+// limitation itself, but the bound still applies here for parity: a
+// caller shouldn't see a different effective limit depending on which
+// backend happens to be active.
+func TestPostgresByIDsRejectsTooManyIDs(t *testing.T) {
+	st := openTestStore(t)
+
+	tooMany := make([]int64, store.MaxIDsPerLookup+1)
+	for i := range tooMany {
+		tooMany[i] = int64(i + 1)
+	}
+	if _, err := st.ByIDs(tooMany); err == nil {
+		t.Fatalf("ByIDs with %d ids (limit is %d): want an error, got nil", len(tooMany), store.MaxIDsPerLookup)
+	}
+}
+
 func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)

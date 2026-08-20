@@ -111,3 +111,34 @@ func TestByIDsWithEmptySliceReturnsNoRowsNoError(t *testing.T) {
 		t.Fatalf("ByIDs(nil) returned %d results, want 0", len(results))
 	}
 }
+
+// TestByIDsRejectsTooManyIDs is the regression test for a real bug found
+// against this project's own SQLite driver (modernc.org/sqlite), not
+// anticipated in advance: before MaxIDsPerLookup existed, a large enough
+// ids slice failed with a raw driver error ("SQL logic error: too many SQL
+// variables") instead of a clean, bounded response — the hand-built
+// IN (?,?,...) placeholder list has no cap of its own. Confirmed
+// empirically that 100,000 IDs triggers it; this test uses a slice just
+// over MaxIDsPerLookup itself so it stays fast and doesn't depend on
+// exactly where the driver's own real limit sits.
+func TestByIDsRejectsTooManyIDs(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	tooMany := make([]int64, MaxIDsPerLookup+1)
+	for i := range tooMany {
+		tooMany[i] = int64(i + 1)
+	}
+	if _, err := st.ByIDs(tooMany); err == nil {
+		t.Fatalf("ByIDs with %d ids (limit is %d): want an error, got nil", len(tooMany), MaxIDsPerLookup)
+	}
+
+	exactly := tooMany[:MaxIDsPerLookup]
+	if _, err := st.ByIDs(exactly); err != nil {
+		t.Errorf("ByIDs with exactly %d ids (at the limit): want success, got %v", len(exactly), err)
+	}
+}

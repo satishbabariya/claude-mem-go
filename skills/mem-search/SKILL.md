@@ -65,7 +65,10 @@ get_observations(ids=[42])
 Unknown IDs are silently omitted rather than erroring, and it's scoped to
 the current project the same way `search_observations` is — pass
 `all_projects: true` if the ID genuinely came from a different project's
-search.
+search. Capped at 100 IDs per call (the same "max 100" convention every
+other tool's `limit` uses) — this is a detail lookup for results a search
+already returned, not a bulk export; call it again in batches if there
+are genuinely more than 100 IDs worth reading.
 
 ### `search_observations` — exact terms
 

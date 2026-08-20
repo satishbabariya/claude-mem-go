@@ -500,6 +500,39 @@ func TestToolsCallGetObservationsRequiresNonEmptyIDs(t *testing.T) {
 	}
 }
 
+// TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError is the
+// real-driver-limit regression test at the MCP protocol boundary: a
+// caller sending more IDs than store.MaxIDsPerLookup must get back a
+// normal JSON-RPC tool-error result (isError=true, a readable message),
+// not a raw SQL driver error leaking through or the server crashing —
+// confirmed against the real store.Store.ByIDs error path, not a mock.
+func TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	ids := make([]string, store.MaxIDsPerLookup+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%d", i+1)
+	}
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_observations","arguments":{"ids":[%s]}}}`, strings.Join(ids, ","))
+
+	resp := runLines(t, s, []string{req})
+	if len(resp) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resp))
+	}
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("get_observations with %d ids (limit %d): want isError=true, got %v", len(ids), store.MaxIDsPerLookup, resp[0])
+	}
+	// Not toolCallText — that helper asserts isError is false, since every
+	// other caller uses it only on the success path. Read the error
+	// content directly instead.
+	result := resp[0]["result"].(map[string]any)
+	content := result["content"].([]any)[0].(map[string]any)
+	text := content["text"].(string)
+	if !strings.Contains(text, "exceeds") {
+		t.Errorf("error text = %q, want it to mention the limit being exceeded, not a raw driver error", text)
+	}
+}
+
 // TestToolsCallAddObservationPersistsAndIsFindable is add_observation's
 // core contract: the write actually lands, scoped to the server's current
 // project, and is findable through the existing read tools afterward —

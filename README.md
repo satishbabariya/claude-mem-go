@@ -247,6 +247,16 @@ docker compose up -d
   `Search`/`SemanticSearch` earlier. Verified end to end against a real
   `claude` CLI session (a live MCP tool call, not just a unit test) that
   fetched a seeded observation's full narrative/facts/concepts by ID.
+  `ByIDs` is also capped at `store.MaxIDsPerLookup` (100) per call, found
+  the hard way rather than anticipated: a real test against this project's
+  own SQLite driver showed 100,000 IDs failing outright with a raw
+  "too many SQL variables" driver error, since the hand-built
+  `IN (?,?,...)` placeholder list has no cap of its own. Enforced in both
+  backends (Postgres's `= ANY($1)` doesn't hit the same driver limit, but
+  gets the identical bound anyway, for parity), and confirmed at the MCP
+  protocol boundary that an oversized request comes back as a clean
+  `isError` tool result mentioning the limit, not a raw driver error
+  leaking through.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate

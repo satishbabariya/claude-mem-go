@@ -62,6 +62,15 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`get_observations`/`Backend.ByIDs` capped at 100 IDs per call**
+  (`store.MaxIDsPerLookup`). Found the hard way: a real test against this
+  project's own SQLite driver showed 100,000 IDs failing outright with a
+  raw "too many SQL variables" error, since the hand-built
+  `IN (?,?,...)` placeholder list has no cap of its own. Enforced in both
+  backends for parity (Postgres's `= ANY($1)` doesn't hit the same limit,
+  but gets the identical bound anyway), and confirmed at the MCP protocol
+  boundary that an oversized request comes back as a clean tool error
+  mentioning the limit, not a raw driver error.
 - **Hook payloads are now size-bounded** (`hook.MaxPayloadBytes`, 8MB,
   matching the MCP server's own JSON-RPC line cap) on both ends of the
   worker socket. Before this, an abnormally large `tool_response` (a

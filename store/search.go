@@ -323,6 +323,20 @@ func parseJSONArray(raw string) []string {
 	return out
 }
 
+// MaxIDsPerLookup bounds a single ByIDs call, enforced by both backends —
+// found the hard way, not anticipated: a real test against this project's
+// own SQLite driver (modernc.org/sqlite) showed 100,000 IDs failing
+// outright with "SQL logic error: too many SQL variables" once the
+// hand-built IN (?,?,...) placeholder list crossed the driver's real
+// limit, rather than degrading gracefully. Set well below where that
+// limit actually starts (confirmed empirically between 10,000 and
+// 100,000) and matching the "max 100" convention every other MCP tool's
+// own limit argument already uses (see mcpserver.go), since no legitimate
+// caller needs more than a page of IDs at once — this is a detail lookup
+// for results a search already returned, not a bulk export (see export/
+// import for that).
+const MaxIDsPerLookup = 100
+
 // ByIDs fetches specific observations by ID, in no particular guaranteed
 // order beyond what SQLite happens to return — callers that need a stable
 // order (e.g. "in the order I asked for them") should sort client-side.
@@ -338,6 +352,9 @@ func parseJSONArray(raw string) []string {
 func (s *Store) ByIDs(ids []int64) ([]SearchResult, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if len(ids) > MaxIDsPerLookup {
+		return nil, fmt.Errorf("ByIDs: %d ids exceeds the %d-id limit per call", len(ids), MaxIDsPerLookup)
 	}
 	placeholders := make([]string, len(ids))
 	args := make([]any, len(ids))
