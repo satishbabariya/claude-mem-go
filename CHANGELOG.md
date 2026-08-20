@@ -62,6 +62,18 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`Backend.Timeline` clamps `depthBefore`/`depthAfter` to
+  `[0, MaxTimelineDepth]` at the store layer**, not just in the MCP tool's
+  own caller. Found the hard way: a negative depth isn't "no results" —
+  SQLite's `LIMIT` treats a negative value as *unlimited*
+  (`Timeline(..., -1, -1)` returned every row before the anchor), and
+  Postgres fails differently for the identical root cause (a real "LIMIT
+  must not be negative" driver error) rather than silently returning
+  everything. The live `timeline` MCP tool was never actually reachable
+  through this (its caller already substitutes the default of 3 for any
+  `<=0` value before calling `Timeline`), so this is a defense-in-depth
+  fix for the `Backend.Timeline` method's own contract, verified against
+  both real backends with a dedicated regression test.
 - **`reembed`** — the remediation half of `doctor`'s
   `embedding_dims_consistent` finding: finds every observation with no
   embedding or a stale dimension and re-embeds it with the current model

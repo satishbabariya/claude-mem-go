@@ -64,3 +64,25 @@ func TestPostgresTimelineRejectsAnchorFromADifferentProject(t *testing.T) {
 		t.Fatal("Timeline with an anchor from a different project: want an error, got nil — a real cross-project leak otherwise")
 	}
 }
+
+// TestPostgresTimelineNegativeDepthDoesNotError confirms the clamp here
+// too: unlike SQLite (where a negative LIMIT silently means "unlimited"),
+// Postgres's own LIMIT rejects a negative value outright with "LIMIT must
+// not be negative" (confirmed against the live container) — a naive
+// passthrough would surface that raw driver error to whatever called
+// Timeline instead of just returning the anchor alone.
+func TestPostgresTimelineNegativeDepthDoesNotError(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	ids := seedSequence(t, st, project, 5)
+	anchor := ids[2]
+
+	results, err := st.Timeline(project, anchor, -1, -1)
+	if err != nil {
+		t.Fatalf("Timeline with negative depths: want a clean clamp, got an error: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != anchor {
+		t.Fatalf("Timeline(depthBefore=-1, depthAfter=-1) = %+v, want exactly the anchor alone", results)
+	}
+}

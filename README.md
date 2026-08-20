@@ -280,6 +280,21 @@ docker compose up -d
   paths: seeded a real chronological sequence, asked for context around
   one specific item, and got back exactly its true neighbors with the
   anchor correctly marked.
+  `Backend.Timeline` also now clamps `depthBefore`/`depthAfter` to
+  `[0, MaxTimelineDepth]` at the store layer itself, not just in
+  `mcpserver.go`'s own caller — found the hard way that a negative depth
+  isn't just "no results": SQLite's `LIMIT` treats a negative value as
+  *unlimited*, so `Timeline(..., -1, -1)` returned every row before the
+  anchor instead of zero. Postgres fails differently for the identical
+  root cause (`LIMIT must not be negative`, a real driver error) rather
+  than silently returning everything, but both are wrong outcomes for a
+  method whose whole contract is "a bounded window around one row." The
+  live `timeline` MCP tool was never actually exposed to this (its own
+  caller already treats `<=0` as "not specified" and substitutes the
+  default of 3), so this is a defense-in-depth fix for `Backend.Timeline`
+  as a public API — any future caller that skips that substitution and
+  passes a negative depth straight through would otherwise hit this.
+  Verified against both real backends with a dedicated regression test.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate

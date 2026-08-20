@@ -133,3 +133,34 @@ func TestTimelineNeverCrossesIntoAnotherProjectsRows(t *testing.T) {
 		}
 	}
 }
+
+// TestTimelineNegativeDepthDoesNotReturnUnlimitedRows is the regression
+// test for a real bug found against this project's own SQLite driver:
+// SQLite's LIMIT treats a negative value as "unlimited," so a naive
+// `LIMIT ?` with depthBefore=-1 returned EVERY row before the anchor
+// instead of zero. mcpserver.go's own caller already defaults <=0 to 3,
+// but Timeline itself must not depend on that — any other caller (a
+// future CLI command, a test, a bug) could pass a negative value
+// directly.
+func TestTimelineNegativeDepthDoesNotReturnUnlimitedRows(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	ids := seedSequence(t, st, "proj", 10)
+	anchor := ids[5]
+
+	results, err := st.Timeline("proj", anchor, -1, -1)
+	if err != nil {
+		t.Fatalf("Timeline with negative depths: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Timeline(depthBefore=-1, depthAfter=-1) returned %d rows, want exactly 1 (just the anchor) — negative depths must clamp to 0, not be treated as unlimited", len(results))
+	}
+	if results[0].ID != anchor {
+		t.Fatalf("Timeline with negative depths returned id=%d, want just the anchor id=%d", results[0].ID, anchor)
+	}
+}

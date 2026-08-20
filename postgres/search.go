@@ -243,6 +243,19 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]stor
 // increases monotonically with insertion order here too, so "before/after
 // this row" is exact without needing a timestamp comparison.
 func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]store.SearchResult, error) {
+	// Postgres's own LIMIT rejects a negative value outright ("LIMIT must
+	// not be negative," confirmed against the real container) rather than
+	// SQLite's "unlimited" — a different failure mode from the same root
+	// cause (see the SQLite backend's identical clamp for the full
+	// story), but still worth guarding here directly rather than relying
+	// on the query simply erroring: a clamp is a better outcome than a
+	// raw driver error reaching whatever called this.
+	if depthBefore < 0 {
+		depthBefore = 0
+	}
+	if depthAfter < 0 {
+		depthAfter = 0
+	}
 	if depthBefore > store.MaxTimelineDepth {
 		depthBefore = store.MaxTimelineDepth
 	}
