@@ -42,6 +42,18 @@ type Backend interface {
 	// anything. This is the store's retention story — without it, the
 	// store only ever grows.
 	Prune(project string, cutoffEpoch int64, dryRun bool) (int64, error)
+	// ExportAll returns up to limit observations with id > afterID, oldest
+	// first — call repeatedly with the previous page's last ID until a
+	// page comes back with fewer than limit rows. This backend's only
+	// backup/migration story: paginated so exporting a large store doesn't
+	// require loading it all into memory.
+	ExportAll(afterID int64, limit int) ([]ExportRow, error)
+	// ImportRow re-inserts a previously exported row, preserving its
+	// original ContentHash (idempotent-dedup, same as Insert) and its
+	// original CreatedAt/CreatedAtEpoch — a restore reflects when things
+	// actually happened, not when they were re-imported. Also what makes
+	// export+import double as the SQLite<->Postgres migration path.
+	ImportRow(row ExportRow) (InsertResult, error)
 	Close() error
 }
 

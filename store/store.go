@@ -214,6 +214,15 @@ type InsertResult struct {
 // is a no-op that returns the original row, not a duplicate.
 func (s *Store) Insert(sessionID, project, toolName, contentHash string, o Observation, costUSD float64) (InsertResult, error) {
 	now := time.Now()
+	return s.insertRow(sessionID, project, toolName, contentHash, o, costUSD, now.Format(time.RFC3339), now.UnixMilli())
+}
+
+// insertRow is Insert's and ImportRow's (export.go) shared implementation —
+// the only difference between "capture a new observation now" and "restore
+// a previously exported one" is which created_at/created_at_epoch gets
+// written, so that's the one thing this takes as parameters rather than
+// always stamping time.Now() itself.
+func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o Observation, costUSD float64, createdAt string, createdAtEpoch int64) (InsertResult, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
@@ -223,7 +232,7 @@ func (s *Store) Insert(sessionID, project, toolName, contentHash string, o Obser
 		sessionID, project, toolName, o.Type, o.Title, o.Subtitle,
 		jsonArray(o.Facts), o.Narrative, jsonArray(o.Concepts),
 		jsonArray(o.FilesRead), jsonArray(o.FilesModified),
-		costUSD, now.Format(time.RFC3339), now.UnixMilli(), contentHash,
+		costUSD, createdAt, createdAtEpoch, contentHash,
 	)
 	if err != nil {
 		return InsertResult{}, fmt.Errorf("insert observation: %w", err)

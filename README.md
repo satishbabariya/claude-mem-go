@@ -208,6 +208,23 @@ docker compose up -d
   exact build. `doctor`'s header prints the same string. This is also
   `cmd/claude-mem-go`'s first test file — every other package already had
   coverage; this one didn't.
+- **export** / **import** — the store's only backup and migration story;
+  there was no way to get data out of this store at all before this, and
+  no way to move data between the SQLite and Postgres backends. `export`
+  writes every observation as JSON Lines (paginated internally via
+  `Backend.ExportAll`, so a very large store doesn't need to fit in memory
+  at once); `import` reads that file back through `Backend.ImportRow`,
+  preserving each row's original `content_hash` (the same idempotent-dedup
+  guarantee `Insert` provides — importing the same file twice, or restoring
+  on top of data that's already there, skips rows already present instead
+  of duplicating them) and its original timestamp (a restore reflects when
+  things actually happened, not when they were re-imported). Since both
+  backends implement the same `Backend` interface, `export` from one and
+  `import` into the other is the SQLite<->Postgres migration path — verified
+  with real data, not just unit tests: exported this project's own real
+  32-observation dev database, imported it into the live Postgres
+  container, confirmed the rows searchable there, then re-ran the same
+  import and confirmed it correctly skipped all 32 as already present.
 - **prune** — deletes observations older than a cutoff; there was no
   retention story at all before this, meaning the store only ever grows.
   Dry-run by default (`-older-than-days N` alone just reports a count);

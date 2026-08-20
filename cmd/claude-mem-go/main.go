@@ -18,6 +18,8 @@
 //	claude-mem-go file-context    — PreToolUse hook (Read): inject prior memory about the specific file being read
 //	claude-mem-go prune           — delete observations older than a cutoff (dry-run by default; retention has no other story)
 //	claude-mem-go version         — print the build's commit/time, for correlating a bug report with an exact build
+//	claude-mem-go export          — dump every observation as JSON Lines (backup, and the SQLite<->Postgres migration path)
+//	claude-mem-go import          — restore/migrate a file written by export; idempotent (matched by content_hash)
 package main
 
 import (
@@ -79,6 +81,10 @@ func main() {
 		os.Exit(cmdPrune(os.Args[2:]))
 	case "version":
 		os.Exit(cmdVersion(os.Args[2:]))
+	case "export":
+		os.Exit(cmdExport(os.Args[2:]))
+	case "import":
+		os.Exit(cmdImport(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)

@@ -159,18 +159,30 @@ func jsonDecode(raw []byte) []string {
 // LastInsertId support (there's no single generic "last id" concept the
 // way SQLite's rowid gives one), so this uses RETURNING id directly instead.
 func (s *Store) Insert(sessionID, project, toolName, contentHash string, o store.Observation, costUSD float64) (store.InsertResult, error) {
+	now := time.Now()
+	return s.insertRow(sessionID, project, toolName, contentHash, o, costUSD, now, now.UnixMilli())
+}
+
+// insertRow is Insert's and ImportRow's (export.go) shared implementation.
+// Insert always passes time.Now() for createdAt/createdAtEpoch (both from
+// the SAME clock read, not a Go timestamp paired with Postgres's own now()
+// — the previous version relied on the created_at column's DEFAULT now(),
+// a subtly different clock than the created_at_epoch value it computed in
+// Go); ImportRow (a restore) passes the original values through instead,
+// so a restore reflects when things actually happened.
+func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o store.Observation, costUSD float64, createdAt time.Time, createdAtEpoch int64) (store.InsertResult, error) {
 	var id int64
 	err := s.db.QueryRow(
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
-			 concepts, files_read, files_modified, cost_usd, created_at_epoch, content_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			 concepts, files_read, files_modified, cost_usd, created_at, created_at_epoch, content_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		 ON CONFLICT (content_hash) DO NOTHING
 		 RETURNING id`,
 		sessionID, project, toolName, o.Type, o.Title, o.Subtitle,
 		jsonEncode(o.Facts), o.Narrative, jsonEncode(o.Concepts),
 		jsonEncode(o.FilesRead), jsonEncode(o.FilesModified),
-		costUSD, time.Now().UnixMilli(), contentHash,
+		costUSD, createdAt, createdAtEpoch, contentHash,
 	).Scan(&id)
 
 	if err == sql.ErrNoRows {
