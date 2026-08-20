@@ -125,6 +125,15 @@ docker compose up -d
   claude-mem installation` in a real session, and confirmed via the MCP
   server's own log that a genuine `tools/call` fired — not a hallucinated
   answer.
+- **skills/mem-doctor** — a second skill (`/mem-doctor`) surfacing the
+  `doctor` health check *inside* a Claude Code session instead of only from
+  a raw terminal — "is memory actually working" shouldn't require dropping
+  out of the conversation to find out. Verified the same way as
+  `mem-search`: installed the plugin at project scope in a throwaway
+  directory, ran `/mem-doctor` in a real session, and got the real health
+  check's own output back (worker/database/Ollama status), confirming
+  `$CLAUDE_PLUGIN_ROOT` resolves correctly for a skill-invoked command, not
+  just for hooks and the MCP server.
 - **doctor** — an operational health check: is the `claude` CLI on `PATH`,
   is the worker daemon reachable, is the database reachable, is Ollama
   reachable with the configured model actually pulled. Distinguishes
