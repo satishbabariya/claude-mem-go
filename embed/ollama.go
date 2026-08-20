@@ -49,31 +49,65 @@ type embedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-// Embed returns the embedding vector for text.
+// embedMaxAttempts bounds how many times Embed retries a transient
+// failure — matching the "exactly one retry" pattern classify/worker.go
+// already established for the main observer calls, not open-ended
+// backoff. Before this, a single network hiccup against Ollama (briefly
+// unavailable, momentarily overloaded) failed the embedding permanently
+// for that observation — worker.process treats an embedding failure as
+// non-fatal ("additive only," logs and moves on), so this wasn't
+// catastrophic, but it meant semantic search silently and permanently
+// missed observations on any brief Ollama blip a retry would have
+// recovered from.
+const embedMaxAttempts = 2
+
+// Embed returns the embedding vector for text, retrying once on a
+// transient failure (a network-level error reaching Ollama at all, or a
+// 5xx status) but not on one that retrying identically won't fix (a 4xx
+// status, or a successful response with an empty embedding — the model
+// genuinely isn't pulled, and it won't be moments later either).
 func (c *Client) Embed(text string) ([]float32, error) {
+	var lastErr error
+	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
+		vec, retryable, err := c.embedOnce(text)
+		if err == nil {
+			return vec, nil
+		}
+		lastErr = err
+		if !retryable {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) embedOnce(text string) (vec []float32, retryable bool, err error) {
 	body, err := json.Marshal(embedRequest{Model: c.Model, Prompt: text})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	resp, err := c.HTTP.Post(c.BaseURL+"/api/embeddings", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("ollama embeddings request (is `ollama serve` running?): %w", err)
+		return nil, true, fmt.Errorf("ollama embeddings request (is `ollama serve` running?): %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 500 {
+		return nil, true, fmt.Errorf("ollama embeddings returned status %d", resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama embeddings returned status %d", resp.StatusCode)
+		return nil, false, fmt.Errorf("ollama embeddings returned status %d", resp.StatusCode)
 	}
 
 	var er embedResponse
 	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, fmt.Errorf("decode ollama embeddings response: %w", err)
+		return nil, false, fmt.Errorf("decode ollama embeddings response: %w", err)
 	}
 	if len(er.Embedding) == 0 {
-		return nil, fmt.Errorf("ollama returned an empty embedding — is model %q pulled? (`ollama pull %s`)", c.Model, c.Model)
+		return nil, false, fmt.Errorf("ollama returned an empty embedding — is model %q pulled? (`ollama pull %s`)", c.Model, c.Model)
 	}
-	return er.Embedding, nil
+	return er.Embedding, false, nil
 }
 
 type tagsResponse struct {

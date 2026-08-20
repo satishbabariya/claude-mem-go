@@ -274,6 +274,19 @@ docker compose up -d
   it a real `PostToolUse` payload over its actual Unix socket, and
   confirmed both the stats file and `doctor`'s output reflected the real
   persisted observation.
+- **Embedding retries once on a transient failure** — `classify`/`worker.go`
+  already retry the main observer call once on a transient/rate-limit
+  failure, but `embed.Client.Embed` had no equivalent: a single network
+  hiccup against Ollama (briefly unavailable, momentarily overloaded)
+  failed that observation's embedding permanently. Not catastrophic
+  (`worker.process` already treats embedding failure as additive-only —
+  keyword search on the row still works), but it meant semantic search
+  silently and permanently missed observations on any brief Ollama blip a
+  retry would have recovered from. Now retries once on a network-level
+  error or a 5xx status; does *not* retry a 4xx or a successful-but-empty
+  embedding (the model genuinely isn't pulled, and won't be moments
+  later) — verified against a real Ollama call in addition to the new
+  unit tests.
 
 ## Installing as a Claude Code plugin
 
