@@ -427,11 +427,17 @@ go test ./postgres/... -v
 ```
 
 `.github/workflows/ci.yml` runs the same commands (plus a `pgvector/pgvector:pg16`
-service container) on every push. It's validated with [`actionlint`](https://github.com/rhysd/actionlint)
-and with [`act`](https://github.com/nektos/act) against a real Docker-backed
-runner — both clean. GitHub's own hosted runners aren't currently executing
-it (account-level, unrelated to this repo or its workflow file); `act` is
-the actual verification this was tested against.
+service container) on every push, and genuinely passes there — checked via
+`gh run list`, not assumed: every run since "Add a real versioned
+schema-migration framework for both backends" has completed successfully
+on GitHub's own hosted runners. That wasn't always true earlier in this
+project's history: every run before that failed at `startup_failure`
+before ever reaching a single step, caused by an account-level GitHub
+billing lock unrelated to this repo or its workflow file — that's what
+`act` (a real Docker-backed local runner) and `actionlint` were verifying
+against at the time, since the hosted runners weren't reachable at all.
+The billing lock has since been resolved; hosted-runner CI is the current
+source of truth again.
 
 `postgres/`'s tests skip cleanly (not fail) when nothing is listening at
 `localhost:55432` — start `docker compose up -d` first if you want them to
