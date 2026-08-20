@@ -62,6 +62,20 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`HealthDetails` now catches a real, previously-silent failure mode:
+  inconsistent embedding dimensions.** If the configured Ollama embedding
+  model ever changes, `SemanticSearch`'s cosine similarity returns -1 (its
+  theoretical minimum) on any length mismatch rather than erroring — old
+  embeddings just quietly stop ever matching a new-model query, forever,
+  with nothing anywhere saying so. New `embedding_dims`/
+  `embedding_dims_consistent` keys surface this in `doctor`. SQLite-
+  specific in practice: Postgres reports the identical keys for parity,
+  but its fixed `vector(N)` column type makes a real mismatch structurally
+  impossible — confirmed directly (a mismatched save there fails loudly
+  with a real Postgres error instead). Verified both ways: a real
+  `doctor` run against a deliberately mixed-dimension SQLite database
+  showed the inconsistency; a real save attempt against the live Postgres
+  container was rejected outright.
 - **`timeline`** — MCP tool #8: chronological context AROUND one
   observation (`depth_before`/`depth_after` observations surrounding an
   anchor), mirroring real claude-mem's own `timeline` tool ("step 2: get

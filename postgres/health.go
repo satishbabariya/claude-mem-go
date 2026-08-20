@@ -3,6 +3,7 @@ package postgres
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // HealthDetails returns backend-specific operational facts for `doctor` —
@@ -36,6 +37,37 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 		return nil, fmt.Errorf("check HNSW index: %w", err)
 	}
 	details["hnsw_index_exists"] = strconv.FormatBool(hnswExists)
+
+	// embedding_dims: reported for parity with the SQLite backend's
+	// identical key, but this backend can never actually show more than
+	// one distinct dimension — the embedding column's type is a fixed
+	// vector(N) set once at schema creation (see Open's embedDims
+	// parameter), so a dimension mismatch fails loudly at SaveEmbedding
+	// time instead of silently degrading SemanticSearch the way it can on
+	// SQLite (confirmed directly: saving a wrong-dimension vector here
+	// returns a real Postgres error, "expected N dimensions, not M").
+	// vector_dims() is pgvector's own accessor.
+	rows, err := s.db.Query(`SELECT vector_dims(embedding), COUNT(*) FROM observations WHERE embedding IS NOT NULL GROUP BY vector_dims(embedding) ORDER BY 1`)
+	if err != nil {
+		return nil, fmt.Errorf("query embedding dims histogram: %w", err)
+	}
+	var histogram []string
+	for rows.Next() {
+		var dims, count int
+		if err := rows.Scan(&dims, &count); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan embedding dims histogram: %w", err)
+		}
+		histogram = append(histogram, fmt.Sprintf("%d:%d", dims, count))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query embedding dims histogram: %w", err)
+	}
+	rows.Close()
+	if len(histogram) > 0 {
+		details["embedding_dims"] = strings.Join(histogram, ",")
+		details["embedding_dims_consistent"] = strconv.FormatBool(len(histogram) == 1)
+	}
 
 	return details, nil
 }

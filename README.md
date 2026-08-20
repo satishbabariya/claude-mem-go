@@ -328,6 +328,22 @@ docker compose up -d
   `journal_mode=wal foreign_keys=1 busy_timeout_ms=5000`; the live Postgres
   container showed a real `vector_extension=0.8.6` and
   `hnsw_index_exists=true`.
+  `HealthDetails` also now reports `embedding_dims`/`embedding_dims_consistent`
+  — surfacing a real, previously-silent failure mode: if the configured
+  Ollama embedding model ever changes (different dimension count),
+  `SemanticSearch`'s cosine similarity returns -1 (its theoretical
+  minimum) on any length mismatch rather than erroring, so the *old*
+  embeddings just quietly stop ever matching a new-model query, forever,
+  with nothing anywhere saying so — a `doctor` run is now the one place
+  that actually surfaces it. This is SQLite-specific in practice: Postgres
+  reports the identical key for parity, but its fixed `vector(N)` column
+  type makes a real mismatch structurally impossible (confirmed directly —
+  saving a wrong-dimension vector there fails loudly with a real Postgres
+  error instead). Verified both ways: a real `doctor` run against a
+  deliberately mixed-dimension SQLite database showed
+  `embedding_dims=384:1,768:1 embedding_dims_consistent=false`, and a real
+  attempt to save a mismatched vector into the live Postgres container was
+  rejected outright.
 - **version** — prints the exact commit and build time via Go's own
   `runtime/debug.ReadBuildInfo()` (VCS stamping is on by default since Go
   1.18 — no ldflags wiring, no version file to keep in sync, no CI change

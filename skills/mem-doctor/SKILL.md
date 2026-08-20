@@ -37,6 +37,15 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   semantic search actually depends on still exists — a missing HNSW
   index would otherwise silently degrade every semantic search to a full
   table scan with nothing saying so
+- `embedding_dims`/`embedding_dims_consistent` — whether every embedded
+  observation shares the same vector dimension. If `false` (SQLite only;
+  Postgres can't have this), the embedding model was changed at some
+  point without re-embedding old rows: those older observations will
+  never surface via `semantic_search_observations` again (silently, no
+  error) until they're re-embedded. If the user hits this, the fix is
+  re-ingesting/re-adding those observations with the current model — not
+  something to do automatically without asking, since it means real API
+  calls to Ollama for every affected row.
 - Ollama reachable with the configured embedding model actually pulled
   (informational only — no Ollama just means no semantic search, not a
   broken install)
