@@ -210,9 +210,17 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return s.errorReply(req, -32602, fmt.Sprintf("invalid params: %v", err))
 	}
+	// Bounded the same way real claude-mem's own mem-search skill documents
+	// its search tool ("max 100") — an unbounded limit lets a single call
+	// force a scan/transfer sized however large the caller likes, which for
+	// an MCP tool (arguments come from whatever's calling the server, not
+	// necessarily a careful human) is worth capping rather than trusting.
+	const maxLimit = 100
 	limit := params.Arguments.Limit
 	if limit <= 0 {
 		limit = 10
+	} else if limit > maxLimit {
+		limit = maxLimit
 	}
 
 	var result toolCallResult

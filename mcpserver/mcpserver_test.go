@@ -138,6 +138,42 @@ func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
 	}
 }
 
+// TestToolsCallLimitIsCappedRegardlessOfCallerValue seeds well over 100 rows
+// and confirms a caller-supplied limit far above 100 still returns at most
+// 100 — the same "max 100" bound real claude-mem's own mem-search skill
+// documents, and worth enforcing here since an MCP tool's arguments come
+// from whatever's calling the server, not necessarily a careful human.
+func TestToolsCallLimitIsCappedRegardlessOfCallerValue(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i := 0; i < 105; i++ {
+		o := store.Observation{Type: "discovery", Title: "bulk seeded observation about widgets"}
+		hash := store.ContentHash("s1", "Bash", string(rune('a'+i%26)), string(rune(i)))
+		if _, err := st.Insert("s1", "proj", "Bash", hash, o, 0); err != nil {
+			t.Fatalf("seed Insert %d: %v", i, err)
+		}
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets","limit":99999}}}`,
+	})
+	result := resp[0]["result"].(map[string]any)
+	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+
+	lines := strings.Count(text, "[")
+	if lines > 100 {
+		t.Fatalf("search_observations with limit=99999 returned %d results, want capped at 100", lines)
+	}
+	if lines == 0 {
+		t.Fatal("expected at least some results from the 105 seeded rows")
+	}
+}
+
 func TestToolsCallUnknownToolIsProtocolError(t *testing.T) {
 	s, _ := newTestServer(t)
 	resp := runLines(t, s, []string{

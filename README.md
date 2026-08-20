@@ -188,6 +188,13 @@ docker compose up -d   # then postgres/... runs against the real container
 go test ./postgres/... -v
 ```
 
+`.github/workflows/ci.yml` runs the same commands (plus a `pgvector/pgvector:pg16`
+service container) on every push. It's validated with [`actionlint`](https://github.com/rhysd/actionlint)
+and with [`act`](https://github.com/nektos/act) against a real Docker-backed
+runner — both clean. GitHub's own hosted runners aren't currently executing
+it (account-level, unrelated to this repo or its workflow file); `act` is
+the actual verification this was tested against.
+
 `postgres/`'s tests skip cleanly (not fail) when nothing is listening at
 `localhost:55432` — start `docker compose up -d` first if you want them to
 actually run. They're real integration tests against a live container, not
