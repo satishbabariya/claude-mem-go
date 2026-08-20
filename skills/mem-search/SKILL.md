@@ -5,11 +5,13 @@ description: Search claude-mem-go's persistent cross-session memory database. Us
 
 # Memory Search
 
-claude-mem-go already injects a project's most recent observations
-automatically at `SessionStart` — this skill is for everything that
-injection doesn't cover: older sessions, a different project, or a
-specific question phrased in a way worth searching for rather than
-skimming a handful of recent items.
+claude-mem-go already injects memory automatically twice — a project's
+most recent observations at `SessionStart`, and (separately) whatever's
+semantically closest to the actual prompt just submitted, on every
+`UserPromptSubmit` — so this skill is for everything neither automatic
+path covers: older sessions, a different project, or a specific question
+worth deliberately searching for rather than whatever showed up
+unprompted.
 
 ## When to use
 
@@ -19,17 +21,18 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Six tools, three kinds of job
+## Seven tools, four kinds of job
 
-claude-mem-go exposes six MCP tools — simpler than a multi-step
+claude-mem-go exposes seven MCP tools — simpler than a multi-step
 index/timeline/fetch pipeline, because this project's schema doesn't carry
 the token-cost concerns that pipeline exists to manage (no separate raw-vs-
 compressed representations to fetch in stages). Two are search (below);
 three are direct lookups when you already know what you want and don't
-need to search for it; one — `add_observation` — is the only *write*
-tool among them (see below). This skill is mainly about finding what's
-already remembered, but recognizing when a request actually needs
-`add_observation` instead of a search matters too:
+need to search for it; one — `get_observations` — fetches full detail for
+IDs any of the others already gave you; one — `add_observation` — is the
+only *write* tool among them (see below). This skill is mainly about
+finding what's already remembered, but recognizing when a request actually
+needs `add_observation` instead of a search matters too:
 
 - `recent_observations(limit?, project?)` — the current project's most
   recent observations, newest first. The same read path `SessionStart`'s
@@ -47,6 +50,22 @@ Reach for these THREE first when the question doesn't need a query at
 all — "what's recent," "what happened last session," "what do we know
 about this file" don't benefit from full-text or semantic matching, they
 just need the right rows.
+
+### `get_observations` — full detail for IDs you already have
+
+Every tool above returns an abbreviated `[id] title (project, tool)` line
+— deliberately, to keep list output short. `get_observations(ids=[...])`
+fetches the full narrative/facts/concepts/files for one or more of those
+IDs, once a specific one looks worth reading in full:
+
+```
+get_observations(ids=[42])
+```
+
+Unknown IDs are silently omitted rather than erroring, and it's scoped to
+the current project the same way `search_observations` is — pass
+`all_projects: true` if the ID genuinely came from a different project's
+search.
 
 ### `search_observations` — exact terms
 
@@ -134,4 +153,10 @@ session_observations(session_id="<the session_id>")
 **"What do we already know about this file" — before or instead of reading it:**
 ```
 file_observations(file_path="src/auth/middleware.go")
+```
+
+**A search result's abbreviated line isn't enough detail — read the full observation:**
+```
+search_observations(query="rate limiting")   -> "[42] Added request throttling (proj, Bash)"
+get_observations(ids=[42])                   -> full narrative/facts/concepts/files for id 42
 ```

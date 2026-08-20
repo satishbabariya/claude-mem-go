@@ -62,6 +62,15 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **Skill docs re-synced with the actual tool surface** — `mem-search`
+  still said "six tools" and never mentioned `get_observations` at all
+  (added a whole iteration earlier and simply never back-filled into the
+  skill instructions), and `mem-doctor`'s "what it checks" list predated
+  both the worker activity counters and `Backend.HealthDetails()`, so it
+  described a `doctor` that no longer matched what the binary actually
+  prints. Confirmed the fix against the real tool count (`grep` against
+  `mcpserver.go`'s actual tool definitions: 7, matching the corrected
+  doc) rather than just editing prose.
 - **`postgres.Open` retries its initial connection** on a short backoff
   (~7.75s worst case across 6 attempts) instead of failing permanently on
   the very first ping. Every real caller (the worker daemon, every CLI

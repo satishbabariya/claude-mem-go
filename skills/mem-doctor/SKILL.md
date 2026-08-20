@@ -24,9 +24,19 @@ Don't use this for "did we solve X before" — that's `mem-search`.
 ## What it checks
 
 - `claude` CLI on `PATH` (the observer needs to spawn it)
-- the worker daemon reachable on its Unix socket
+- the worker daemon reachable on its Unix socket, and if so its real
+  activity counters (`processed`/`duplicates`/`observer_errors`/
+  `insert_errors`/`embed_errors`/pool utilization/`cached_sessions`) —
+  informational, but the first place to look if observations seem to be
+  silently going nowhere
 - the database reachable (SQLite file or Postgres DSN, whichever `-db`
-  points at)
+  points at), plus backend-specific facts nothing else surfaces:
+  SQLite's real `journal_mode`/`foreign_keys`/`busy_timeout_ms` PRAGMA
+  settings, or for Postgres, real connection-pool utilization, the
+  installed `pgvector` extension version, and whether the HNSW index
+  semantic search actually depends on still exists — a missing HNSW
+  index would otherwise silently degrade every semantic search to a full
+  table scan with nothing saying so
 - Ollama reachable with the configured embedding model actually pulled
   (informational only — no Ollama just means no semantic search, not a
   broken install)
