@@ -741,6 +741,16 @@ plugin install, to avoid writing test rows into this machine's real,
 shared production database (the same discipline applied throughout this
 project's live-verification history).
 
+## Security
+
+See [`SECURITY.md`](SECURITY.md) for the trust model (no auth on the MCP
+server or worker socket — the boundary is the local OS user, same as any
+MCP server; the one real network surface is the opt-in Prometheus
+endpoint, which should stay bound to localhost), what's actually
+hardened and why (DSN redaction, bounded inputs, panic recovery), and
+what's explicitly out of scope (encryption at rest, rate limiting) —
+plus how to report a vulnerability.
+
 ## Testing
 
 ```sh

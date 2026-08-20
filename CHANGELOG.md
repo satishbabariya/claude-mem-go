@@ -62,6 +62,15 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`SECURITY.md`** — the trust model this project didn't have written
+  down anywhere: no auth on the MCP server or worker socket (the
+  boundary is the local OS user, same as any MCP server), the one real
+  network surface (the opt-in Prometheus endpoint) should stay bound to
+  localhost, DSN credentials are never logged in the clear, every
+  caller-supplied size/count is bounded, and both long-lived processes
+  now recover from panics instead of crashing — plus what's explicitly
+  out of scope (encryption at rest, rate limiting) and how to report a
+  vulnerability (GitHub's private vulnerability reporting).
 - **`pool.New` clamps a non-positive `maxConcurrent` instead of crashing
   the worker daemon at startup.** Go's own `make(chan T, n)` panics with
   "makechan: size out of range" for a negative `n`, so
