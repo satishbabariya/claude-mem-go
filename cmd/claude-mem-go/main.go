@@ -237,6 +237,7 @@ func cmdIngest(args []string) int {
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(empty to skip embedding — observations are still persisted, just not semantically searchable)")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 3, 100)
 
 	tp := *transcriptPath
 	if tp == "" {
@@ -325,6 +326,7 @@ func cmdSearch(args []string) int {
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 10, 100)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-limit N] <query>")
@@ -365,6 +367,7 @@ func cmdSemanticSearch(args []string) int {
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 10, 100)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: claude-mem-go semantic-search [-db path] [-project name] [-limit N] <query>")
@@ -460,6 +463,7 @@ func cmdContext(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 5, "how many recent observations to inject")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 5, 100)
 
 	l := openLog("context.log")
 
@@ -537,6 +541,7 @@ func cmdStop(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 50, "max observations from this session to include in the summary")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 50, 100)
 
 	l := openLog("stop.log")
 
@@ -691,6 +696,7 @@ func cmdFileContext(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 5, "how many prior observations about this file to inject")
 	fs.Parse(args)
+	*limit = clampLimit(*limit, 5, 100)
 
 	l := openLog("file-context.log")
 
