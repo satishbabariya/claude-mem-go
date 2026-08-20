@@ -97,7 +97,13 @@ func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres %s: %w", dsn, err)
+		// store.RedactDSN, not the raw dsn: a real Postgres DSN carries a
+		// plaintext password, and this error is what every caller further
+		// up the stack (cmd's various log sites, doctor, the worker
+		// daemon, the MCP server) ends up logging or printing on any open
+		// failure — a real credential leak this closes for every one of
+		// them at once, not just here.
+		return nil, fmt.Errorf("open postgres %s: %w", store.RedactDSN(dsn), err)
 	}
 	// Bounded, not left at database/sql's default of unlimited: every
 	// long-lived process that talks to this backend (the worker daemon,

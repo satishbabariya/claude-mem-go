@@ -70,6 +70,21 @@ docker compose up -d
   crosses a real network: use `sslmode=require` (encrypted, no certificate
   verification) or `sslmode=verify-full` (encrypted and verified,
   recommended for anything production) against a real Postgres instance.
+  A real Postgres DSN carries its password in plaintext — every place a
+  `-db` value could reach a log line or stdout (`doctor`'s output, the
+  `context`/`stop`/`file-context` hook logs, the error `postgres.Open`
+  returns and every caller further up the stack that logs it) now goes
+  through `store.RedactDSN` first, replacing the password with
+  `REDACTED`. This was a genuine leak before, not a hypothetical one, and
+  the first version of the redaction function itself had a real bug: it
+  used `net/url.Parse`-then-reserialize and fell back to returning the
+  *unredacted* original whenever parsing failed — exactly backwards for a
+  redaction function — which a deliberately malformed DSN (a well-formed
+  `user:password@` prefix followed by a broken host) triggered
+  immediately. Fixed with a regex-based approach that only needs the
+  `scheme://user:password@` prefix to be well-formed, independent of
+  whatever comes after — verified against the exact malformed-DSN case
+  that leaked, and against a real live-container auth failure.
 
 - **Schema migrations** (`migrate/`) — a real, versioned schema-migration
   framework shared by both backends: a `schema_migrations` table records

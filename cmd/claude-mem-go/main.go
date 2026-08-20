@@ -473,7 +473,7 @@ func cmdContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", *dbPath, err)
+		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -546,7 +546,7 @@ func cmdStop(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", *dbPath, err)
+		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		return 0
 	}
 	defer st.Close()
@@ -644,15 +644,16 @@ func cmdDoctor(args []string) int {
 		fmt.Println()
 	}
 
+	redactedDBPath := store.RedactDSN(*dbPath)
 	if st, err := backend.Open(context.Background(), *dbPath, 0); err != nil {
-		fmt.Printf("✘ database (%s): %v\n", *dbPath, err)
+		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false
 	} else {
 		if _, cerr := st.CountByProject(""); cerr != nil {
-			fmt.Printf("✘ database (%s) opened but a query failed: %v\n", *dbPath, cerr)
+			fmt.Printf("✘ database (%s) opened but a query failed: %v\n", redactedDBPath, cerr)
 			critical = false
 		} else {
-			fmt.Printf("✔ database reachable (%s)\n", *dbPath)
+			fmt.Printf("✔ database reachable (%s)\n", redactedDBPath)
 		}
 		st.Close()
 	}
@@ -718,7 +719,7 @@ func cmdFileContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", *dbPath, err)
+		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
