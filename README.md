@@ -55,7 +55,14 @@ the `-db` flag looks like:
   `pgvector/pgvector:pg16`; every claim above (the HNSW index actually gets
   used, not just created; the hyphen query that broke FTS5 works here
   without a workaround) was checked with `EXPLAIN` and real queries against
-  that container, not assumed.
+  that container, not assumed. The container has a persistent named
+  volume (data survives `docker compose down`) and `restart:
+  unless-stopped`, so it comes back after a Docker Desktop/daemon restart
+  without manual intervention — confirmed the policy actually applies via
+  `docker inspect`, and confirmed Docker's real distinction between "you
+  explicitly stopped it" (an explicit `docker stop`/`docker kill` — this
+  policy correctly does NOT override that; verified directly) and a crash,
+  which it would restart from.
 
 ```sh
 docker compose up -d
