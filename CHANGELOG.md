@@ -62,6 +62,14 @@ than assumed correct.
     a shared Postgres server.
   - `embed.Client.Embed` never retrying a transient Ollama failure, unlike
     the main observer call path.
+  - Neither the new `add_observation` MCP tool nor the `Stop` hook's
+    session-summary observation ever got embedded — both persisted a real
+    observation through a different code path than the worker's own
+    `process()`, and both forgot the embedding step. The `Stop` case in
+    particular meant a session summary — arguably the single most
+    information-dense observation this project produces — had been
+    invisible to semantic search since the day that hook was written, not
+    just since this pass began.
 - Also: bounded the Postgres connection pool (previously
   `database/sql`'s default of unlimited), CLI `-limit` flags clamped to
   match the MCP server's own bound, and `docker-compose.yml`'s Postgres

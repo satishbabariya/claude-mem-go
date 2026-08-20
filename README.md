@@ -151,7 +151,16 @@ docker compose up -d
   session_id alone, so a session that ends more than once (or a Stop that
   fires twice) still gets exactly one summary, verified by running it twice
   against the same real session and confirming the second call recognized
-  the duplicate and did nothing.
+  the duplicate and did nothing. Now embeds the summary too (a real,
+  previously-undiscovered gap: this hook had no `-embed-model` flag at all
+  and never called `SaveEmbedding`, so a session summary — arguably the
+  single most information-dense observation this project ever
+  produces — had been invisible to `semantic_search_observations` from the
+  day this hook was written, findable only by keyword search or listing.
+  Found by pattern-matching against the identical gap `add_observation`
+  had). Verified against a real session: seeded observations, ran `stop`
+  with the real embed model, and confirmed the resulting summary was
+  found by `semantic-search` using a query with zero keyword overlap.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based

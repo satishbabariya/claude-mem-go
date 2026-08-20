@@ -540,6 +540,8 @@ func cmdStop(args []string) int {
 	model := fs.String("model", "haiku", "model alias for observer sessions")
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 50, "max observations from this session to include in the summary")
+	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
+		"(empty to skip embedding — the summary is still persisted, just not semantically searchable)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 50, 100)
 
@@ -606,6 +608,27 @@ func cmdStop(args []string) int {
 	}
 	l.Printf("persisted session summary observations.id=%d title=%q from %d observations, cost=$%.4f",
 		res.ID, summaryTurn.Observation.Title, len(observations), summaryTurn.Result.CostUSD)
+
+	// Additive only, same as the worker's own embedding step: keyword
+	// search on the summary just inserted already works without this, and
+	// a missing/unreachable Ollama must not undo a successful summary.
+	// Without this, a session summary — arguably the single most
+	// information-dense observation this project ever produces — was
+	// invisible to semantic_search_observations from the day this hook
+	// was written, findable only by keyword search or by listing.
+	if *embedModel == "" {
+		return 0
+	}
+	text := embed.ObservationText(summaryTurn.Observation.Title, summaryTurn.Observation.Subtitle,
+		summaryTurn.Observation.Narrative, summaryTurn.Observation.Facts)
+	vec, err := embed.NewClient(*embedModel).Embed(text)
+	if err != nil {
+		l.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
+		return 0
+	}
+	if err := st.SaveEmbedding(res.ID, vec); err != nil {
+		l.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
+	}
 	return 0
 }
 
