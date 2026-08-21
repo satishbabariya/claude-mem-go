@@ -38,6 +38,22 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 	}
 	details["hnsw_index_exists"] = strconv.FormatBool(hnswExists)
 
+	// hnsw_ef_search reports this Store's *configured* override (see Open's
+	// hnswEfSearch parameter), not a live Postgres session value — there
+	// isn't one to report: SemanticSearch applies it via a transaction-
+	// scoped SET LOCAL for the duration of one query, not a persistent
+	// session setting on any of this pool's connections (see
+	// SemanticSearch's own doc comment for why). Still worth surfacing
+	// here: this is the one tuning knob `doctor` had no visibility into at
+	// all before this — an operator who set -hnsw-ef-search had no way to
+	// confirm it was actually configured short of reading the process's
+	// own flags.
+	if s.hnswEfSearch > 0 {
+		details["hnsw_ef_search"] = strconv.Itoa(s.hnswEfSearch)
+	} else {
+		details["hnsw_ef_search"] = "default (40)"
+	}
+
 	// embedding_dims: reported for parity with the SQLite backend's
 	// identical key, but this backend can never actually show more than
 	// one distinct dimension — the embedding column's type is a fixed

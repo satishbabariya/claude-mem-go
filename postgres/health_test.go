@@ -1,7 +1,9 @@
 package postgres
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"claude-mem-go/store"
 )
@@ -32,6 +34,36 @@ func TestHealthDetailsReflectsRealPoolAndSchemaState(t *testing.T) {
 	// dependent, just that it's present and sane.
 	if details["pool_open_connections"] == "" {
 		t.Error("pool_open_connections is empty, want a real count")
+	}
+	if details["hnsw_ef_search"] != "default (40)" {
+		t.Errorf(`hnsw_ef_search = %q, want "default (40)" — openTestStore configures no override`, details["hnsw_ef_search"])
+	}
+}
+
+// TestHealthDetailsReflectsConfiguredHNSWEfSearch is the regression test
+// for a real observability gap: doctor had no visibility into whether an
+// operator's -hnsw-ef-search override was actually configured at all,
+// the exact tuning knob a previous pass added and found Postgres doesn't
+// reliably self-report. hnsw_ef_search reports THIS Store's configured
+// value, not a live Postgres session setting — there isn't one to read,
+// since SemanticSearch applies it per-call via a transaction-scoped SET
+// LOCAL rather than a persistent session GUC (see SemanticSearch's own
+// doc comment).
+func TestHealthDetailsReflectsConfiguredHNSWEfSearch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 250)
+	if err != nil {
+		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+	}
+	defer st.Close()
+
+	details, err := st.HealthDetails()
+	if err != nil {
+		t.Fatalf("HealthDetails: %v", err)
+	}
+	if details["hnsw_ef_search"] != "250" {
+		t.Errorf(`hnsw_ef_search = %q, want "250" (the value this Store was opened with)`, details["hnsw_ef_search"])
 	}
 }
 

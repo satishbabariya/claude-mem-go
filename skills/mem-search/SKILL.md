@@ -21,20 +21,23 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Eight tools, five kinds of job
+## Ten tools, six kinds of job
 
-claude-mem-go exposes eight MCP tools — independently callable, not a
+claude-mem-go exposes ten MCP tools — independently callable, not a
 mandatory staged pipeline the way real claude-mem's own
 search→timeline→get_observations sequence is (that staging exists to
 manage token cost across separate raw-vs-compressed representations this
-project's schema doesn't have). Two are search (below); three are direct
-lookups when you already know what you want and don't need to search for
-it; `get_observations` fetches full detail for IDs any of the others
-already gave you; `timeline` gets chronological context AROUND one
-result rather than the result in isolation; one — `add_observation` — is
-the only *write* tool among them (see below). This skill is mainly about
-finding what's already remembered, but recognizing when a request
-actually needs `add_observation` instead of a search matters too:
+project's schema doesn't have; `important_workflow`, below, documents the
+same pattern here as a recommendation, not an enforced one). Three are
+search (below); three are direct lookups when you already know what you
+want and don't need to search for it; `get_observations` fetches full
+detail for IDs any of the others already gave you; `timeline` gets
+chronological context AROUND one result rather than the result in
+isolation; one — `add_observation` — is the only *write* tool among them
+(see below); one — `important_workflow` — is pure guidance, not a lookup
+at all. This skill is mainly about finding what's already remembered,
+but recognizing when a request actually needs `add_observation` instead
+of a search matters too:
 
 - `recent_observations(limit?, project?)` — the current project's most
   recent observations, newest first. The same read path `SessionStart`'s
@@ -109,6 +112,14 @@ added via `add_observation`):
 search_observations(query="rate limiting", type="decision")
 ```
 
+Add `offset` to page past a prior call's `limit` (default 0) — useful
+when the first page didn't have what you needed but the match count
+suggested there was more:
+
+```
+search_observations(query="rate limiting", limit=10, offset=10)  -- results 11-20
+```
+
 ### `semantic_search_observations` — meaning, not exact words
 
 Embedding-based search. Use when the user's question is phrased
@@ -124,6 +135,24 @@ Requires the worker/MCP server to have an embedding model configured
 (`-embed-model`, default `nomic-embed-text` via Ollama) — if semantic
 search returns nothing when keyword search finds results, the query terms
 probably just don't overlap; try rephrasing, or fall back to keyword search.
+
+### `observation_context` — the same search, pre-formatted to drop into a reply
+
+Same embedding pipeline as `semantic_search_observations` (and the same
+`-embed-model` requirement), but the output shape is different on
+purpose: instead of a list of `[id] title` lines for you to read and
+decide what to do with, it returns the exact ready-to-inject text block
+`UserPromptSubmit`'s automatic recall already produces — a "Memory
+relevant to what you just asked" block meant to be read or quoted
+directly, not parsed. Reach for this specifically when the user is
+explicitly asking "what does memory know about X" mid-conversation and
+you want to surface that context verbatim, rather than when you're
+deciding for yourself what to do with search results — `semantic_search_observations`
+is still the right call for that:
+
+```
+observation_context(query="why did we move off of sqlite")
+```
 
 ### `add_observation` — the one write tool
 
@@ -151,6 +180,14 @@ literal phrase someone would have typed). Reach for
 *outcome* rather than exact wording, or when keyword search comes back
 empty and the thing being asked about plausibly happened under different
 words.
+
+`important_workflow` (no arguments) returns a short reminder of the
+`search_observations` → `timeline` → `get_observations` staging this
+skill already describes above — narrow to a few relevant IDs with a
+cheap search before paying the token cost of `get_observations`' full
+detail, rather than fetching everything up front. Nothing this skill
+tells you contradicts it; call it directly only if you want the reminder
+in the tool's own words rather than this skill's.
 
 ## Examples
 

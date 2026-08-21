@@ -27,6 +27,9 @@ func cmdDoctor(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model semantic search would use")
+	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: the hnsw.ef_search override configured "+
+		"elsewhere (mcp/semantic-search/prompt-context), so its HealthDetails reflects the same value — "+
+		"valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
 	fs.Parse(args)
 
 	critical := true
@@ -63,7 +66,7 @@ func cmdDoctor(args []string) int {
 
 	redactedDBPath := store.RedactDSN(*dbPath)
 	var st store.Backend
-	if opened, err := backend.Open(context.Background(), *dbPath, 0, 0); err != nil {
+	if opened, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false
 	} else {

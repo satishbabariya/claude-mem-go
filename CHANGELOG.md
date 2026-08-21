@@ -171,6 +171,28 @@ process (this project doesn't cut tagged releases on a schedule).
   elapses — confirmed as a genuine regression test by temporarily
   removing the deadline call and watching the test time out before
   restoring it.
+- **`skills/mem-search/SKILL.md` was stale** — it still said "eight
+  tools" and never mentioned `observation_context`, `important_workflow`,
+  or `search_observations`'s `offset` argument, all added earlier this
+  session. The skill whose entire job is teaching Claude which tool to
+  reach for is the one place this staleness actually mattered. Updated to
+  document all ten tools and their current arguments. Verified live, not
+  just that the markdown parses: `--plugin-dir` loaded this plugin into a
+  real `claude -p` session and asked it to list every MCP tool name the
+  skill mentions — all ten came back.
+- **`doctor`/`HealthDetails` gain `hnsw_ef_search` visibility** — a real
+  observability gap once `-hnsw-ef-search` existed: nothing anywhere
+  confirmed whether an operator's override was actually configured.
+  `doctor` gains the identical `-hnsw-ef-search` flag so it can be
+  pointed at the same value used elsewhere (`mcp`/`semantic-search`/
+  `prompt-context`) and reports it back verbatim, or `default (40)` when
+  unset. Reports the `Store`'s *configured* value, not a live Postgres
+  session setting — there isn't one to read, since `SemanticSearch`
+  applies the override per call via a transaction-scoped `SET LOCAL`, not
+  a persistent session GUC. Verified against the live Postgres container
+  both ways (configured and default), each confirmed as a genuine
+  regression test by temporarily breaking the field assignment and
+  watching the test fail before restoring it.
 
 ## 0.2.0 — 2026-08-20
 

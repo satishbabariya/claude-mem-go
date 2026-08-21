@@ -534,6 +534,17 @@ docker compose up -d
   claude-mem installation` in a real session, and confirmed via the MCP
   server's own log that a genuine `tools/call` fired — not a hallucinated
   answer.
+  Went stale as the MCP surface grew past when this skill was first
+  written — found by hand rather than assumed current: it still said
+  "eight tools" and never mentioned `observation_context`,
+  `important_workflow`, or `search_observations`'s `offset` argument, all
+  added later the same session. The skill whose entire job is teaching
+  which tool to reach for is the one place staleness here actually
+  matters. Updated to document all ten, verified live the same way as the
+  original: `--plugin-dir` loading this plugin into a real `claude -p`
+  session and asking it to list every MCP tool name the skill mentions —
+  all ten came back, confirming the updated file is what a real session
+  actually reads, not just that the markdown parses.
 - **skills/mem-doctor** — a second skill (`/mem-doctor`) surfacing the
   `doctor` health check *inside* a Claude Code session instead of only from
   a raw terminal — "is memory actually working" shouldn't require dropping
@@ -594,6 +605,18 @@ docker compose up -d
   `embedding_dims=384:1,768:1 embedding_dims_consistent=false`, and a real
   attempt to save a mismatched vector into the live Postgres container was
   rejected outright.
+  `HealthDetails` also now reports `hnsw_ef_search` — a real observability
+  gap once `-hnsw-ef-search` existed with nowhere confirming it was
+  actually configured. `doctor` gained the identical `-hnsw-ef-search`
+  flag so it can be pointed at the same override an operator set on
+  `mcp`/`semantic-search`/`prompt-context`, and reports it back verbatim
+  (or `default (40)` when unset). Reports this `Store`'s *configured*
+  value, not a live Postgres session setting — there isn't one to read,
+  since `SemanticSearch` applies it per call via a transaction-scoped
+  `SET LOCAL`, not a persistent session GUC. Verified against the live
+  container: a real `doctor -hnsw-ef-search 333` run showed
+  `hnsw_ef_search=333`, and the unset default showed
+  `hnsw_ef_search=default (40)`.
 - **version** — prints the exact commit and build time via Go's own
   `runtime/debug.ReadBuildInfo()` (VCS stamping is on by default since Go
   1.18 — no ldflags wiring, no version file to keep in sync, no CI change
