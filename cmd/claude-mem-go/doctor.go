@@ -159,6 +159,23 @@ func cmdDoctor(args []string) int {
 		// file. Critical, because every automatic capture path goes
 		// through the daemon: whatever this command reads is not where
 		// anything is being written.
+		// A daemon running older code than this binary is the same class
+		// of problem as the store mismatch below, and was found the same
+		// way — by running the loop end to end. `start` now replaces such
+		// a daemon automatically, so seeing this here means that did not
+		// happen: the daemon predates the version field, or the
+		// replacement failed. Informational rather than critical for
+		// exactly that reason — a stale daemon still captures, it just
+		// may apply older rules.
+		if stats.Version != "" && stats.Version != buildVersionString(buildInfo) {
+			fmt.Printf("… the worker daemon is running an older build than this binary:\n")
+			fmt.Printf("    worker:    %s\n", stats.Version)
+			fmt.Printf("    this cmd:  %s\n", buildVersionString(buildInfo))
+			fmt.Printf("    It applies the rules it started with — including how project names are derived —\n")
+			fmt.Printf("    so writes and reads can silently disagree. SessionStart replaces it automatically;\n")
+			fmt.Printf("    if this persists, stop the daemon (pid %d) and let the next session respawn it.\n", stats.PID)
+		}
+
 		if stats.Store != "" && stats.Store != redactedDBPath {
 			fmt.Printf("✘ the worker daemon is writing to a DIFFERENT store than this command reads:\n")
 			fmt.Printf("    worker:    %s\n", stats.Store)

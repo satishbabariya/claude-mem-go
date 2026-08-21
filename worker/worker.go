@@ -58,6 +58,11 @@ type Daemon struct {
 	SocketPath    string
 	MaxConcurrent int // mirrors CLAUDE_MEM_MAX_CONCURRENT_AGENTS's default of 2
 	Log           *logging.Logger
+	// Version is the build string of the binary running this daemon,
+	// supplied by the caller (cmd/worker) because runtime/debug's build
+	// info belongs to the main package. Published in Stats so a stale
+	// daemon is detectable — see Stats.Version.
+	Version string
 	// StatsPath is where Stats snapshots are written after every processed
 	// event — see stats.go. Empty disables writing (tests mostly want this;
 	// a real daemon always wants it, so cmd's daemon construction sets it to
@@ -116,6 +121,8 @@ func (d *Daemon) Stats() Stats {
 	// to a world-readable file in the user's home, and a Postgres DSN
 	// carries a password.
 	snap.Store = store.RedactDSN(d.DBPath)
+	snap.Version = d.Version
+	snap.PID = os.Getpid()
 	return snap
 }
 

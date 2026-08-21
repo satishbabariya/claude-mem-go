@@ -7,6 +7,36 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The worker daemon ran stale code indefinitely after an upgrade, and
+  that silently defeated the project-naming fix.** Found by a full-stack
+  soak rather than by any unit test: install the plugin, run real
+  sessions, inspect what actually landed. A daemon that had been up for
+  ~28 hours across sixteen commits was still applying the OLD basename
+  project naming, so a real session in `<repo>/src/auth` had its
+  observations written under project **`auth`** while the freshly built
+  SessionStart hook looked them up under **`repo`** (the git root).
+  Writes and reads disagreed silently, and a fix that unit tests all
+  passed was defeated in practice by a process that simply never
+  restarted. `start` only ever asked whether a daemon was running, never
+  *which one*, and the daemon published no version at all. `Stats` now
+  carries `Version` and `PID`, `start` gracefully replaces a daemon whose
+  build differs (SIGTERM so in-flight work drains, bounded wait so
+  SessionStart cannot hang, and the existing daemon left alone if
+  anything fails — stale-but-working beats none), and `doctor` reports
+  the mismatch. Deliberately conservative in the other direction: a
+  missing, corrupt, or version-less stats file reads as **not** stale,
+  because every daemon started before this field necessarily lacks it and
+  killing a working daemon on a guess is worse than leaving an old one
+  running. The counterweight matters as much as the fix — `start` runs on
+  every SessionStart, so a check that fired too eagerly would restart the
+  worker at the top of every session; verified that three consecutive
+  `start` calls against a matching daemon leave its pid untouched.
+  Re-running the soak afterwards passed the whole loop: session 1 from
+  `<repo>/src/auth` captured under `repo`, and session 2 from the repo
+  root recalled it — *"an auth package with a TokenTTL constant set to
+  900 seconds"* — without reading any files, which is exactly the
+  cross-directory recall the old naming made impossible.
+
 - **Log levels — 97 call sites had exactly one implicit severity.** Real
   claude-mem has had leveled logging from the start
   (`src/utils/logger.ts`: `LogLevel{DEBUG,INFO,WARN,ERROR,SILENT}` read

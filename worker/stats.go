@@ -51,6 +51,25 @@ type Stats struct {
 	// yet". Two green checks and a reassuring message, with the memory in
 	// a different file.
 	Store string `json:"store,omitempty"`
+	// Version is the daemon's own build string, and PID is its process
+	// id — together, enough to notice that the daemon is running code
+	// older than the binary everything else uses, and to do something
+	// about it.
+	//
+	// This is the same shape of gap as Store above, and was found the
+	// same way: by running the whole loop end to end rather than trusting
+	// unit tests. A daemon that had been up for ~28 hours across sixteen
+	// commits was still applying the OLD project-naming rule, so a real
+	// session in a git subdirectory had its observations written under
+	// project "auth" (basename) while the freshly-built SessionStart hook
+	// looked them up under "repo" (git root). Writes and reads disagreed,
+	// silently, and the project-naming fix was defeated by a process that
+	// simply never restarted.
+	//
+	// `start` only ever asked whether a daemon was running, never which
+	// one, so nothing anywhere could notice.
+	Version string `json:"version,omitempty"`
+	PID     int    `json:"pid,omitempty"`
 }
 
 // statsCounters is the daemon's live counters — atomic because process()

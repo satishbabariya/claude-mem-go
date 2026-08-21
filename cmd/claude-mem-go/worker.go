@@ -38,6 +38,7 @@ func cmdWorker(args []string) int {
 		MaxConcurrent:    *maxConcurrent,
 		Log:              openLog("worker.log"),
 		StatsPath:        *statsPath,
+		Version:          currentBuildVersion(),
 		MetricsAddr:      *metricsAddr,
 		ExcludedProjects: *excludedProjects,
 	}

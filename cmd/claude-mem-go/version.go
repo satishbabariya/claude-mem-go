@@ -60,3 +60,12 @@ func cmdVersion(args []string) int {
 	fmt.Println(buildVersionString(info))
 	return 0
 }
+
+// currentBuildVersion is this binary's build string, used wherever one
+// component needs to compare itself against another — notably the worker
+// daemon, which is long-lived and can end up running code older than
+// every short-lived hook process around it.
+func currentBuildVersion() string {
+	info, _ := debug.ReadBuildInfo()
+	return buildVersionString(info)
+}

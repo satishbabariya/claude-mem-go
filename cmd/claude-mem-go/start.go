@@ -3,8 +3,10 @@ package main
 import (
 	"claude-mem-go/logging"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"claude-mem-go/store"
@@ -20,6 +22,11 @@ func cmdStart(args []string) int {
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings (empty to skip)")
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
+	// Forwarded to the spawned worker, and read here to identify the
+	// daemon already running on -socket. Symmetric with the worker's and
+	// doctor's own -stats flags: all three must be able to name the same
+	// file, or they end up describing different daemons.
+	statsPath := fs.String("stats", worker.DefaultStatsPath(), "worker stats file (forwarded to the spawned worker, and read to detect a stale one)")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	metricsAddr := fs.String("metrics-addr", "", "if set, the spawned worker serves Prometheus metrics at http://<addr>/metrics")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns forwarded to the spawned worker's "+
@@ -29,8 +36,36 @@ func cmdStart(args []string) int {
 	l := openLog("start.log")
 
 	if worker.IsRunning(*socketPath) {
-		l.Printf("worker already running at %s, nothing to do", *socketPath)
-		return 0
+		// "Running" was the only question asked here, never "which one".
+		// The daemon is the single long-lived process in this system, so
+		// after an upgrade it keeps applying OLD rules indefinitely while
+		// every short-lived hook around it runs the new binary.
+		//
+		// Found by running the whole loop end to end: a daemon up for ~28
+		// hours across sixteen commits was still using the pre-git-root
+		// project naming, so a real session in a subdirectory wrote its
+		// observations under project "auth" (basename) while the fresh
+		// SessionStart hook looked them up under "repo" (git root).
+		// Writes and reads silently disagreed, and the naming fix was
+		// defeated by a process that simply never restarted.
+		//
+		// Replacing it is safe at exactly this moment: the daemon drains
+		// in-flight work on SIGTERM (see its shutdown path), and
+		// SessionStart is the start of a new session, not the middle of
+		// one. If anything about the replacement fails, the existing
+		// daemon is left alone — a stale daemon still captures, so
+		// degrading to "stale but working" beats risking none at all.
+		if stale, running, pid := staleDaemon(*statsPath); stale {
+			l.Warnf("worker at %s is running an older build (%s); this binary is %s — replacing it",
+				*socketPath, running, currentBuildVersion())
+			if err := stopDaemon(pid, *socketPath); err != nil {
+				l.Warnf("could not stop the stale worker (pid=%d): %v — leaving it running", pid, err)
+				return 0
+			}
+		} else {
+			l.Printf("worker already running at %s, nothing to do", *socketPath)
+			return 0
+		}
 	}
 
 	lockPath := *socketPath + ".lock"
@@ -65,6 +100,9 @@ func cmdStart(args []string) int {
 	if *metricsAddr != "" {
 		workerArgs = append(workerArgs, "-metrics-addr", *metricsAddr)
 	}
+	if *statsPath != "" {
+		workerArgs = append(workerArgs, "-stats", *statsPath)
+	}
 	if *excludedProjects != "" {
 		workerArgs = append(workerArgs, "-excluded-projects", *excludedProjects)
 	}
@@ -86,4 +124,52 @@ func waitForReady(socketPath string, l *logging.Logger) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	l.Printf("WARNING: worker did not become ready within 5s")
+}
+
+// staleDaemon reports whether the daemon described by statsPath is running
+// a different build than this binary, along with that build string and its
+// pid.
+//
+// Deliberately conservative: anything unknown means "not stale". A stats
+// file that is missing, unreadable, or predates the version field (as every
+// daemon started before it necessarily does) reports false, because
+// killing a working daemon on a guess is worse than leaving a possibly-old
+// one running. The same reasoning the Stop hook's privacy check uses — an
+// unknown signal is not evidence.
+func staleDaemon(statsPath string) (stale bool, running string, pid int) {
+	st, err := worker.ReadStatsFile(statsPath)
+	if err != nil || st.Version == "" || st.PID <= 0 {
+		return false, "", 0
+	}
+	if st.Version == currentBuildVersion() {
+		return false, st.Version, st.PID
+	}
+	return true, st.Version, st.PID
+}
+
+// stopDaemon asks the daemon to shut down gracefully and waits for its
+// socket to go away, so the caller can bind a replacement without racing
+// the old process.
+//
+// SIGTERM rather than SIGKILL: the daemon drains in-flight observations on
+// a clean signal, and losing whatever was queued would trade a stale-code
+// problem for a lost-memory one.
+func stopDaemon(pid int, socketPath string) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		return err
+	}
+	// Bounded: a daemon that will not exit must not hang SessionStart,
+	// which is on the user's critical path.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !worker.IsRunning(socketPath) {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("still running %s after SIGTERM", 10*time.Second)
 }
