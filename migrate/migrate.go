@@ -26,6 +26,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -57,7 +58,32 @@ func PostgresPlaceholder(argIndex int) string { return fmt.Sprintf("$%d", argInd
 // it succeeds, so a failure partway through leaves already-applied
 // migrations correctly marked and retries pick up where it stopped rather
 // than re-running everything.
+//
+// "Ascending Version order" was, until found by hand, only ever true if
+// the caller happened to list migrations in that order in the slice
+// literal — nothing here actually sorted them. A migrations slice with
+// version 2 listed before version 1 applied version 2 FIRST, silently
+// violating the one guarantee this whole package exists to provide.
+// Sorted explicitly now, independent of slice order.
+//
+// A duplicate Version number was an even more serious silent failure:
+// once the first migration with that version got recorded as applied,
+// the second one sharing the same number was skipped by the "already
+// applied?" check — with no error, indistinguishable from having run
+// correctly. Rejected outright now rather than silently dropping one.
 func Run(ctx context.Context, db *sql.DB, ph Placeholder, migrations []Migration) error {
+	sorted := make([]Migration, len(migrations))
+	copy(sorted, migrations)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Version < sorted[j].Version })
+	seen := map[int]string{}
+	for _, m := range sorted {
+		if prior, ok := seen[m.Version]; ok {
+			return fmt.Errorf("duplicate migration version %d: %q and %q both claim it", m.Version, prior, m.Name)
+		}
+		seen[m.Version] = m.Name
+	}
+	migrations = sorted
+
 	if _, err := db.ExecContext(ctx, createTrackingTableSQL); err != nil {
 		return fmt.Errorf("create schema_migrations tracking table: %w", err)
 	}

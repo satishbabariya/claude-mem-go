@@ -108,6 +108,20 @@ docker compose up -d
   `content_hash` column and the `schema_migrations` table itself) correctly
   migrates forward on reopen, and a live Postgres container correctly
   records its migration once and doesn't re-apply it on a second `Open`.
+  `migrate.Run` itself had two real bugs, found by hand rather than
+  assumed correct just because every migration so far happened to avoid
+  triggering them: it documented applying migrations in "ascending
+  Version order" but never actually sorted them — a migrations slice
+  listing version 2 before version 1 applied version 2 *first*, silently
+  violating the one guarantee this whole package exists to provide. Worse,
+  two migrations accidentally sharing a Version number didn't error at
+  all: once the first one got recorded as applied, the "already applied?"
+  check silently skipped the second one forever, indistinguishable from
+  having run correctly. Fixed by sorting explicitly before applying and
+  rejecting duplicate version numbers outright, verified against both real
+  backends (including the live Postgres container, in a throwaway schema
+  cleaned up afterward, confirming migrations still apply in the correct
+  order there too).
 
 - **worker** — a persistent daemon, meant to be started once (see `start`)
   and left running. Listens on a Unix socket, processes PostToolUse

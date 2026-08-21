@@ -140,3 +140,71 @@ func TestRunStopsAtFirstFailureWithoutRecordingIt(t *testing.T) {
 		t.Fatalf("a failed migration was recorded as applied: %v", got)
 	}
 }
+
+// TestRunAppliesInVersionOrderRegardlessOfSliceOrder is the regression
+// test for a real bug found by hand: "ascending Version order" was, until
+// this fix, only ever true if the caller happened to list migrations in
+// that order in the slice literal — Run() itself never sorted them. A
+// migrations slice with version 2 listed before version 1 applied version
+// 2 FIRST, silently violating the one guarantee this whole package exists
+// to provide (every real caller today happens to list migrations in
+// order, which is exactly why this went unnoticed).
+func TestRunAppliesInVersionOrderRegardlessOfSliceOrder(t *testing.T) {
+	db := openTestDB(t)
+	var order []int
+	migrations := []Migration{
+		{Version: 3, Name: "third", Apply: func(ctx context.Context, db *sql.DB) error {
+			order = append(order, 3)
+			return nil
+		}},
+		{Version: 1, Name: "first", Apply: func(ctx context.Context, db *sql.DB) error {
+			order = append(order, 1)
+			return nil
+		}},
+		{Version: 2, Name: "second", Apply: func(ctx context.Context, db *sql.DB) error {
+			order = append(order, 2)
+			return nil
+		}},
+	}
+	if err := Run(context.Background(), db, SQLitePlaceholder, migrations); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []int{1, 2, 3}
+	if len(order) != len(want) {
+		t.Fatalf("applied order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("applied order = %v, want %v (ascending version, not slice order)", order, want)
+		}
+	}
+}
+
+// TestRunRejectsDuplicateVersions is the regression test for a more
+// serious silent failure the same missing check allowed: before this fix,
+// two migrations accidentally sharing a Version number didn't error —
+// once the first one got recorded as applied, the "already applied?"
+// check silently skipped the second one forever, with nothing
+// distinguishing that from having run correctly. Confirmed directly: the
+// second migration's Apply was never even called.
+func TestRunRejectsDuplicateVersions(t *testing.T) {
+	db := openTestDB(t)
+	var ran []string
+	migrations := []Migration{
+		{Version: 1, Name: "first-a", Apply: func(ctx context.Context, db *sql.DB) error {
+			ran = append(ran, "first-a")
+			return nil
+		}},
+		{Version: 1, Name: "first-b-a-different-migration", Apply: func(ctx context.Context, db *sql.DB) error {
+			ran = append(ran, "first-b-a-different-migration")
+			return nil
+		}},
+	}
+	err := Run(context.Background(), db, SQLitePlaceholder, migrations)
+	if err == nil {
+		t.Fatal("Run with two migrations sharing version 1: want an error, got nil")
+	}
+	if len(ran) != 0 {
+		t.Fatalf("Run partially executed duplicate-version migrations before erroring: %v — want it to fail the up-front check before applying anything", ran)
+	}
+}

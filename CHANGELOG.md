@@ -62,6 +62,18 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`migrate.Run` had two real bugs in the framework both backends'
+  schema changes depend on**, found by hand rather than assumed correct:
+  it documented "ascending Version order" but never actually sorted
+  migrations — a slice listing version 2 before version 1 applied version
+  2 *first*. Worse, two migrations accidentally sharing a Version number
+  didn't error: the second one was silently skipped forever once the
+  first got recorded as applied, indistinguishable from having run
+  correctly. Fixed by sorting explicitly and rejecting duplicate versions
+  outright. Every real migration so far happened to be listed in order
+  with unique versions, which is exactly why this went unnoticed until
+  audited directly. Verified against both real backends, including the
+  live Postgres container in a throwaway schema.
 - **`search`/`search_observations` gained a `type` filter** — the small,
   fixed observation-type vocabulary this project's observer actually
   writes (`discovery`/`change`/`decision`/`summary`/`manual`), the same
