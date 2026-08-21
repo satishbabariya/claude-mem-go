@@ -66,6 +66,63 @@ var migrations = []migrate.Migration{
 			return err
 		},
 	},
+	{
+		// ObservationsForFile is the PreToolUse file-context read, and
+		// that hook is async:false with a 10s timeout — it BLOCKS the
+		// Read tool call, so its cost is latency the user actually waits
+		// through, on every single file read.
+		//
+		// It had no usable index. `EXISTS (SELECT 1 FROM json_each(...))`
+		// cannot use one: the project index narrows to that project's
+		// rows and then json_each is run over every one of them, twice.
+		// Measured on a real 50,000-row single-project SQLite store:
+		// 46.8ms for a matching file, 46.2ms for one matching nothing
+		// (the cost is the scan, not the result), and 94.3ms for a path
+		// every row shares. It grows linearly with project size.
+		//
+		// Postgres solved the same query with GIN indexes on the jsonb
+		// columns (migration 4 there). SQLite has no equivalent — you
+		// cannot index the output of a table-valued function — so the
+		// paths are denormalized into a real indexed table.
+		//
+		// Kept in sync by trigger rather than from Go, deliberately: it
+		// then holds for every write path that exists or ever will
+		// (Insert, ImportRow, anything else), which the FTS index here
+		// already does the same way. Deletes are handled by ON DELETE
+		// CASCADE, which actually fires because the DSN sets
+		// _foreign_keys=on — see sqliteDSNParams, where that is already
+		// load-bearing for observation_vectors.
+		Version: 6,
+		Name:    "index observation file paths for the file-context read",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			_, err := db.ExecContext(ctx, `
+				CREATE TABLE IF NOT EXISTS observation_files (
+					observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+					path TEXT NOT NULL,
+					PRIMARY KEY (observation_id, path)
+				);
+				CREATE INDEX IF NOT EXISTS idx_observation_files_path ON observation_files(path);
+
+				DROP TRIGGER IF EXISTS observation_files_ai;
+				CREATE TRIGGER observation_files_ai AFTER INSERT ON observations BEGIN
+					INSERT OR IGNORE INTO observation_files(observation_id, path)
+						SELECT new.id, value FROM json_each(new.files_read)
+						UNION
+						SELECT new.id, value FROM json_each(new.files_modified);
+				END;
+
+				-- Backfill every row that predates the trigger. INSERT OR
+				-- IGNORE makes re-running harmless, which matters because
+				-- migrations are required to be idempotent here (the
+				-- SessionStart race retries the whole sequence).
+				INSERT OR IGNORE INTO observation_files(observation_id, path)
+					SELECT o.id, j.value FROM observations o, json_each(o.files_read) j
+					UNION
+					SELECT o.id, j.value FROM observations o, json_each(o.files_modified) j;
+			`)
+			return err
+		},
+	},
 }
 
 func runMigrations(db *sql.DB) error {

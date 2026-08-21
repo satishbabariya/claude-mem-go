@@ -406,17 +406,22 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]SearchResult, error)
 // doc history).
 func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error) {
 	limit = clampNegativeLimit(limit)
+	// Joins the indexed path table rather than running json_each over
+	// every row in the project — see migration 6 for the measurements
+	// (46.8ms -> the join, on a hook that BLOCKS every Read).
+	//
+	// No DISTINCT: observation_files is keyed (observation_id, path), so
+	// filtering one path yields at most one row per observation. The old
+	// query needed it only because two EXISTS clauses could both hold;
+	// keeping it here would re-introduce a sort this shape does not need.
 	rows, err := s.db.Query(`
-		SELECT DISTINCT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
+		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
-		FROM observations o
-		WHERE o.project = ?
-		  AND (
-		    EXISTS (SELECT 1 FROM json_each(o.files_read) WHERE json_each.value = ?)
-		    OR EXISTS (SELECT 1 FROM json_each(o.files_modified) WHERE json_each.value = ?)
-		  )
+		FROM observation_files f
+		JOIN observations o ON o.id = f.observation_id
+		WHERE f.path = ? AND o.project = ?
 		ORDER BY o.created_at_epoch DESC, o.id DESC
-		LIMIT ?`, project, filePath, filePath, limit)
+		LIMIT ?`, filePath, project, limit)
 	if err != nil {
 		return nil, fmt.Errorf("observations for file %q: %w", filePath, err)
 	}

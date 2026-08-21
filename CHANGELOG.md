@@ -7,6 +7,38 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The same file-lookup problem existed on SQLite — the default backend
+  — and needed a different fix.** Fixing Postgres with GIN indexes and
+  not checking SQLite left the job half done, so it was measured: a real
+  50,000-row single-project SQLite store took **46.8ms** for a matching
+  file, **46.2ms** for one matching nothing (the cost is the scan, not
+  the result), and **94.3ms** for a path every row shares. That is
+  latency users actually wait through — the PreToolUse hook is
+  `async: false`, so it blocks every `Read` tool call — and it grew
+  linearly with project size. SQLite has no GIN equivalent: you cannot
+  index the output of a table-valued function, so
+  `EXISTS (SELECT 1 FROM json_each(...))` was unindexable by
+  construction. Migration 6 denormalizes the paths into a real
+  `observation_files(observation_id, path)` table with an index on
+  `path`, kept in sync by trigger rather than from Go — deliberately, so
+  it holds for every write path that exists or ever will, the same way
+  the FTS index here already works — with `ON DELETE CASCADE` for prune
+  (which fires only because the DSN already sets `_foreign_keys=on`) and
+  a backfill for existing stores. Results: a matching file **46.8ms →
+  0.42ms**, a non-matching one **46.2ms → 0.07ms**. `SELECT DISTINCT` was
+  dropped along with it, since the new key makes duplicates impossible —
+  though measuring first showed DISTINCT was only ~4ms of the 47ms, so it
+  was never the real problem. **The honest residual:** cost is now
+  proportional to *matches* rather than to project size, which is the
+  correct scaling property but not free — a file appearing in 20% of a
+  50,000-row project (10,000 matches) still takes 15.3ms, and 50% takes
+  39.2ms, because returning the newest 50 of N matches means sorting N.
+  Verified the two backends return identical results across six cases
+  including a path in both `files_read` and `files_modified`, a
+  modified-only path, and an observation with no files at all; and the
+  real development SQLite store migrated cleanly, 57 observations
+  preserved with 13 paths indexed.
+
 - **Measured the Postgres backend at 250,000 rows for the first time,
   and three real problems only appeared there.** Everything before this
   was verified at thousands of rows, which cannot exercise the planner
