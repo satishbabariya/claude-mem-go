@@ -574,6 +574,30 @@ process (this project doesn't cut tagged releases on a schedule).
   compiled binary, three seeded observations with real distinct types,
   and a real `search_observations` call with a comma-separated `type`
   argument returning exactly the expected two.
+- **Fixed: `timeline`'s default depth was 3, not real claude-mem's
+  actual 10 — and it silently ignored a real caller mistake.**
+  `SearchManager.timeline` defaults `depth_before`/`depth_after` to 10
+  when omitted (its own tool schema's description text says "default
+  3," a real doc/behavior mismatch inside claude-mem itself — an actual
+  call gets 10, not 3). This port's docs and code agreed with each
+  other, just both at the wrong number, meaning the "call `timeline`
+  with just an anchor" pattern this port's own `important_workflow`
+  text recommends returned under a third of the real context. Also
+  added the explicit "cannot provide both anchor and query" error real
+  claude-mem's `timeline` returns — this port used to silently prefer
+  `anchor` and ignore `query` with no error, which could mask a genuine
+  caller mistake instead of surfacing it. Default changed to 10
+  (matching real claude-mem's actual runtime behavior, not its own stale
+  doc string) and the dual-argument case now returns `isError` instead
+  of silently doing something other than what was asked. Verified with
+  new tests — 21 seeded observations confirming an anchor-only call with
+  no depth arguments returns all 21, not 7, and a call with both
+  `anchor` and `query` returning `isError` — each confirmed genuine by
+  temporarily reverting the default to 3 (or removing the dual-argument
+  check) and watching the corresponding test fail before restoring the
+  fix. Verified live end to end too: the real compiled binary, 21 real
+  seeded observations, a real `timeline` call with only `anchor` given
+  returning exactly all 21 rows.
 
 ## 0.2.0 — 2026-08-20
 

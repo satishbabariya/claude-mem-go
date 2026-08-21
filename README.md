@@ -1582,6 +1582,41 @@ binary, three seeded observations backed by real distinct types, and a
 real `search_observations` call with `type="discovery,decision"`
 correctly returning exactly those two and excluding the third.
 
+### `timeline`'s default depth was 3, not real claude-mem's actual 10 — and it silently ignored a genuine caller mistake
+
+`timeline`'s `depth_before`/`depth_after` defaulted to 3 when omitted.
+Real claude-mem's own `SearchManager.timeline` defaults both to **10**
+(`depth_before != null ? Number(depth_before) : 10`) — a real
+doc/behavior mismatch inside claude-mem itself, since its own tool
+schema's description text says "default 3," but an actual call that
+omits both arguments gets 10 back. This port's docs and behavior agreed
+with each other, just both at the wrong number: the identical "call
+`timeline` with just an anchor" pattern this port's own
+`important_workflow` text recommends returned under a third of the
+surrounding context a real claude-mem call would.
+
+Separately, real claude-mem's `timeline` explicitly errors when a caller
+provides both `anchor` and `query` ("Cannot provide both... Use one or
+the other") — this port silently preferred `anchor` and ignored `query`
+with no error at all, which could mask a genuine mistake (e.g. a stale
+`query` left over from copy-pasting a different call) instead of
+surfacing it.
+
+Fixed both: the default is now 10 (matching real claude-mem's actual
+runtime behavior, not its own stale doc string — there was no reason to
+deliberately reproduce a bug in claude-mem's own docs into a fresh
+codebase), and providing both `anchor` and `query` now returns a clear
+tool error instead of silently doing something other than what was
+asked. Verified with new tests: seeded 21 observations and confirmed an
+anchor-only call with no depth arguments returns all 21 (10 before + the
+anchor + 10 after), not 7 (3+anchor+3); confirmed a call with both
+`anchor` and `query` set returns `isError`. Each confirmed as a genuine
+test, not a tautology, by temporarily reverting the default back to 3 (or
+removing the dual-argument check) and watching the corresponding test
+fail before restoring the fix. Verified live end to end too: the real
+compiled binary, 21 real seeded observations, and a real `timeline` call
+with only `anchor` given returning exactly all 21 rows.
+
 ## Quick start
 
 ```sh

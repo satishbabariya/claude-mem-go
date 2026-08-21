@@ -258,8 +258,8 @@ func tools() []toolDef {
 				"properties": map[string]any{
 					"anchor":       map[string]any{"type": "integer", "description": "Observation ID to center the timeline on"},
 					"query":        map[string]any{"type": "string", "description": "Find the anchor automatically via keyword search, if \"anchor\" isn't given"},
-					"depth_before": map[string]any{"type": "integer", "description": "Observations to include before the anchor (default 3, max 100)"},
-					"depth_after":  map[string]any{"type": "integer", "description": "Observations to include after the anchor (default 3, max 100)"},
+					"depth_before": map[string]any{"type": "integer", "description": "Observations to include before the anchor (default 10, max 100)"},
+					"depth_after":  map[string]any{"type": "integer", "description": "Observations to include after the anchor (default 10, max 100)"},
 					"project":      map[string]any{"type": "string", "description": "Look at a different project instead of the current one"},
 				},
 			},
@@ -722,11 +722,24 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 	if anchor == 0 && query == "" {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline requires either an \"anchor\" (observation id) or a \"query\" to find one"}}}
 	}
+	if anchor != 0 && query != "" {
+		// Matches real claude-mem's own SearchManager.timeline explicit
+		// error for this — this port used to silently prefer anchor and
+		// ignore query with no error at all, which could hide a genuine
+		// caller mistake (e.g. a stale query left over from copy-pasting
+		// a different call) rather than surfacing it.
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: cannot provide both \"anchor\" and \"query\" — use one or the other"}}}
+	}
+	// 10, not 3: real claude-mem's own SearchManager.timeline defaults
+	// depth_before/depth_after to 10 when omitted (its tool schema's own
+	// description text says "default 3," but that's a real doc/behavior
+	// mismatch in claude-mem itself — this matches what actually happens
+	// on a real call, not the stale doc string).
 	if depthBefore <= 0 {
-		depthBefore = 3
+		depthBefore = 10
 	}
 	if depthAfter <= 0 {
-		depthAfter = 3
+		depthAfter = 10
 	}
 
 	if anchor == 0 {

@@ -744,6 +744,77 @@ func TestToolsCallTimelineRequiresAnchorOrQuery(t *testing.T) {
 	}
 }
 
+// TestToolsCallTimelineRejectsBothAnchorAndQuery matches real claude-mem's
+// own SearchManager.timeline, which explicitly errors on this combination
+// rather than silently preferring one — this port used to silently prefer
+// anchor and ignore query with no error at all, which could mask a real
+// caller mistake (e.g. a stale query left over from copy-pasting a
+// different call) instead of surfacing it.
+func TestToolsCallTimelineRejectsBothAnchorAndQuery(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "anchor candidate"}, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d,"query":"anything"}}}`, res.ID),
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("timeline with both anchor and query: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallTimelineDefaultDepthIsTen locks in a real gap: this port's
+// default depth_before/depth_after used to be 3 when omitted; real
+// claude-mem's own SearchManager.timeline defaults both to 10 (its own
+// tool schema's description text says "default 3," a real doc/behavior
+// mismatch in claude-mem itself, but this matches what a real call
+// actually returns, not the stale doc string). Seeds enough observations
+// on both sides of the anchor to distinguish "10" from "3" unambiguously.
+func TestToolsCallTimelineDefaultDepthIsTen(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var anchorID int64
+	for i := 0; i < 21; i++ {
+		title := fmt.Sprintf("item-%02d", i)
+		res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", title, "x"),
+			store.Observation{Type: "discovery", Title: title}, 0)
+		if err != nil {
+			t.Fatalf("seed %s: %v", title, err)
+		}
+		if i == 10 {
+			anchorID = res.ID
+		}
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d}}}`, anchorID),
+	})
+	text := toolCallText(t, resp[0])
+	// item-00 is exactly 10 before the anchor (item-10) and item-20 is
+	// exactly 10 after it — both must be present with no explicit depth
+	// given, and there is nothing further out to accidentally include.
+	if !strings.Contains(text, "item-00") || !strings.Contains(text, "item-20") {
+		t.Fatalf("timeline with no explicit depth = %q, want item-00 and item-20 present (default depth 10, not 3)", text)
+	}
+	if strings.Count(text, "item-") != 21 {
+		t.Fatalf("timeline with no explicit depth returned %d rows, want exactly 21 (10 before + anchor + 10 after)", strings.Count(text, "item-"))
+	}
+}
+
 // TestToolsCallAddObservationPersistsAndIsFindable is add_observation's
 // core contract: the write actually lands, scoped to the server's current
 // project, and is findable through the existing read tools afterward —
