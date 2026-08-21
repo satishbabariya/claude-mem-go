@@ -7,6 +7,38 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Measured the Postgres backend at 250,000 rows for the first time,
+  and three real problems only appeared there.** Everything before this
+  was verified at thousands of rows, which cannot exercise the planner
+  the way real scale does. (1) `ObservationsForFile` — the read behind
+  the PreToolUse hook, so it runs before *every* `Read` tool call — had
+  no usable index: the jsonb key-exists test was a post-filter over every
+  row in the project, 47.7ms with a plan reading `Rows Removed by Filter:
+  4687`, scaling with project size rather than with matches. Migration 4
+  adds GIN indexes on `files_read`/`files_modified` (default `jsonb_ops`,
+  since `jsonb_path_ops` does not support the key-exists operator and
+  would build cleanly then never be chosen — there is a test asserting
+  the *plan*, not just the index's existence, and break/restore confirms
+  it catches both the missing-index and wrong-opclass cases): 12.9ms.
+  (2) At the container's stock 64MB `maintenance_work_mem`, pgvector
+  itself reported "hnsw graph no longer fits into maintenance_work_mem
+  after 16759 tuples" — index builds degrade at seventeen thousand rows,
+  while the README presents this container as the way to run ANN search
+  at scale. Raised to 512MB: spill point moves to 141,896 tuples, build
+  time 73s → 40s. It still spills at 250k, which is stated rather than
+  glossed. (3) Raising it was impossible until `shm_size: 1gb` was set,
+  because Docker's default 64MB `/dev/shm` made the build die outright
+  with `could not resize shared memory segment ... No space left on
+  device`, an error giving no hint that the container's shm size is the
+  cause. Verified the dev store survived the container recreate (7,275
+  rows before and after). Headline numbers now in the README: ANN top-10
+  at **1.0ms** unscoped and **2.0ms** project-scoped over 250k rows, with
+  `EXPLAIN` confirming the HNSW index is genuinely chosen — which
+  small-scale tests cannot show, since the planner will not pick it on a
+  few thousand rows. Recall is deliberately not quoted: the vectors are
+  randomly generated, and a recall figure from synthetic vectors would
+  say nothing about real embeddings.
+
 - **Project identity was `filepath.Base(cwd)`, which both fragmented and
   collided memory.** Duplicated at six call sites, with no git awareness
   anywhere in the port. Two distinct failure modes, both demonstrated

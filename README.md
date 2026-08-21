@@ -878,6 +878,59 @@ deliberately not wired: `stop` builds its summary from observations
 already persisted per tool call, not from the live context, so compaction
 does not destroy anything it needs.
 
+### Measured at scale: 250,000 observations, 768-dimension vectors
+
+"At scale" was claimed here long before it was demonstrated, so it was
+measured: a 250,000-row corpus in the real Docker container, built
+through the app's own schema and migrations, queried through the real Go
+code paths rather than by hand-written SQL. Table plus indexes came to
+~1.1GB (the HNSW index alone is 531MB).
+
+| read path | latency |
+|---|---|
+| `SemanticSearch` unscoped, top 10 (ANN) | **1.0ms** |
+| `SemanticSearch` scoped to a project | **2.0ms** |
+| `RecentByProject(20)` | 0.7ms |
+| `CountByProject` | 0.5ms |
+| `Search` enumerate + date window | 10.5ms |
+| `Search` enumerate at offset 5000 | 3.3ms |
+| `Search` keyword, project-scoped | 12.3ms |
+| `Search` keyword, unscoped | 70.9ms |
+
+`EXPLAIN` confirms the HNSW index is genuinely chosen at this size
+(`Index Scan using idx_observations_embedding_hnsw`), which small-scale
+tests cannot show — the planner will not pick it on a few thousand rows.
+The one number worth watching is unscoped keyword search at 70.9ms: the
+term used matches roughly a fifth of the corpus, and ranking 50,000
+matches by `ts_rank_cd` is inherently more work than ranking the 5,000 a
+project scope leaves. Scoped search, which is what the hooks actually
+run, is 12.3ms.
+
+Recall is deliberately **not** quoted. These vectors are randomly
+generated, and a recall figure measured against synthetic vectors says
+nothing about recall on real embeddings.
+
+Three real problems surfaced only at this size, all now fixed:
+
+- **`ObservationsForFile` had no usable index.** It runs before every
+  `Read` tool call, and the jsonb containment test was a post-filter over
+  every row in the project — 47.7ms with a plan reading `Rows Removed by
+  Filter: 4687`. Migration 4 adds GIN indexes on `files_read` and
+  `files_modified`: 12.9ms, and the cost now scales with matches instead
+  of with project size.
+- **`maintenance_work_mem` was far too small.** At the stock 64MB
+  pgvector reported *"hnsw graph no longer fits into maintenance_work_mem
+  after 16759 tuples"* — index builds degrade at seventeen thousand rows.
+  Raised to 512MB in `docker-compose.yml`, which moves the spill point to
+  141,896 tuples and cuts the 250k build from 73s to 40s. It still spills
+  at 250k, so a real deployment should go higher again; the point is that
+  the shipped default is not a starting point.
+- **Docker's default 64MB `/dev/shm` made raising it impossible.**
+  Postgres puts parallel workers' shared memory there, so the build died
+  with `could not resize shared memory segment ... No space left on
+  device` — an error whose text gives no hint that the container's shm
+  size is the cause. `shm_size: 1gb` is now set explicitly.
+
 ### The handler diff against real claude-mem is exhausted
 
 Recorded so it isn't re-mined. Real claude-mem's hook logic lives in

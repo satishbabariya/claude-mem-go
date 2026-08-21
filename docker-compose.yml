@@ -10,6 +10,45 @@ services:
       - "55432:5432"
     volumes:
       - claude_mem_go_pgdata:/var/lib/postgresql/data
+
+    # Docker's default /dev/shm is 64MB, and Postgres puts parallel
+    # workers' shared memory there. Without this, raising
+    # maintenance_work_mem does not merely fail to help — the HNSW build
+    # dies outright with `could not resize shared memory segment ... No
+    # space left on device`, an error whose text gives no hint that the
+    # container's shm size is the cause. Measured here before it was set.
+    shm_size: 1gb
+
+    # Untuned defaults are not adequate for the workload this project
+    # documents. Measured on a real 250,000-row corpus with 768-dimension
+    # vectors, at the stock 64MB maintenance_work_mem, pgvector itself
+    # reported: "hnsw graph no longer fits into maintenance_work_mem after
+    # 16759 tuples / Building will take significantly more time." So the
+    # index build degrades at roughly seventeen thousand rows — well
+    # inside what any real memory store reaches — while README.md
+    # presents this container as the way to run "real ANN vector search at
+    # scale."
+    #
+    # Sized for the ~7.7GB Docker VM this was measured on, and
+    # deliberately conservative rather than maximal, since the container
+    # shares that VM with everything else the developer is running:
+    #   shared_buffers        512MB  (~7% of the VM)
+    #   maintenance_work_mem  512MB  (HNSW builds are bound by this)
+    #   work_mem               16MB  (per sort/hash node, not per query)
+    #   effective_cache_size    3GB  (a planner hint; reserves nothing)
+    # Raise them for a real deployment on dedicated hardware; the point
+    # here is that the shipped defaults are not a starting point.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - effective_cache_size=3GB
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U claudemem -d claudemem"]
       interval: 2s

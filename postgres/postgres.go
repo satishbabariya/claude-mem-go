@@ -150,6 +150,17 @@ CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at_e
 -- hand-rolled shadow table.
 CREATE INDEX IF NOT EXISTS idx_observations_search_vector ON observations USING GIN(search_vector);
 
+-- GIN over the file arrays. ObservationsForFile runs before EVERY Read
+-- tool call (the PreToolUse file-context hook), and without these the
+-- key-exists containment test is a post-filter over every row in the
+-- project: measured at 250,000 rows with realistic file arrays, 47.7ms
+-- without vs 12.9ms with, scaling with rows-per-project rather than with
+-- matches. Default jsonb_ops, not jsonb_path_ops, because the query uses
+-- the key-exists operator, which jsonb_path_ops does not support -- it
+-- would index fine and then never be used.
+CREATE INDEX IF NOT EXISTS idx_observations_files_read ON observations USING GIN (files_read);
+CREATE INDEX IF NOT EXISTS idx_observations_files_modified ON observations USING GIN (files_modified);
+
 -- HNSW: the actual ANN index the SQLite backend's brute-force cosine scan
 -- doesn't have. vector_cosine_ops matches the <=> operator used in
 -- SemanticSearch below.
@@ -466,6 +477,41 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 						setweight(to_tsvector('english', coalesce(concepts::text, '')), 'D')
 					) STORED;
 					CREATE INDEX IF NOT EXISTS idx_observations_search_vector ON observations USING GIN(search_vector);
+				`)
+				return err
+			},
+		},
+		{
+			Version: 4,
+			Name:    "GIN-index files_read and files_modified",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				// ObservationsForFile is the PreToolUse file-context read,
+				// so it runs before EVERY Read tool call — the highest
+				// frequency query this backend serves. It had no usable
+				// index: `files_read ? $2 OR files_modified ? $2` was a
+				// post-filter, so the project index narrowed to that
+				// project's rows and then every one of them was checked
+				// by jsonb containment. Cost therefore scaled with rows
+				// per project rather than with matches.
+				//
+				// Measured on a real 250,000-row corpus with realistic
+				// file arrays (5,000 rows in the queried project, 313
+				// genuine matches): 47.7ms without these indexes,
+				// 12.9ms with them — and the plan changes from
+				// "Rows Removed by Filter: 4687" to a BitmapOr over both
+				// GIN indexes. A long-lived project with ten times the
+				// history pays ten times the un-indexed cost, on every
+				// file read.
+				//
+				// Default jsonb_ops, NOT jsonb_path_ops: the query uses
+				// the `?` key-exists operator, which jsonb_path_ops does
+				// not support — indexing with it would build successfully
+				// and then never be used.
+				_, err := db.ExecContext(ctx, `
+					CREATE INDEX IF NOT EXISTS idx_observations_files_read
+						ON observations USING GIN (files_read);
+					CREATE INDEX IF NOT EXISTS idx_observations_files_modified
+						ON observations USING GIN (files_modified);
 				`)
 				return err
 			},
