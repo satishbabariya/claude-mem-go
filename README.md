@@ -381,7 +381,7 @@ docker compose up -d
   a dedicated test against the live container that applies `project` and
   `type` together (the exact combination the old scheme couldn't have
   handled safely if it silently drifted).
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing ten tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing eleven tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` (now also takes `type` and `offset` — see the CLI
   `search` entry above) and `semantic_search_observations` (keyword and
@@ -1448,6 +1448,53 @@ first call reached a real embedding/semantic-search attempt, the second
 was skipped as a duplicate — confirmed as a genuine fix by temporarily
 disabling the check and watching both calls independently reach a real
 embedding call before restoring it.
+
+### `recent_observations` claimed to match `SessionStart`'s output but didn't
+
+`recent_observations`' own description said it uses "the same read path
+SessionStart's automatic context injection already uses" — true of the
+underlying query (`RecentByProject`), but not of the text an MCP caller
+actually got back. `recent_observations` formats through
+`formatSearchResults`: abbreviated `[id] title (project, tool)` lines.
+The real `SessionStart` hook (`cmd/claude-mem-go/context.go`'s
+`formatContext`) produces a completely different shape — no ids, no
+project/tool annotation, prose instead of a list — and defaults to 5
+observations, not 10. An MCP client asking "what would `SessionStart`
+actually show for this project" via `recent_observations` got a
+structurally different answer than what Claude Code really saw at
+session start. This is the identical class of gap `observation_context`
+closed for `UserPromptSubmit` (added specifically because it was "the
+last hook-only read capability without an on-demand equivalent") — just
+missed for `SessionStart`.
+
+Matches real claude-mem's own `session_start_context` tool
+(`src/servers/mcp-server.ts`), whose handler calls the same
+`/api/context/inject` path its own `SessionStart` hook uses to render
+"the same text hooks inject at startup."
+
+Fixed by adding `session_start_context(limit?, project?)`, reusing
+`RecentByProject` — no new store code, only a new MCP surface over a
+read path that already existed. Its own default limit is 5, not the 10
+every other list-shaped tool here defaults to, matching
+`cmdContext`'s real default exactly: the whole point of this tool is
+returning what the real hook would actually inject, not an
+independently-chosen number. `formatSessionStartContext` duplicates
+`context.go`'s `formatContext` byte for byte — the same
+can't-import-`package main`-without-a-cycle constraint
+`formatObservationContext`'s own doc comment explains.
+
+Verified with new tests: byte-for-byte output parity against a seeded
+observation (confirmed as a genuine test, not a tautology, by
+temporarily breaking the formatter's header text and watching it fail
+before restoring it), the 5-vs-10 default-limit distinction (seeded 7
+observations, confirmed exactly 5 returned with no explicit limit), and
+project-scoping/no-project-error/empty-project-message coverage
+mirroring `recent_observations`' own existing tests. Verified live end
+to end too, past the unit tests: a real compiled binary, a real seeded
+observation, the actual `SessionStart` hook's `additionalContext` output
+(captured via the real `context` subcommand) diffed against the new
+tool's output for the same project and database through the real `mcp`
+subcommand — byte-for-byte identical.
 
 ## Quick start
 

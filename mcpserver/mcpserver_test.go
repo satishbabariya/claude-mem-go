@@ -165,6 +165,9 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	if !found["important_workflow"] {
 		t.Errorf("tools/list missing important_workflow, got %v", names)
 	}
+	if !found["session_start_context"] {
+		t.Errorf("tools/list missing session_start_context, got %v", names)
+	}
 }
 
 // TestToolsCallImportantWorkflowReturnsTheStaticGuidance is the
@@ -1019,6 +1022,144 @@ func TestToolsCallObservationContextRequiresAQuery(t *testing.T) {
 	})
 	if !toolCallIsError(t, resp[0]) {
 		t.Fatalf("observation_context with no query: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallSessionStartContextReturnsTheContextHookFormat is
+// session_start_context's counterpart to
+// TestToolsCallObservationContextReturnsThePromptContextHookFormat: locks
+// in that this tool's output is byte-for-byte identical to what
+// cmd/claude-mem-go/context.go's formatContext produces for the real
+// SessionStart hook, not merely similar to it — formatSessionStartContext
+// is a duplicate, not a shared import (see its own doc comment for why),
+// so a future divergence between the two formatters would be caught here
+// rather than silently drifting.
+func TestToolsCallSessionStartContextReturnsTheContextHookFormat(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	o := store.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
+	if _, err := st.Insert("s1", "proj", "manual", store.ContentHash("s1", "manual", "a", "b"), o, 0); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	got := toolCallText(t, resp[0])
+
+	want := "Relevant memory from previous sessions in this project:\n\n" +
+		"- switched the database to Postgres for production scale — local SQLite could not keep up with concurrent writes"
+	if got != want {
+		t.Fatalf("session_start_context =\n%q\nwant exactly (matching formatContext's own shape):\n%q", got, want)
+	}
+}
+
+// TestToolsCallSessionStartContextDefaultLimitMatchesRealHook confirms
+// this tool's own default limit is 5 — cmd/claude-mem-go/context.go's
+// real SessionStart hook default — not the 10 every other list-shaped
+// tool here defaults to, since returning what the real hook would
+// actually inject is the whole point.
+func TestToolsCallSessionStartContextDefaultLimitMatchesRealHook(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i := 0; i < 7; i++ {
+		if _, err := st.Insert("s1", "proj", "Bash",
+			store.ContentHash("s1", "Bash", fmt.Sprintf("cmd-%d", i), "out"),
+			store.Observation{Type: "discovery", Title: fmt.Sprintf("observation %d", i)}, 0); err != nil {
+			t.Fatalf("seed Insert %d: %v", i, err)
+		}
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if got := strings.Count(text, "- observation "); got != 5 {
+		t.Fatalf("session_start_context with no explicit limit returned %d observations, want 5 (real hook default), got:\n%s", got, text)
+	}
+}
+
+// TestToolsCallSessionStartContextScopesToServerProjectOrOverride mirrors
+// TestToolsCallRecentObservationsScopesToServerProjectOrOverride.
+func TestToolsCallSessionStartContextScopesToServerProjectOrOverride(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
+		store.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
+		t.Fatalf("seed proj-a: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
+		store.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
+		t.Fatalf("seed proj-b: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "project A") || strings.Contains(text, "project B") {
+		t.Fatalf("session_start_context defaulted to the server project incorrectly: %q", text)
+	}
+
+	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp2 := runLines(t, s2, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{"project":"proj-b"}}}`,
+	})
+	text2 := toolCallText(t, resp2[0])
+	if !strings.Contains(text2, "project B") || strings.Contains(text2, "project A") {
+		t.Fatalf("session_start_context with an explicit project override did not switch projects: %q", text2)
+	}
+}
+
+// TestToolsCallSessionStartContextWithNoProjectIsAnError mirrors
+// TestToolsCallRecentObservationsWithNoProjectIsAnError.
+func TestToolsCallSessionStartContextWithNoProjectIsAnError(t *testing.T) {
+	s, _ := newTestServer(t) // Project left unset
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("session_start_context with no server project and no override: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallSessionStartContextEmptyProjectSaysSo confirms the
+// zero-observations case is a clear, distinct message rather than an
+// empty tool response — the real hook would inject nothing at all here,
+// but an MCP tool call still needs to say that explicitly.
+func TestToolsCallSessionStartContextEmptyProjectSaysSo(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "empty-proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	if toolCallIsError(t, resp[0]) {
+		t.Fatalf("session_start_context for a project with zero observations: want a normal (non-error) informational result, got %v", resp[0])
+	}
+	text := toolCallText(t, resp[0])
+	if !strings.Contains(text, "No prior observations") {
+		t.Fatalf("session_start_context for an empty project = %q, want a clear no-observations message", text)
 	}
 }
 

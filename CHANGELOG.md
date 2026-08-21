@@ -487,6 +487,39 @@ process (this project doesn't cut tagged releases on a schedule).
   duplicate — confirmed as a genuine fix by temporarily disabling the
   check and watching both calls instead independently reach a real
   embedding call before restoring it.
+- **Added: MCP surface grows to 11 with `session_start_context`, closing
+  a real text-shape mismatch the audit's own prior framing had missed.**
+  `recent_observations` documented itself as "the same read path
+  SessionStart's automatic context injection already uses" — true of the
+  underlying query (`RecentByProject`), but not of the text an MCP caller
+  actually got back: `recent_observations` formats through
+  `formatSearchResults` (`[id] title (project, tool)` lines), while the
+  real `SessionStart` hook (`cmd/claude-mem-go/context.go`'s
+  `formatContext`) produces an entirely different prose block with no
+  ids or project/tool annotation and a different default limit (5, not
+  10). An MCP client asking "what would SessionStart show for this
+  project" via `recent_observations` got a structurally different answer
+  than what Claude Code actually saw at session start — the identical
+  class of gap `observation_context` was added to close for
+  `UserPromptSubmit`, just missed for `SessionStart`. Matches real
+  claude-mem's own `session_start_context` tool (`mcp-server.ts`), which
+  calls the same `/api/context/inject` path its own `SessionStart` hook
+  uses. Added `session_start_context(limit?, project?)`, reusing
+  `RecentByProject` (no new store code) with its own default limit of 5
+  — not the 10 every other list-shaped tool here defaults to — matching
+  `cmdContext`'s real default exactly, since the whole point is returning
+  what that hook would actually inject. `formatSessionStartContext`
+  duplicates `context.go`'s `formatContext` byte for byte (the same
+  can't-import-package-main constraint `formatObservationContext`
+  documents). Verified with new tests locking in byte-for-byte output
+  parity and the 5-vs-10 default-limit distinction, each confirmed as a
+  genuine test by temporarily breaking the formatter's header text and
+  watching it fail before restoring it, plus project-scoping and
+  empty-project-message coverage matching `recent_observations`' own
+  tests. Verified live end to end too: a real compiled binary, a real
+  seeded observation, the actual `SessionStart` hook's `additionalContext`
+  output diffed byte-for-byte against the new tool's output for the same
+  project and database — identical.
 
 ## 0.2.0 — 2026-08-20
 

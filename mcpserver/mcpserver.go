@@ -189,6 +189,21 @@ func tools() []toolDef {
 			},
 		},
 		{
+			Name: "session_start_context",
+			Description: "Render the exact text the SessionStart hook injects automatically at the start of " +
+				"a session for a project — matches real claude-mem's own session_start_context tool, which " +
+				"calls the same /api/context/inject path its SessionStart hook uses. Unlike " +
+				"recent_observations (same underlying data, but the abbreviated [id]-prefixed list format), " +
+				"this returns the identical prose block a real session actually saw.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit":   map[string]any{"type": "integer", "description": "Max observations to include (default 5, matching the real hook's own default)"},
+					"project": map[string]any{"type": "string", "description": "Look at a different project instead of the current one"},
+				},
+			},
+		},
+		{
 			Name:        "session_observations",
 			Description: "Every observation recorded for one Claude Code session, oldest first — what actually happened during that session, in order.",
 			InputSchema: map[string]any{
@@ -488,6 +503,18 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		result = s.runObservationContext(project, params.Arguments.Query, limit)
 	case "recent_observations":
 		result = s.runRecent(scopedProject, limit)
+	case "session_start_context":
+		// Its own default (5), not the shared 10 every other tool above
+		// uses — matching cmd/claude-mem-go/context.go's real SessionStart
+		// hook default exactly, since the entire point of this tool is
+		// returning what that hook actually injects.
+		startLimit := params.Arguments.Limit
+		if startLimit <= 0 {
+			startLimit = 5
+		} else if startLimit > maxLimit {
+			startLimit = maxLimit
+		}
+		result = s.runSessionStartContext(scopedProject, startLimit)
 	case "session_observations":
 		result = s.runSession(params.Arguments.SessionID, limit)
 	case "file_observations":
@@ -567,6 +594,35 @@ func (s *Server) runRecent(project string, limit int) toolCallResult {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "recent_observations failed: " + err.Error()}}}
 	}
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+}
+
+// runSessionStartContext is session_start_context — matches real
+// claude-mem's own tool of the same name, which renders the exact text
+// its SessionStart-equivalent injection path produces (real claude-mem's
+// handleSessionStartContext calls /api/context/inject, backed by the
+// same generateContextWithStats its SessionStart hook uses). Reuses
+// RecentByProject, the same Backend method cmd/claude-mem-go/context.go's
+// real SessionStart hook calls — the point isn't a new read path, it's
+// exposing the SAME one on demand, formatted identically
+// (formatSessionStartContext duplicates context.go's formatContext byte
+// for byte) rather than through recent_observations' different,
+// abbreviated [id]-prefixed list shape.
+func (s *Server) runSessionStartContext(project string, limit int) toolCallResult {
+	if project == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+	recent, err := s.st.RecentByProject(project, limit)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_start_context failed: " + err.Error()}}}
+	}
+	if len(recent) == 0 {
+		// The real hook would inject nothing at all in this case (an
+		// empty additionalContext) — this text exists only because an MCP
+		// tool call still needs a non-empty response to say so explicitly.
+		return toolCallResult{Content: []toolContent{{Type: "text", Text: "No prior observations for this project — SessionStart would inject nothing."}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSessionStartContext(recent)}}}
 }
 
 func (s *Server) runSession(sessionID string, limit int) toolCallResult {
@@ -933,6 +989,26 @@ func formatObservationContext(matches []store.VectorMatch) string {
 		fmt.Fprintf(&b, "- %s", m.Observation.Title)
 		if m.Observation.Subtitle != "" {
 			fmt.Fprintf(&b, " — %s", m.Observation.Subtitle)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatSessionStartContext mirrors cmd/claude-mem-go/context.go's
+// formatContext exactly, byte for byte — duplicated rather than imported,
+// the same import-cycle constraint formatObservationContext's own doc
+// comment explains (mcpserver can't import package main, which imports
+// mcpserver for cmdMCP). The whole point of session_start_context is
+// returning the identical text the real SessionStart hook injects, not a
+// fresh format only coincidentally similar to it.
+func formatSessionStartContext(recent []store.SearchResult) string {
+	var b strings.Builder
+	b.WriteString("Relevant memory from previous sessions in this project:\n\n")
+	for _, r := range recent {
+		fmt.Fprintf(&b, "- %s", r.Observation.Title)
+		if r.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
 		}
 		b.WriteString("\n")
 	}

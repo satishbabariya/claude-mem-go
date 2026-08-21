@@ -21,15 +21,15 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Ten tools, six kinds of job
+## Eleven tools, six kinds of job
 
-claude-mem-go exposes ten MCP tools — independently callable, not a
+claude-mem-go exposes eleven MCP tools — independently callable, not a
 mandatory staged pipeline the way real claude-mem's own
 search→timeline→get_observations sequence is (that staging exists to
 manage token cost across separate raw-vs-compressed representations this
 project's schema doesn't have; `important_workflow`, below, documents the
 same pattern here as a recommendation, not an enforced one). Three are
-search (below); three are direct lookups when you already know what you
+search (below); four are direct lookups when you already know what you
 want and don't need to search for it; `get_observations` fetches full
 detail for IDs any of the others already gave you; `timeline` gets
 chronological context AROUND one result rather than the result in
@@ -40,9 +40,16 @@ but recognizing when a request actually needs `add_observation` instead
 of a search matters too:
 
 - `recent_observations(limit?, project?)` — the current project's most
-  recent observations, newest first. The same read path `SessionStart`'s
+  recent observations, newest first, as an abbreviated `[id] title
+  (project, tool)` list. The same underlying read `SessionStart`'s
   automatic context injection already uses, reachable on demand (e.g. for
   a project other than the current one, via `project`).
+- `session_start_context(limit?, project?)` — the SAME underlying read as
+  `recent_observations`, but formatted as the exact prose block
+  `SessionStart` actually injects (no ids, no project/tool annotation) —
+  use this instead of `recent_observations` when you specifically want to
+  see or reproduce what a session actually saw at startup, not a list to
+  work from.
 - `session_observations(session_id, limit?)` — every observation from one
   Claude Code session, oldest first. Use when the user asks "what did we
   do in that session" and you have (or can find) the session_id.
@@ -51,7 +58,7 @@ of a search matters too:
   `PreToolUse` hook already runs automatically right before a `Read`, on
   demand for any file, not just the one about to be read.
 
-Reach for these THREE first when the question doesn't need a query at
+Reach for these FOUR first when the question doesn't need a query at
 all — "what's recent," "what happened last session," "what do we know
 about this file" don't benefit from full-text or semantic matching, they
 just need the right rows.
