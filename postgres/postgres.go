@@ -164,6 +164,45 @@ func connectionTimeout() time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+// defaultPoolMax and poolMaxEnvVar match real claude-mem's own
+// DEFAULT_POOL_MAX/CLAUDE_MEM_POSTGRES_POOL_MAX exactly — an operator
+// sharing one Postgres server across many deployments (the same scenario
+// this project's own MaxOpenConns doc comment above discusses) had no
+// way to tune this port's pool size at all before this, unlike every
+// other knob real claude-mem's config.ts exposes.
+const defaultPoolMax = 10
+
+const poolMaxEnvVar = "CLAUDE_MEM_POSTGRES_POOL_MAX"
+
+func poolMax() int {
+	n := defaultPoolMax
+	if v := os.Getenv(poolMaxEnvVar); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+	return n
+}
+
+// defaultIdleTimeoutMS and idleTimeoutEnvVar match real claude-mem's own
+// DEFAULT_IDLE_TIMEOUT_MS/CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS exactly. A
+// real, found-by-hand mismatch this replaces: Open used to hardcode
+// SetConnMaxIdleTime to 5 minutes — a 10x mismatch against real
+// claude-mem's own 30-SECOND default, with no override path at all.
+const defaultIdleTimeoutMS = 30_000
+
+const idleTimeoutEnvVar = "CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS"
+
+func idleTimeout() time.Duration {
+	ms := defaultIdleTimeoutMS
+	if v := os.Getenv(idleTimeoutEnvVar); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ms = n
+		}
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // pingWithRetry pings db on the schedule in backoff (the first entry is
 // always 0 — try immediately before ever sleeping), stopping early if ctx
 // is canceled/expires. Returns the last ping error if every attempt fails.
@@ -293,12 +332,14 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 	// connection churn, but it means this pool is the ONLY thing standing
 	// between a burst of concurrent calls and Postgres's own
 	// max_connections limit, which every other client sharing the same
-	// server also counts against. These are conservative defaults for a
-	// hook-driven, not high-QPS, workload — not tuned against a real load
+	// server also counts against. poolMax()/idleTimeout() match real
+	// claude-mem's own pool defaults exactly and are overridable via the
+	// identical env var names — these are conservative defaults for a
+	// hook-driven, not high-QPS, workload, not tuned against a real load
 	// test, just deliberately bounded instead of silently unbounded.
-	db.SetMaxOpenConns(10)
+	db.SetMaxOpenConns(poolMax())
 	db.SetMaxIdleConns(5)
-	db.SetConnMaxIdleTime(5 * time.Minute)
+	db.SetConnMaxIdleTime(idleTimeout())
 	if err := pingWithRetry(ctx, db, connectRetryBackoff); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)

@@ -794,3 +794,59 @@ func TestPostgresOpenBoundsConnectionPool(t *testing.T) {
 		t.Fatalf("MaxOpenConnections = %d, want a positive bound, not database/sql's default of unlimited (0)", stats.MaxOpenConnections)
 	}
 }
+
+// TestPostgresOpenPoolMaxIsConfigurable is the regression test for a real
+// gap: MaxOpenConns matched real claude-mem's own DEFAULT_POOL_MAX value
+// (10) but, unlike connectionTimeout()/withStatementTimeout(), had no
+// env var override at all — an operator sharing one Postgres server
+// across many deployments (the exact scenario this pool's own doc
+// comment discusses) had no way to tune it, unlike every other knob real
+// claude-mem's config.ts exposes.
+func TestPostgresOpenPoolMaxIsConfigurable(t *testing.T) {
+	t.Setenv(poolMaxEnvVar, "3")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+	if err != nil {
+		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+	}
+	defer st.Close()
+
+	if got := st.db.Stats().MaxOpenConnections; got != 3 {
+		t.Fatalf("MaxOpenConnections = %d with %s=3, want 3", got, poolMaxEnvVar)
+	}
+}
+
+// TestPostgresOpenIdleTimeoutMatchesRealDefault locks in the real,
+// found-by-hand mismatch this fix closes: Open used to hardcode
+// SetConnMaxIdleTime to 5 minutes, a 10x mismatch against real
+// claude-mem's own DEFAULT_IDLE_TIMEOUT_MS of 30 seconds, with no
+// override path at all.
+func TestPostgresOpenIdleTimeoutMatchesRealDefault(t *testing.T) {
+	if got, want := idleTimeout(), 30*time.Second; got != want {
+		t.Fatalf("idleTimeout() with no env override = %s, want %s (real claude-mem's own DEFAULT_IDLE_TIMEOUT_MS)", got, want)
+	}
+
+	t.Setenv(idleTimeoutEnvVar, "1234")
+	if got, want := idleTimeout(), 1234*time.Millisecond; got != want {
+		t.Fatalf("idleTimeout() with %s=1234 = %s, want %s", idleTimeoutEnvVar, got, want)
+	}
+}
+
+// TestPostgresOpenPoolMaxDefaultsAndEnvOverride mirrors
+// TestConnectionTimeoutDefaultsAndEnvOverride for poolMax().
+func TestPostgresOpenPoolMaxDefaultsAndEnvOverride(t *testing.T) {
+	if got, want := poolMax(), defaultPoolMax; got != want {
+		t.Fatalf("poolMax() with no env override = %d, want %d", got, want)
+	}
+
+	t.Setenv(poolMaxEnvVar, "7")
+	if got, want := poolMax(), 7; got != want {
+		t.Fatalf("poolMax() with %s=7 = %d, want %d", poolMaxEnvVar, got, want)
+	}
+
+	t.Setenv(poolMaxEnvVar, "not-a-number")
+	if got, want := poolMax(), defaultPoolMax; got != want {
+		t.Fatalf("poolMax() with a garbage env var = %d, want it to fall back to %d", got, want)
+	}
+}

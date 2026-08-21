@@ -1709,6 +1709,46 @@ raw context and watching the same test hang past its own timeout
 entirely (needed an explicit bounded `-timeout` to even fail cleanly)
 before restoring the fix.
 
+### The Postgres pool's size and idle timeout were hardcoded — and the idle timeout was 10x off from real claude-mem's own default
+
+Continuing the same vein as the two connection-robustness fixes just
+above: real claude-mem's `PostgresConfig` has five pool knobs, each
+read from an env var with a fallback default —
+`max`/`CLAUDE_MEM_POSTGRES_POOL_MAX` (default 10),
+`idleTimeoutMillis`/`CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` (default
+30 *seconds*), plus the `connectionTimeoutMillis` and
+`statementTimeoutMillis` knobs already ported. This port's `Open` had
+env-var overrides for the latter two, but `SetMaxOpenConns` and
+`SetConnMaxIdleTime` were still bare literals: `10` (matching real's
+default value, but with no way to override it — an operator sharing one
+Postgres server across many deployments, the exact scenario this pool's
+own doc comment discusses, had no knob to turn) and `5 * time.Minute` —
+a real, found-by-hand **10x mismatch** against real claude-mem's own
+30-*second* default, not just a missing override.
+
+Fixed with `poolMax()`/`idleTimeout()`, mirroring
+`connectionTimeout()`'s exact shape (env var → parse → positive-only
+fallback to default), using the identical env var names
+(`CLAUDE_MEM_POSTGRES_POOL_MAX`, `CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS`)
+so an operator migrating settings between the two systems doesn't need
+to learn new knob names. `SetMaxIdleConns` is left as its existing
+literal — real claude-mem's `pg.Pool` has no separate "minimum idle
+connections" concept, so there's nothing to port parity against there.
+SSL/TLS config (`parseSsl` in `config.ts`) also needed no Go-side
+equivalent: pgx already honors `sslmode`/`PGSSLMODE` natively from the
+DSN/environment per standard libpq conventions, which is exactly why
+`parseSsl` exists on the TS side (node's `pg` needs the help; pgx
+doesn't).
+
+Verified against the real live container: setting
+`CLAUDE_MEM_POSTGRES_POOL_MAX=3` and confirming `Open`'s resulting
+`db.Stats().MaxOpenConnections` is actually 3, not the hardcoded 10 —
+confirmed as a genuine test by temporarily reverting the wiring and
+watching it fail (still reporting 10 despite the env var) before
+restoring the fix — plus unit tests locking in `idleTimeout()`'s
+default now matching real claude-mem's 30-second value exactly (not the
+old 5-minute one) and both helpers' env var override/fallback behavior.
+
 ## Quick start
 
 ```sh

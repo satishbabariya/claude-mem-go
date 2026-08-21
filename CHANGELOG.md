@@ -651,6 +651,32 @@ process (this project doesn't cut tagged releases on a schedule).
   instead of hanging — confirmed genuine by temporarily reverting to the
   caller's raw context and watching the same test hang past its own
   bounded `-timeout` entirely before restoring the fix.
+- **Added: the Postgres pool's size and idle timeout are now
+  env-configurable, and the idle timeout's old hardcoded value was a
+  real 10x mismatch against real claude-mem's own default, not just a
+  missing override.** Real claude-mem's `PostgresConfig` has five pool
+  knobs read from env vars with fallback defaults —
+  `max`/`CLAUDE_MEM_POSTGRES_POOL_MAX` (10) and
+  `idleTimeoutMillis`/`CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` (30
+  *seconds*), alongside the connection/statement timeout knobs already
+  ported. This port's `SetMaxOpenConns`/`SetConnMaxIdleTime` were still
+  bare literals: `10` (matching real's default value but with no
+  override — an operator sharing one Postgres server across many
+  deployments had no knob to turn) and `5 * time.Minute` — a real,
+  found-by-hand 10x mismatch against real claude-mem's own 30-second
+  default. Fixed with `poolMax()`/`idleTimeout()`, mirroring
+  `connectionTimeout()`'s exact shape and the identical env var names.
+  `SetMaxIdleConns` is left untouched (real's `pg.Pool` has no "minimum
+  idle" concept to port); SSL/TLS needed no equivalent either — pgx
+  already honors `sslmode`/`PGSSLMODE` natively, unlike node's `pg`
+  (which is why `parseSsl` exists on the TS side at all). Verified
+  against the real live container: setting
+  `CLAUDE_MEM_POSTGRES_POOL_MAX=3` and confirming `Open`'s resulting
+  `db.Stats().MaxOpenConnections` is actually 3 — confirmed genuine by
+  temporarily reverting the wiring and watching it still report 10
+  despite the env var before restoring the fix — plus unit tests
+  locking in `idleTimeout()`'s corrected 30-second default and both
+  helpers' env var override/fallback behavior.
 
 ## 0.2.0 — 2026-08-20
 
