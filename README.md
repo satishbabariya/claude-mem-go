@@ -1007,9 +1007,18 @@ matches by `ts_rank_cd` is inherently more work than ranking the 5,000 a
 project scope leaves. Scoped search, which is what the hooks actually
 run, is 12.3ms.
 
-Recall is deliberately **not** quoted. These vectors are randomly
-generated, and a recall figure measured against synthetic vectors says
-nothing about recall on real embeddings.
+Recall is **not** quoted for this run: these vectors are randomly
+generated, and random high-dimensional vectors are near-orthogonal — a
+degenerate case for HNSW, so a figure from them would say nothing about
+real use. It is measured separately, against real embeddings, by
+`bench/recall` (see that directory's README): **95.0% recall@10** at
+pgvector's default `ef_search`, on 3,000 real `nomic-embed-text`
+embeddings, comparing the HNSW result against a forced exact scan over
+the same rows. Raising `ef_search` from 20 to 200 changes nothing at that
+corpus size; only 400 moves it, to 98%. The knob is expected to matter
+more as the graph deepens, which that harness does not measure — anyone
+running materially more data should re-run it rather than trust a
+3,000-row result.
 
 Three real problems surfaced only at this size, all now fixed:
 

@@ -7,6 +7,32 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Measured ANN recall for the first time: 95.0% recall@10 on real
+  embeddings.** "Production-grade ANN vector search" is a claim about
+  *recall*, not just latency, and the earlier 250,000-row scale run
+  deliberately refused to quote one — its vectors were randomly
+  generated, and random high-dimensional vectors are near-orthogonal,
+  which is degenerate for HNSW. `bench/recall` answers it properly, with
+  real `nomic-embed-text` embeddings of real engineering prose and ten
+  queries phrased *differently* from the corpus, so it measures semantic
+  retrieval rather than string overlap. Recall is the overlap between the
+  HNSW top-10 and a forced exact scan over the same rows; forcing both
+  plans is what makes the comparison valid at any size, since below
+  roughly ten thousand rows the planner picks a sequential scan on its
+  own and a "natural" query would silently compare exact against exact
+  and report a meaningless 100%. Result: **95.0% at pgvector's default**,
+  flat from `ef_search` 20 through 200, reaching 98% only at 400. That
+  flatness was checked rather than reported naively — identical recall
+  across a tenfold range looked like a setting that was not applying, and
+  this project has previously caught Postgres accepting `hnsw.ef_search`
+  silently without honoring it, so `SHOW` was used to confirm the value
+  really took effect on a pooled connection. It did; the flatness is
+  real, and the likeliest reading is that a 3,000-node graph is shallow
+  enough that even a narrow search covers most of it. What it does *not*
+  measure is sensitivity at scale, which is stated plainly rather than
+  extrapolated: the harness is committed so anyone with materially more
+  data can re-run it instead of trusting a 3,000-row number.
+
 - **`CLAUDE_MEM_LOG_LEVEL` worked but was undiscoverable.** It was added,
   wired through every hook and the daemon, and recorded only in this
   changelog — so the README, the document an operator actually reads,
