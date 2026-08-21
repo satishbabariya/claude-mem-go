@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,9 +52,29 @@ func TestOpenRecognizesBothPostgresSchemes(t *testing.T) {
 	//     behavioral check matters, not just a non-nil return).
 	//   - unreachable: the error is postgres.Open's own connection-refused
 	//     wrapper ("ping postgres: ..."), not a SQLite file-open error.
+	// Deliberately NOT a hardcoded real DSN. This test used to point both
+	// schemes at postgres://...@localhost:55432/claudemem — the same
+	// database README.md tells operators to keep their actual memory in —
+	// and the "reachable" branch below then INSERTED into it. It left 2
+	// real rows under project `backend-dispatch-test` in a developer store,
+	// measured. postgres/postgres_test.go had the same defect at far larger
+	// scale (see testDSNEnvVar there); this is the sibling instance.
+	//
+	// Unlike those tests, this one loses nothing by having no database: its
+	// whole assertion is that both schemes DISPATCH to postgres.Open rather
+	// than falling through to SQLite, and the unreachable branch proves
+	// that from the error content alone. So it runs everywhere — against
+	// the disposable database CI names, or against a guaranteed-dead port
+	// locally, but never against a store somebody actually uses.
+	host := "127.0.0.1:1/nodb" // a closed port: fast "connection refused"
+	if dsn := os.Getenv("CLAUDE_MEM_GO_TEST_POSTGRES_DSN"); dsn != "" {
+		if u, err := url.Parse(dsn); err == nil {
+			host = u.Host + u.Path
+		}
+	}
 	for _, dsn := range []string{
-		"postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable",
-		"postgresql://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable",
+		"postgres://claudemem:claudemem@" + host + "?sslmode=disable",
+		"postgresql://claudemem:claudemem@" + host + "?sslmode=disable",
 	} {
 		t.Run(dsn, func(t *testing.T) {
 			be, err := Open(context.Background(), dsn, 0, 0)

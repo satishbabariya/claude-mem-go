@@ -2359,9 +2359,39 @@ plus how to report a vulnerability.
 go test ./...          # all packages that don't need `claude`/Ollama/Docker
 go test ./... -race
 
-docker compose up -d   # then postgres/... runs against the real container
-go test ./postgres/... -v
+# The Postgres tests need a database, and they will NOT guess at one.
+docker compose up -d
+docker compose exec postgres createdb -U claudemem claudemem_test
+CLAUDE_MEM_GO_TEST_POSTGRES_DSN=postgres://claudemem:claudemem@localhost:55432/claudemem_test?sslmode=disable \
+  go test ./postgres/... -v
 ```
+
+**Point that variable at a throwaway database, never one you actually
+use.** These tests write real rows, and the variable is mandatory
+precisely because it used to be optional. `postgres/postgres_test.go`
+previously fell back to `postgres://…@localhost:55432/claudemem` — the
+same DSN this README documents for a real store, a few lines up at the
+Postgres setup section. Nobody had to opt in to that; running
+`go test ./...` was enough.
+
+The damage was measured, not hypothesized. In the development store here:
+**7,275 observations total, of which 7,217 (99.2%) were test debris**,
+spread across 3,968 synthetic `test-*` projects. Only 58 rows were real,
+and most of those were e2e artifacts too. A `backend/backend_test.go`
+dispatch test had the identical defect on a smaller scale and left 2 rows
+under project `backend-dispatch-test`; it now runs against a closed port
+instead, since its assertion never needed a live database in the first
+place.
+
+Both were confirmed by break/restore: reinstating the old fallback and
+running with no variable set silently wrote 118 rows into a database that
+appeared nowhere on the command line. With the fallback removed, the same
+run skips 52 tests, fails none, and leaves the store at exactly the row
+count it started with.
+
+CI sets the variable at `.github/workflows/ci.yml`, so coverage there is
+unchanged — pointed at a database named `claudemem_ci_test`, deliberately
+not `claudemem`, so the name alone says it is disposable.
 
 `.github/workflows/ci.yml` runs the same commands (plus a `pgvector/pgvector:pg16`
 service container) on every push, and genuinely passes there — checked via

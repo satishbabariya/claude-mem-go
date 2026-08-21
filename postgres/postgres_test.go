@@ -11,13 +11,42 @@ import (
 	"claude-mem-go/store"
 )
 
-// testDSN points at docker-compose.yml's postgres service by default —
-// override with CLAUDE_MEM_GO_TEST_POSTGRES_DSN for a different instance.
-func testDSN() string {
-	if dsn := os.Getenv("CLAUDE_MEM_GO_TEST_POSTGRES_DSN"); dsn != "" {
-		return dsn
+// testDSNEnvVar must be set explicitly for this package's tests to run.
+// There is deliberately NO fallback.
+//
+// There used to be one, and it pointed at
+// postgres://claudemem:claudemem@localhost:55432/claudemem — byte-identical
+// to the DSN this project's own README documents and docker-compose.yml
+// provisions for real use. Every test in this package seeds rows via
+// uniqueProject() and none of them delete what they insert, so running
+// `go test ./postgres/...` wrote synthetic observations straight into
+// whatever store the developer actually uses. Measured on the machine this
+// was found on: 7,217 of 7,275 rows (99.2%) were test debris spread across
+// 3,968 synthetic projects, leaving 58 real ones. The cost isn't only
+// clutter — `reembed` counted 6,064 rows needing work, of which 35 were
+// real, so a single remediation run would have spent minutes of Ollama time
+// re-embedding garbage.
+//
+// Requiring the variable is what real claude-mem does for the same reason
+// (its own Postgres tests read CLAUDE_MEM_TEST_POSTGRES_URL and skip when
+// it's absent, with no default). A skipped test is a visible, recoverable
+// state; silently writing into someone's real store is not.
+const testDSNEnvVar = "CLAUDE_MEM_GO_TEST_POSTGRES_DSN"
+
+func testDSN() string { return os.Getenv(testDSNEnvVar) }
+
+// requireTestDSN returns the test DSN or skips. Every entry point into
+// this package's Postgres tests goes through it — including the few that
+// build their own Store instead of using openTestStore — so there is
+// exactly one place that can decide to run against a real database.
+func requireTestDSN(t *testing.T) string {
+	t.Helper()
+	dsn := testDSN()
+	if dsn == "" {
+		t.Skipf("%s is not set — these tests write real rows and will not guess at a database. "+
+			"Point it at a THROWAWAY store, never one you actually use.", testDSNEnvVar)
 	}
-	return "postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
+	return dsn
 }
 
 // openTestStore skips (not fails) the test when Postgres isn't reachable —
@@ -26,11 +55,19 @@ func testDSN() string {
 // `go test ./...` for someone who hasn't started it.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
+	dsn := testDSN()
+	if dsn == "" {
+		t.Skipf("%s is not set — these tests write real rows, so they will not guess at a database. "+
+			"Point it at a THROWAWAY store, never the one you actually use, e.g.\n"+
+			"  docker compose up -d && docker exec claude-mem-go-postgres-1 psql -U claudemem -d claudemem -c 'CREATE DATABASE claudemem_test'\n"+
+			"  %s=postgres://claudemem:claudemem@localhost:55432/claudemem_test?sslmode=disable go test ./postgres/...",
+			testDSNEnvVar, testDSNEnvVar)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+	st, err := Open(ctx, dsn, DefaultEmbedDims, 0)
 	if err != nil {
-		t.Skipf("postgres not reachable at %s (start it with `docker compose up -d`): %v", testDSN(), err)
+		t.Skipf("postgres not reachable at %s (start it with `docker compose up -d`): %v", store.RedactDSN(dsn), err)
 	}
 	t.Cleanup(func() { st.Close() })
 	return st
@@ -542,7 +579,7 @@ func TestPostgresOpenRejectsOutOfRangeHNSWEfSearch(t *testing.T) {
 	defer cancel()
 
 	for _, v := range []int{1001, -5} {
-		_, err := Open(ctx, testDSN(), DefaultEmbedDims, v)
+		_, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, v)
 		if err == nil {
 			t.Fatalf("Open with hnswEfSearch=%d (outside pgvector's 1..1000 range): want an error, got nil", v)
 		}
@@ -572,9 +609,9 @@ func TestPostgresSemanticSearchHNSWEfSearchAppliesWithoutLeaking(t *testing.T) {
 	vec := make([]float32, DefaultEmbedDims)
 	vec[0] = 1
 
-	tuned, err := Open(ctx, testDSN(), DefaultEmbedDims, 999)
+	tuned, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 999)
 	if err != nil {
-		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+		t.Skipf("postgres not reachable: %v", err)
 	}
 	defer tuned.Close()
 	tuned.db.SetMaxOpenConns(1) // force the same physical connection for both SHOW checks below
@@ -765,7 +802,7 @@ func TestPostgresOpenRecordsMigrationAndReopenDoesNotReapply(t *testing.T) {
 	}
 	st.Close()
 
-	st2, err := Open(context.Background(), testDSN(), DefaultEmbedDims, 0)
+	st2, err := Open(context.Background(), requireTestDSN(t), DefaultEmbedDims, 0)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
@@ -806,9 +843,9 @@ func TestPostgresOpenPoolMaxIsConfigurable(t *testing.T) {
 	t.Setenv(poolMaxEnvVar, "3")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+	st, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 0)
 	if err != nil {
-		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+		t.Skipf("postgres not reachable: %v", err)
 	}
 	defer st.Close()
 

@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -95,7 +94,7 @@ func waitUntilReachable(t *testing.T, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+		st, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 0)
 		cancel()
 		if err == nil {
 			st.Close()
@@ -118,9 +117,12 @@ func TestPostgresOpenRecoversFromContainerRestart(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not on PATH")
 	}
-	if os.Getenv("CLAUDE_MEM_GO_TEST_POSTGRES_DSN") != "" {
-		t.Skip("CLAUDE_MEM_GO_TEST_POSTGRES_DSN overridden — this test only knows how to stop/start THIS project's own docker-compose container")
-	}
+	// This used to skip whenever CLAUDE_MEM_GO_TEST_POSTGRES_DSN was set,
+	// back when that variable was an optional override. It is now
+	// REQUIRED (see testDSNEnvVar), so that guard would make this test
+	// permanently dead. The `compose ps -q` check below is the real
+	// guard anyway — it establishes that the container this test wants to
+	// stop and start is one this repo actually owns.
 	// CI's postgres service is a GitHub Actions `services:` container, not
 	// one started via `docker compose up` against this repo's
 	// docker-compose.yml — `compose ps -q` for a service compose never
@@ -150,7 +152,7 @@ func TestPostgresOpenRecoversFromContainerRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	start := time.Now()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+	st, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 0)
 	if err != nil {
 		t.Fatalf("Open did not recover once the container came back (waited %s): %v", time.Since(start), err)
 	}

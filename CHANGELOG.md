@@ -7,6 +7,33 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The Postgres test suite no longer writes to whatever database
+  happens to be running.** `postgres/postgres_test.go` defaulted
+  `CLAUDE_MEM_GO_TEST_POSTGRES_DSN` to
+  `postgres://claudemem:claudemem@localhost:55432/claudemem` — byte-identical
+  to the DSN the README documents for a *real* store. Nobody opted in;
+  `go test ./...` was enough. Measured in the development store here:
+  7,275 observations, **7,217 of them (99.2%) test debris** across 3,968
+  synthetic `test-*` projects, with 58 real rows left. The variable is now
+  mandatory and every entry point — including the handful of tests that
+  build a `Store` directly instead of going through `openTestStore` —
+  routes through one `requireTestDSN` gate that skips rather than guesses.
+  `backend/backend_test.go` had the same defect and *inserted* through it
+  (2 rows under `backend-dispatch-test`); it now runs against a closed
+  port, because its actual assertion — that both `postgres://` and
+  `postgresql://` dispatch to `postgres.Open` rather than falling through
+  to SQLite — is proven by the connection error's content and never needed
+  a live database. Confirmed by break/restore: with the fallback
+  reinstated, a run with no variable set silently wrote 118 rows into a
+  database named nowhere on the command line; with it removed, the same
+  run skips 52 tests, fails none, and leaves the store at exactly 7,275.
+  CI's own database was renamed `claudemem_ci_test` so its name alone
+  marks it disposable. One consequence worth noting: the container-restart
+  test used to skip *when* the variable was set, back when it was an
+  optional override — that guard would have made the test permanently dead
+  once the variable became required, so it now relies on the
+  `docker compose ps -q` check that was always the real guard.
+
 - **The worker daemon now exposes real per-session in-flight state** —
   the architectural follow-up the Stop hook's own doc comments had named
   as unresolved rather than attempted. A small plain-text `INFLIGHT

@@ -19,11 +19,11 @@ jobs:
         env:
           POSTGRES_USER: claudemem
           POSTGRES_PASSWORD: claudemem
-          POSTGRES_DB: claudemem
+          POSTGRES_DB: claudemem_ci_test
         ports:
           - 55432:5432
         options: >-
-          --health-cmd "pg_isready -U claudemem -d claudemem"
+          --health-cmd "pg_isready -U claudemem -d claudemem_ci_test"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
@@ -53,7 +53,11 @@ jobs:
       - name: Test
         run: go test ./... -race -v
         env:
-          CLAUDE_MEM_GO_TEST_POSTGRES_DSN: postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable
+          # Deliberately NOT named `claudemem`, the name the README uses for a
+          # real store: these tests wipe and rewrite whatever they are pointed
+          # at, so the database name itself should make it obvious at a glance
+          # that this is disposable.
+          CLAUDE_MEM_GO_TEST_POSTGRES_DSN: postgres://claudemem:claudemem@localhost:55432/claudemem_ci_test?sslmode=disable
 
       - name: Validate plugin manifest
         # No fallback/skip on install failure: a silently-skipped validation

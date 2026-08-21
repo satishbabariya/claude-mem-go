@@ -52,9 +52,9 @@ func TestHealthDetailsReflectsRealPoolAndSchemaState(t *testing.T) {
 func TestHealthDetailsReflectsConfiguredHNSWEfSearch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 250)
+	st, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 250)
 	if err != nil {
-		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+		t.Skipf("postgres not reachable: %v", err)
 	}
 	defer st.Close()
 

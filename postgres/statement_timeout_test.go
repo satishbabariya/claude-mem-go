@@ -70,9 +70,9 @@ func TestPostgresOpenAppliesStatementTimeout(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
+	st, err := Open(ctx, requireTestDSN(t), DefaultEmbedDims, 0)
 	if err != nil {
-		t.Skipf("postgres not reachable at %s (start it with `docker compose up -d`): %v", testDSN(), err)
+		t.Skipf("postgres not reachable (start it with `docker compose up -d`): %v", err)
 	}
 	defer st.Close()
 
