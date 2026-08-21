@@ -159,6 +159,20 @@ func cmdDoctor(args []string) int {
 		// file. Critical, because every automatic capture path goes
 		// through the daemon: whatever this command reads is not where
 		// anything is being written.
+		// A saturated pool is the observable symptom of a real capture
+		// stall. A slot is held for a cached observer session's whole
+		// lifetime, so once every slot is taken a NEW session's
+		// observations wait — and before this was surfaced they waited
+		// silently while every check here still reported green. Found by
+		// running three real concurrent sessions against the default
+		// capacity of 2: two were captured, the third produced nothing.
+		if stats.PoolCapacity > 0 && stats.PoolInFlight >= stats.PoolCapacity {
+			fmt.Printf("… all %d observer slot(s) are held by cached sessions — a NEW concurrent\n"+
+				"  session's observations will wait, and eventually be dropped, until one goes idle.\n"+
+				"  Raise -max-concurrent if you routinely run more than %d sessions at once.\n",
+				stats.PoolCapacity, stats.PoolCapacity)
+		}
+
 		// A daemon running older code than this binary is the same class
 		// of problem as the store mismatch below, and was found the same
 		// way — by running the loop end to end. `start` now replaces such

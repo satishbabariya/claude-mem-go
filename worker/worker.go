@@ -179,6 +179,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.sessions = newSessionCache(p, func(ctx context.Context) (observer.Handle, error) {
 		return observer.New(ctx, d.Model)
 	})
+	// So slot contention is reported. Without a logger here, a third
+	// concurrent session waiting for an observer slot is completely
+	// silent — which is exactly how it was found: only
+	// pool_in_flight == pool_capacity at 0% CPU gave it away.
+	d.sessions.Log = d.Log
 	defer d.sessions.closeAll()
 	// Registered AFTER closeAll's defer, so it runs BEFORE closeAll (defers
 	// run LIFO): drains every dispatched process() goroutine — including

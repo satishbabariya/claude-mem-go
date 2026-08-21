@@ -7,6 +7,33 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **A third concurrent Claude Code session was silently never captured.**
+  Found by running three real sessions at once against one daemon, which
+  this project had never done. All three answered correctly; only two were
+  captured. The third's event was accepted by the daemon and then
+  vanished — no log line, no error, `doctor` reporting the worker
+  reachable, and the hook reporting a successful forward. The only
+  evidence anywhere was `pool_in_flight: 2 / pool_capacity: 2` at 0% CPU.
+  The cause is a design consequence rather than a leak, which is worth
+  stating precisely because the first diagnosis was "slot leak" and that
+  was wrong: an observer slot is held for a cached session's **whole
+  lifetime**, not per observation, and sessions stay cached for
+  `sessionIdleTimeout` (10 minutes). With the default capacity of 2, a
+  third session therefore waited on an unbounded `pool.Acquire()` — while
+  pinning a goroutine and its connection — until an idle eviction, which
+  never comes while the other sessions stay warm. Three changes, none of
+  which alter the caching design: the wait is now **bounded**
+  (`AcquireWithin`, 2 minutes — generous enough to ride out a busy moment,
+  since a single real observation has been measured at over a minute
+  here); contention is **logged at WARN** naming the fix
+  (`raise -max-concurrent`); and the failure returns an actionable error
+  rather than blocking forever. `doctor` now also reports a saturated
+  pool, which is the observable symptom. Verified live: two real sessions
+  against a capacity-1 daemon produce
+  `WARN waiting for an observer slot: all 1 in use by cached sessions`
+  where there was previously silence, and break/restore confirms the
+  unbounded version hangs the test outright.
+
 - **Nine failure messages were still logged as routine INFO, and WARN was
   effectively unused.** The severity pass a few commits back reclassified
   by prefix — every message beginning `FAILED` became an error — which

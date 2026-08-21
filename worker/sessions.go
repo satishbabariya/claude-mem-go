@@ -12,7 +12,9 @@
 package worker
 
 import (
+	"claude-mem-go/logging"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -28,6 +30,14 @@ import (
 // resource use without needing a "session ended" event this protocol
 // doesn't carry.
 const sessionIdleTimeout = 10 * time.Minute
+
+// sessionSlotWait bounds how long a new session waits for an observer
+// slot. Generous enough to ride out a busy moment (a single real
+// observation has been measured at over a minute here), short enough that
+// a blocked event never outlives the session that produced it.
+// A var, not a const, so a test can shrink it: exercising the real
+// two-minute deadline honestly would mean a two-minute test.
+var sessionSlotWait = 2 * time.Minute
 
 type sessionEntry struct {
 	// mu serializes turns on this one subprocess — Observe must never be
@@ -57,6 +67,11 @@ type sessionCache struct {
 	byID    map[string]*sessionEntry
 	pool    *pool.Pool
 	newFunc func(ctx context.Context) (observer.Handle, error)
+
+	// Log is optional. The cache is constructed in tests without one, and
+	// a nil logger must never be the thing that panics the daemon — so
+	// logf below is nil-safe rather than every call site guarding.
+	Log *logging.Logger
 
 	// privMu/priv are deliberately separate from mu/byID: setPrivate is
 	// called by the UserPromptSubmit hook (prompt-context) for EVERY
@@ -191,7 +206,27 @@ func (c *sessionCache) getOrCreate(ctx context.Context, sessionID string) (*sess
 	}
 	c.mu.Unlock()
 
-	c.pool.Acquire()
+	// A slot is held for this session's whole lifetime, not per
+	// observation, so with the default capacity of 2 a third concurrent
+	// Claude Code session waits here for an idle eviction — up to
+	// sessionIdleTimeout. That used to be an unbounded, silent block:
+	// reproduced with three real concurrent sessions, where two were
+	// captured and the third was accepted by the daemon and never
+	// processed, with `pool_in_flight: 2 / pool_capacity: 2` at 0% CPU the
+	// only evidence anywhere.
+	//
+	// Bounded and logged now. The event is still lost if the deadline
+	// passes, but it was already lost when this blocked forever — the
+	// session ends long before a ten-minute eviction — and blocking also
+	// pinned a goroutine and its connection the whole time.
+	if !c.pool.TryAcquire() {
+		c.logf("waiting for an observer slot: all %d in use by cached sessions "+
+			"(raise -max-concurrent if you run more sessions at once)", c.pool.Capacity())
+		if !c.pool.AcquireWithin(sessionSlotWait) {
+			return nil, fmt.Errorf("no observer slot free after %s: all %d are held by cached sessions; "+
+				"raise -max-concurrent to capture more concurrent sessions", sessionSlotWait, c.pool.Capacity())
+		}
+	}
 	h, err := c.newFunc(ctx)
 	if err != nil {
 		c.pool.Release()
@@ -394,3 +429,13 @@ func (c *sessionCache) size() int {
 // for any control-flow decision here.
 func (c *sessionCache) poolInFlight() int { return c.pool.InFlight() }
 func (c *sessionCache) poolCapacity() int { return c.pool.Capacity() }
+
+// logf writes to the cache's logger if it has one. Contention for an
+// observer slot is invisible without it: the hook reports a successful
+// forward, the daemon accepts the connection, and nothing anywhere says
+// the event is waiting.
+func (c *sessionCache) logf(format string, args ...any) {
+	if c.Log != nil {
+		c.Log.Warnf(format, args...)
+	}
+}

@@ -6,6 +6,8 @@
 // concurrently is this application's policy, not the SDK's concern.
 package pool
 
+import "time"
+
 // Pool is a buffered-channel semaphore: Acquire blocks until a slot is
 // free, Release frees it. This is admission control only — same contract
 // as the real spawn-lock family: it gates SPAWNING, never anything else,
@@ -36,6 +38,52 @@ func New(maxConcurrent int) *Pool {
 
 // Acquire blocks until a slot is free, then reserves it.
 func (p *Pool) Acquire() { p.sem <- struct{}{} }
+
+// TryAcquire reserves a slot without blocking, reporting whether it got
+// one. Lets a caller notice contention and say so before committing to a
+// wait — the difference between a stall nobody can see and a logged one.
+func (p *Pool) TryAcquire() bool {
+	select {
+	case p.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// AcquireWithin waits up to d for a slot, reporting whether it got one.
+//
+// The unbounded Acquire above is a genuine hazard for this project's
+// actual usage, not a theoretical one. A slot is held for a cached
+// observer session's whole LIFETIME, not per observation, and sessions
+// stay cached for sessionIdleTimeout (10 minutes). With the default
+// capacity of 2, a third concurrent Claude Code session therefore blocks
+// here — with no timeout, no log line, and every health check still
+// reporting green.
+//
+// Reproduced with three real concurrent sessions: two were captured, the
+// third was accepted by the daemon and silently never processed, and
+// `pool_in_flight: 2 / pool_capacity: 2` with 0% CPU was the only
+// evidence anywhere that anything was wrong.
+//
+// A bounded wait converts that into something finite and reportable. The
+// event is still lost when the deadline passes, but it was already lost
+// in the unbounded case — the session ends long before a 10-minute
+// eviction — and blocking also pinned a goroutine and its connection for
+// the duration.
+func (p *Pool) AcquireWithin(d time.Duration) bool {
+	if p.TryAcquire() {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case p.sem <- struct{}{}:
+		return true
+	case <-t.C:
+		return false
+	}
+}
 
 // Release frees a slot acquired with Acquire. Callers should always
 // `defer p.Release()` right after a successful Acquire.
