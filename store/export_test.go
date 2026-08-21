@@ -252,3 +252,98 @@ func TestExportAllIncludesEmbeddingAndImportRowRestoresIt(t *testing.T) {
 		t.Fatalf("SemanticSearch after ImportRow didn't find the imported row's restored embedding: %+v", semantic)
 	}
 }
+
+// TestImportRowValidatesCreatedAt is the SQLite half of a cross-backend
+// parity contract — see postgres.TestPostgresImportRowValidatesCreatedAt
+// for the identical table on the other backend.
+//
+// This backend used to accept ANY string here: its created_at column is
+// TEXT, so a corrupt or hand-edited backup imported "successfully"
+// (reported as "Imported N observation(s)") while writing 'not-a-date'
+// into the column. The damage wasn't limited to one poisoned column —
+// ExportAll re-emits the bad value verbatim, so the SQLite->Postgres
+// migration path this project documents then died on it, half-restored,
+// discovered only at cutover. Measured end to end before the fix.
+func TestImportRowValidatesCreatedAt(t *testing.T) {
+	cases := []struct {
+		name      string
+		createdAt string
+		wantErr   bool
+	}{
+		{"malformed", "not-a-date", true},
+		{"empty", "", true},
+		{"impossible date", "2026-13-45T00:00:00Z", true},
+		// The near-miss most likely in a hand-edited backup: a space
+		// where RFC3339 requires a T.
+		{"space instead of T", "2026-01-02 03:04:05", true},
+		{"valid RFC3339", "2026-01-02T03:04:05Z", false},
+		{"valid with offset", "2026-01-02T03:04:05+05:30", false},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dbPath := t.TempDir() + "/test.db"
+			st, err := Open(dbPath)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer st.Close()
+
+			row := ExportRow{
+				SessionID: "s1", Project: "p", ToolName: "Bash",
+				ContentHash:    ContentHash("s1", "Bash", "k", string(rune('a'+i))),
+				Observation:    Observation{Type: "discovery", Title: "row"},
+				CreatedAt:      c.createdAt,
+				CreatedAtEpoch: 1700000000000,
+			}
+			_, err = st.ImportRow(row)
+			if c.wantErr && err == nil {
+				t.Fatalf("ImportRow with created_at=%q: want an error, got nil — a malformed timestamp must not reach the TEXT column", c.createdAt)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("ImportRow with created_at=%q: %v", c.createdAt, err)
+			}
+			if c.wantErr {
+				// Nothing may be written on rejection.
+				var n int
+				if err := st.db.QueryRow("SELECT count(*) FROM observations").Scan(&n); err != nil {
+					t.Fatalf("count: %v", err)
+				}
+				if n != 0 {
+					t.Fatalf("ImportRow rejected the row but %d observation(s) were written", n)
+				}
+			}
+		})
+	}
+}
+
+// TestImportRowPreservesCreatedAtByteForByte locks in the deliberate
+// choice to store the ORIGINAL string rather than a re-formatted parse:
+// a well-formed row must round-trip unchanged, or repeated imports would
+// stop being the no-op ImportRow's idempotency guarantee promises.
+func TestImportRowPreservesCreatedAtByteForByte(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	const exact = "2026-01-02T03:04:05+05:30"
+	row := ExportRow{
+		SessionID: "s1", Project: "p", ToolName: "Bash",
+		ContentHash:    ContentHash("s1", "Bash", "exact", "1"),
+		Observation:    Observation{Type: "discovery", Title: "row"},
+		CreatedAt:      exact,
+		CreatedAtEpoch: 1700000000000,
+	}
+	if _, err := st.ImportRow(row); err != nil {
+		t.Fatalf("ImportRow: %v", err)
+	}
+	var got string
+	if err := st.db.QueryRow("SELECT created_at FROM observations").Scan(&got); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if got != exact {
+		t.Fatalf("stored created_at = %q, want the original %q byte-for-byte (a re-formatted value would break idempotent re-import)", got, exact)
+	}
+}

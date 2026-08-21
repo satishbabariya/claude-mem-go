@@ -74,9 +74,14 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]store.ExportRow, error) {
 // the idempotency/timestamp/embedding-preservation rationale, identical
 // here.
 func (s *Store) ImportRow(row store.ExportRow) (store.InsertResult, error) {
-	createdAt, err := time.Parse(time.RFC3339, row.CreatedAt)
+	// store.ParseExportCreatedAt, not an inline time.Parse: this backend
+	// validated CreatedAt from the start while the SQLite one didn't, and
+	// that silent disagreement was itself a real bug (see the helper's own
+	// doc comment). Sharing one definition is what keeps them from drifting
+	// apart again.
+	createdAt, err := store.ParseExportCreatedAt(row.CreatedAt)
 	if err != nil {
-		return store.InsertResult{}, fmt.Errorf("parse CreatedAt %q: %w", row.CreatedAt, err)
+		return store.InsertResult{}, err
 	}
 	res, err := s.insertRow(row.SessionID, row.Project, row.ToolName, row.ContentHash,
 		row.Observation, row.CostUSD, createdAt, row.CreatedAtEpoch)

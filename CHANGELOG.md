@@ -819,6 +819,31 @@ process (this project doesn't cut tagged releases on a schedule).
   `key:value` and `(parens)`. Confirmed genuine by reverting to
   `plainto_tsquery` and watching the OR and NOT subtests fail.
 
+- **Fixed: a corrupt backup imported "successfully" into SQLite and
+  silently made the store un-migratable.** The Postgres backend always
+  parsed `CreatedAt` as RFC3339 on import (its column is `TIMESTAMPTZ`);
+  the SQLite backend passed the string into a `TEXT` column that accepts
+  anything, so a three-row backup with a bad date reported `Imported 3
+  observation(s)` while writing `'not-a-date'` into `created_at`. The
+  damage wasn't one poisoned column: `ExportAll` re-emits the value
+  verbatim, so the documented SQLite→Postgres migration path then died
+  on it, and `cmdImport` has no transaction, so it landed half-restored
+  — a restore that reported success quietly rendered the store
+  un-migratable, discovered only at cutover. Measured end to end. Fixed
+  with a shared `store.ParseExportCreatedAt` both backends' `ImportRow`
+  now call — sharing it is the point, since the two disagreeing was the
+  bug. SQLite keeps storing the original string rather than a
+  re-formatted parse, so well-formed rows round-trip byte-identically
+  and repeated imports stay a genuine no-op, both covered by tests.
+  Verified with the compiled binary: the same bad backup now fails on
+  row 1 with the message Postgres gives and writes zero rows, while a
+  good-only file still imports and re-imports as a no-op. Table-driven
+  tests run six cases against both backends, confirmed genuine by
+  removing the SQLite validation and watching all four rejection cases
+  fail. Five other candidate divergences in the same path were checked
+  and all matched (negative cost/epoch, empty required fields,
+  duplicate content_hash, invalid type), bounding the concern.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and

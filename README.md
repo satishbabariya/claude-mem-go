@@ -2033,6 +2033,70 @@ the first place still matches through the new quoted path — as do
 OR/NOT/AND/hyphen behaviors end to end, confirmed genuine by reverting to
 `plainto_tsquery` and watching the OR and NOT subtests fail.
 
+### A corrupt backup imported "successfully" into SQLite and silently made the store un-migratable
+
+The Postgres backend has always parsed `CreatedAt` as RFC3339 on import —
+its column is `TIMESTAMPTZ`, so it had no choice. The SQLite backend
+passed the string straight into a `TEXT` column that accepts anything.
+`ImportRow` is the only door for a non-RFC3339 value, since the normal
+write path hard-codes `now.Format(time.RFC3339)` — so this only bites a
+corrupt or hand-edited backup, which is exactly the moment you least want
+a silent failure.
+
+Measured, with a three-row backup containing one bad date and one empty
+date:
+
+```
+$ claude-mem-go import -db ./sq.db -in bad.jsonl
+Imported 3 observation(s), skipped 0 already present.
+
+$ sqlite3 sq.db "select content_hash, quote(created_at) from observations"
+h_baddate    |'not-a-date'
+h_emptydate  |''
+```
+
+A clean success message over a poisoned column. But the damage doesn't
+stop there, and that's what makes this worth a hard error rather than a
+lenient coercion — `ExportAll` re-emits the bad value verbatim, so the
+documented SQLite→Postgres migration path then dies on it:
+
+```
+$ claude-mem-go export -db ./sq.db -out roundtrip.jsonl
+Exported 3 observation(s)
+$ claude-mem-go import -db postgres://… -in roundtrip.jsonl
+FAILED importing row (content_hash=h_baddate): parse CreatedAt "not-a-date"
+```
+
+`cmdImport` has no transaction, so that failure lands half-restored. A
+restore that *reported success* quietly renders the store un-migratable,
+and nobody finds out until cutover.
+
+Fixed with a shared `store.ParseExportCreatedAt` that **both** backends'
+`ImportRow` now call. Sharing it is the actual point rather than a
+convenience: the two disagreeing was itself the bug, so one definition of
+"valid timestamp" is what stops them drifting again. The SQLite side keeps
+storing the original string rather than a re-formatted parse, so
+well-formed rows round-trip byte-identically and a repeated import stays
+the genuine no-op `ImportRow`'s idempotency guarantee promises — both
+verified by dedicated tests.
+
+Verified end to end with the compiled binary: the same bad backup now
+fails on row 1 with the identical message Postgres gives and writes **zero**
+rows, while a good-only file still imports, stores `created_at`
+byte-for-byte, and re-imports as a no-op. Table-driven tests run the same
+six cases (malformed, empty, impossible date, space-instead-of-T, and two
+valid forms) against both backends, confirmed genuine by removing the
+SQLite validation and watching all four rejection cases fail.
+
+Worth recording what this survey *didn't* find, since it bounds the
+concern: five other candidate divergences in the same import path were
+checked against both backends and all matched — negative `cost_usd`,
+negative `created_at_epoch`, empty `session_id`/`project`/`content_hash`,
+duplicate `content_hash` within one file, and invalid observation `type`
+(already shared via `store.ValidateObservationType`). Malformed JSON
+arrays can't reach either column, since `ExportRow.Observation` is typed
+and `encoding/json` rejects them first.
+
 ## Quick start
 
 ```sh

@@ -229,3 +229,51 @@ func TestPostgresImportRowRejectsAnUnrecognizedObservationType(t *testing.T) {
 		t.Fatal("ImportRow with an unrecognized type: want an error, got nil")
 	}
 }
+
+// TestPostgresImportRowValidatesCreatedAt is the Postgres half of a
+// cross-backend parity contract — see store.TestImportRowValidatesCreatedAt
+// for the identical table on the SQLite backend.
+//
+// This backend always rejected a malformed timestamp (its column is
+// TIMESTAMPTZ, so it had no choice); SQLite silently accepted anything.
+// Both now route through store.ParseExportCreatedAt, so there is exactly
+// one definition of a valid value and the two cannot drift apart again.
+// Asserted here too rather than assumed: the SQLite behavior was the one
+// that was wrong, but an untested invariant on either side is how the
+// original divergence went unnoticed.
+func TestPostgresImportRowValidatesCreatedAt(t *testing.T) {
+	cases := []struct {
+		name      string
+		createdAt string
+		wantErr   bool
+	}{
+		{"malformed", "not-a-date", true},
+		{"empty", "", true},
+		{"impossible date", "2026-13-45T00:00:00Z", true},
+		// The near-miss most likely in a hand-edited backup: a space
+		// where RFC3339 requires a T.
+		{"space instead of T", "2026-01-02 03:04:05", true},
+		{"valid RFC3339", "2026-01-02T03:04:05Z", false},
+		{"valid with offset", "2026-01-02T03:04:05+05:30", false},
+	}
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := store.ExportRow{
+				SessionID: "s1", Project: project, ToolName: "Bash",
+				ContentHash:    store.ContentHash("s1", "Bash", project, string(rune('a'+i))),
+				Observation:    store.Observation{Type: "discovery", Title: "row"},
+				CreatedAt:      c.createdAt,
+				CreatedAtEpoch: 1700000000000,
+			}
+			_, err := st.ImportRow(row)
+			if c.wantErr && err == nil {
+				t.Fatalf("ImportRow with created_at=%q: want an error, got nil", c.createdAt)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("ImportRow with created_at=%q: %v", c.createdAt, err)
+			}
+		})
+	}
+}
