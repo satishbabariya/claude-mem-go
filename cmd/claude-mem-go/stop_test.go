@@ -59,7 +59,7 @@ func TestWaitForSessionObservationsStopsOnceCountStabilizes(t *testing.T) {
 
 	be := &sequencedBackend{counts: []int{0, 1, 2, 2, 2}}
 	start := time.Now()
-	got, err := waitForSessionObservations(be, "s1", 50)
+	got, err := waitForSessionObservations(be, "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("waitForSessionObservations: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestWaitForSessionObservationsGivesUpAfterMaxAttempts(t *testing.T) {
 		counts[i] = i // never stabilizes
 	}
 	be := &sequencedBackend{counts: counts}
-	got, err := waitForSessionObservations(be, "s1", 50)
+	got, err := waitForSessionObservations(be, "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("waitForSessionObservations: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestWaitForSessionObservationsWaitsFullBudgetWhenGenuinelyEmpty(t *testing.
 	setFastPollIntervalForTest(t)
 
 	be := &sequencedBackend{counts: []int{0, 0, 0, 0, 0}}
-	got, err := waitForSessionObservations(be, "s1", 50)
+	got, err := waitForSessionObservations(be, "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("waitForSessionObservations: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestWaitForSessionObservationsDoesNotStabilizeFalselyAtZero(t *testing.T) {
 	setFastPollIntervalForTest(t)
 
 	be := &sequencedBackend{counts: []int{0, 0, 1, 1, 1}}
-	got, err := waitForSessionObservations(be, "s1", 50)
+	got, err := waitForSessionObservations(be, "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("waitForSessionObservations: %v", err)
 	}
@@ -163,11 +163,156 @@ func TestWaitForSessionObservationsWaitsPastAPlateauForASecondToolCall(t *testin
 
 	counts := []int{0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
 	be := &sequencedBackend{counts: counts}
-	got, err := waitForSessionObservations(be, "s1", 50)
+	got, err := waitForSessionObservations(be, "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("waitForSessionObservations: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("waitForSessionObservations returned %d observations, want 2 — it must not have locked in at the 5-check plateau of 1 (a second tool call's observation was still coming)", len(got))
+	}
+}
+
+// TestWaitForSessionObservationsFallsBackWhenWorkerUnreachable confirms
+// that an inFlight query which never succeeds (worker not running, wrong
+// socket path, crashed — QueryInFlight's real failure modes) degrades
+// cleanly to the exact same row-count heuristic as passing a nil inFlight
+// func, rather than failing outright or misinterpreting "unknown" as
+// "confirmed zero in flight." Same scenario and expected result as
+// TestWaitForSessionObservationsStopsOnceCountStabilizes, just with an
+// always-failing query in the mix.
+func TestWaitForSessionObservationsFallsBackWhenWorkerUnreachable(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	be := &sequencedBackend{counts: []int{0, 1, 2, 2, 2}}
+	unreachable := func(sessionID string) (int, bool) { return 0, false }
+	got, err := waitForSessionObservations(be, "s1", 50, unreachable)
+	if err != nil {
+		t.Fatalf("waitForSessionObservations: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("waitForSessionObservations returned %d observations, want 2 — an unreachable worker query must fall back to the row-count heuristic, not fail or misbehave", len(got))
+	}
+}
+
+// TestWaitForSessionObservationsInFlightFastPathShortensWait is the
+// regression test for the actual point of the in-flight query: once the
+// worker daemon reports zero events in flight for this session for
+// stopInFlightConfirmStreak consecutive checks, this must return almost
+// immediately — NOT wait out the full stopStableStreakRequired=10
+// row-count streak, which is what a nil (or always-failing) inFlight func
+// would be stuck doing. Simulates a worker that's still processing for
+// the first two queries, then confirms zero — traced by hand to return
+// after exactly 4 BySessionID calls, far short of the ~11 the row-count
+// heuristic alone would need for the same (deliberately unstabilized,
+// constant-at-1) observation sequence.
+func TestWaitForSessionObservationsInFlightFastPathShortensWait(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	counts := make([]int, 30)
+	for i := 1; i < len(counts); i++ {
+		counts[i] = 1
+	}
+	be := &sequencedBackend{counts: counts}
+
+	queries := 0
+	inFlight := func(sessionID string) (int, bool) {
+		queries++
+		if queries <= 2 {
+			return 1, true // worker still working
+		}
+		return 0, true // worker confirms nothing left in flight
+	}
+
+	got, err := waitForSessionObservations(be, "s1", 50, inFlight)
+	if err != nil {
+		t.Fatalf("waitForSessionObservations: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("waitForSessionObservations returned %d observations, want 1", len(got))
+	}
+	if be.calls != 4 {
+		t.Fatalf("waitForSessionObservations made %d BySessionID calls, want exactly 4 — it should have exited via the in-flight fast path almost immediately, not waited toward stopStableStreakRequired=%d", be.calls, stopStableStreakRequired)
+	}
+}
+
+// TestWaitForSessionObservationsExtendsBudgetPastOldCeilingWhenWorkerConfirmsActivity
+// is the regression test for the real, live-observed case this whole
+// redesign exists for: a single observation that took 104 seconds to
+// process — longer than the original stopWaitMaxAttempts (~45s) ceiling
+// — which would have been cut off mid-flight without a live signal
+// justifying a longer wait. Simulates a first observation already
+// persisted (count=1) while the worker reports a SECOND event genuinely
+// in flight for far longer than stopWaitMaxAttempts attempts, then that
+// second observation lands (count=2) right as the worker confirms
+// nothing left in flight. Also exercises the override this test would
+// have caught without: if the row-count streak were allowed to run
+// unchecked while the worker says "busy," it would have locked in at
+// count=1 around attempt ~11 (stopStableStreakRequired consecutive
+// matches), long before the worker ever confirmed anything — this test
+// only passes if that's actually prevented.
+func TestWaitForSessionObservationsExtendsBudgetPastOldCeilingWhenWorkerConfirmsActivity(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	const busyUntilQuery = 54 // well past stopWaitMaxAttempts=45
+	counts := make([]int, busyUntilQuery+10)
+	for i := range counts {
+		switch {
+		case i == 0:
+			counts[i] = 0
+		case i < busyUntilQuery:
+			counts[i] = 1
+		default:
+			counts[i] = 2
+		}
+	}
+	be := &sequencedBackend{counts: counts}
+
+	queries := 0
+	inFlight := func(sessionID string) (int, bool) {
+		queries++
+		if queries <= busyUntilQuery {
+			return 1, true // second event still genuinely in flight
+		}
+		return 0, true
+	}
+
+	got, err := waitForSessionObservations(be, "s1", 50, inFlight)
+	if err != nil {
+		t.Fatalf("waitForSessionObservations: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("waitForSessionObservations returned %d observations, want 2 — it must wait for the worker-confirmed second event, not lock in at 1", len(got))
+	}
+	if be.calls <= stopWaitMaxAttempts {
+		t.Fatalf("waitForSessionObservations made %d BySessionID calls, want more than stopWaitMaxAttempts=%d — the worker confirming real activity should have extended the wait ceiling", be.calls, stopWaitMaxAttempts)
+	}
+}
+
+// TestWaitForSessionObservationsGenuinelyEmptySessionStillBoundedEvenWhenWorkerReachable
+// is the non-regression counterpart to the extension test above: a
+// session that never shows ANY activity at all — the worker is reachable
+// and answers every query, but always reports zero in flight for a
+// session that never produces a single observation (a pure conversation,
+// no tool calls) — must NOT have its budget extended to
+// stopInFlightWaitMaxAttempts (five minutes) just because the worker
+// happened to be reachable. It should still give up at exactly
+// stopWaitMaxAttempts, matching the pre-existing, already-shipped
+// "genuinely empty" behavior this test guards against silently
+// regressing into a much longer wait.
+func TestWaitForSessionObservationsGenuinelyEmptySessionStillBoundedEvenWhenWorkerReachable(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	be := &sequencedBackend{counts: []int{0}} // sequencedBackend repeats the last entry forever
+	alwaysIdle := func(sessionID string) (int, bool) { return 0, true }
+
+	got, err := waitForSessionObservations(be, "s1", 50, alwaysIdle)
+	if err != nil {
+		t.Fatalf("waitForSessionObservations: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("waitForSessionObservations returned %d observations, want 0", len(got))
+	}
+	if be.calls != stopWaitMaxAttempts {
+		t.Fatalf("waitForSessionObservations made %d BySessionID calls, want exactly %d — a genuinely empty session must not get the extended budget just because the worker was reachable", be.calls, stopWaitMaxAttempts)
 	}
 }

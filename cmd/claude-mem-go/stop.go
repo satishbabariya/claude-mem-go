@@ -11,8 +11,10 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
+	"claude-mem-go/hook"
 	"claude-mem-go/observer"
 	"claude-mem-go/store"
+	"claude-mem-go/worker"
 )
 
 // stopWaitPollInterval, stopStableStreakRequired, and stopWaitMaxAttempts
@@ -42,12 +44,66 @@ const (
 	// comfortably outlast stopStableStreakRequired's own confirmation
 	// window plus room for a few real observer calls ahead of it.
 	stopWaitMaxAttempts = 45
+	// stopInFlightConfirmStreak is the (much shorter) confirmation window
+	// used when the worker daemon itself reports zero in-flight events for
+	// this session — see waitForSessionObservations. A short debounce, not
+	// a guess at observer latency like stopStableStreakRequired: this is
+	// asking the one process that actually knows, not inferring from a row
+	// count, so it only needs to guard against a query landing in the
+	// narrow gap right as an in-flight count transitions, not against the
+	// full observer latency the row-count heuristic has to out-wait.
+	stopInFlightConfirmStreak = 2
+	// stopInFlightWaitMaxAttempts replaces stopWaitMaxAttempts as the wait
+	// ceiling once the worker has confirmed real activity for this session
+	// (an observation already persisted, or an event actively in flight) —
+	// see waitForSessionObservations. Much larger than stopWaitMaxAttempts
+	// because, once the worker is reachable, waiting longer is no longer a
+	// guess: a live re-verification run this session hit a real, single
+	// observation that took 104 seconds — comfortably longer than
+	// stopWaitMaxAttempts's ~45s ceiling — because it involved an
+	// unusually large summarization call. Sized generously past that.
+	// Never applies to a genuinely tool-call-free session (see
+	// waitForSessionObservations: the extension requires having actually
+	// seen activity), so a pure-conversation session's Stop hook still
+	// finishes in ~stopWaitMaxAttempts seconds, not five minutes.
+	stopInFlightWaitMaxAttempts = 300
 )
 
 // waitForSessionObservations polls BySessionID until the count holds
 // steady for stopStableStreakRequired consecutive checks (the worker's
 // own async PostToolUse pipeline has caught up), or stopWaitMaxAttempts
 // is reached — whichever comes first.
+//
+// inFlight, when non-nil, is queried on every attempt (typically
+// hook.QueryInFlight against the real worker daemon) and changes waiting
+// behavior two ways, both only once the worker actually confirms real
+// activity for this session (an observation already persisted, or an
+// event it reports actively in flight) — a session that never shows any
+// activity at all still just pays the original stopWaitMaxAttempts budget
+// below, unchanged:
+//
+//  1. Faster exit: once the worker reports zero events in flight for
+//     stopInFlightConfirmStreak consecutive checks, this returns
+//     immediately rather than waiting out the full row-count streak.
+//  2. Longer patience: the wait ceiling extends from stopWaitMaxAttempts
+//     to the much larger stopInFlightWaitMaxAttempts, because once the
+//     worker is reachable, waiting longer is no longer a blind guess — a
+//     live re-verification run this session hit a real observation that
+//     took 104 seconds, longer than the original ~45s ceiling, and would
+//     have been cut off mid-flight without this.
+//
+// A query's second return value is whether it succeeded — a failure
+// (worker not running, wrong socket path, crashed) must fall back to the
+// row-count heuristic below entirely, not be treated as "confirmed zero."
+// This closes the exact architectural gap this function's own doc comment
+// used to name as unresolved: previously there was no way to ask the
+// worker directly whether it was still catching up on a session, only to
+// infer it from watching the observations table, a heuristic that (see
+// below) a sequential-processing plateau could fool, and which had no way
+// to distinguish "still working, keep waiting" from "give up now" beyond
+// a fixed timeout. It's still not a perfect signal — see
+// hook.QueryInFlight's own doc comment — but it's authoritative rather
+// than inferred, which the row-count check never was.
 //
 // A real bug found by hand, not anticipated: Stop fires the instant the
 // user's session ends, but PostToolUse is fire-and-forget — each
@@ -99,17 +155,66 @@ const (
 // conversation, no tool calls at all) pays the full wait budget before
 // this gives up — an acceptable cost since Stop runs fire-and-forget,
 // not a cost the user waiting on their own session ever sees.
-func waitForSessionObservations(st store.Backend, sessionID string, limit int) ([]store.SearchResult, error) {
+func waitForSessionObservations(st store.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]store.SearchResult, error) {
 	var observations []store.SearchResult
 	prevCount := -1
 	streak := 0
-	for attempt := 0; attempt < stopWaitMaxAttempts; attempt++ {
+	inFlightZeroStreak := 0
+	maxAttempts := stopWaitMaxAttempts
+	// sawActivity gates the ceiling extension below: only real evidence
+	// that this session has (or had) a turn actually happening — not just
+	// "the worker answered our query" — earns the longer budget. Without
+	// this, a genuinely tool-call-free session (a pure conversation, never
+	// any activity at all) would pay the full five-minute ceiling just
+	// because the worker happened to be reachable, not because there was
+	// ever anything to wait for.
+	sawActivity := false
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		obs, err := st.BySessionID(sessionID, limit)
 		if err != nil {
 			return nil, err
 		}
 		observations = obs
-		if len(obs) > 0 && len(obs) == prevCount {
+		if len(obs) > 0 {
+			sawActivity = true
+		}
+
+		workerConfirmedBusy := false
+		if inFlight != nil {
+			if n, ok := inFlight(sessionID); ok {
+				if n > 0 {
+					sawActivity = true
+					workerConfirmedBusy = true
+				}
+				if n == 0 && len(obs) > 0 {
+					inFlightZeroStreak++
+					if inFlightZeroStreak >= stopInFlightConfirmStreak {
+						return observations, nil
+					}
+				} else {
+					inFlightZeroStreak = 0
+				}
+				if sawActivity && maxAttempts < stopInFlightWaitMaxAttempts {
+					maxAttempts = stopInFlightWaitMaxAttempts
+				}
+			} else {
+				inFlightZeroStreak = 0
+			}
+		}
+
+		if workerConfirmedBusy {
+			// The worker just told us directly that something is still in
+			// flight for this session — that overrides any illusion of
+			// stability the row count alone might otherwise suggest. Without
+			// this override, the row-count streak below could still reach
+			// stopStableStreakRequired and return early purely because a
+			// row count happened to hold steady, even while the worker was
+			// simultaneously reporting real ongoing work — exactly the
+			// plateau failure mode stopStableStreakRequired exists to
+			// guard against, now closed with a real signal instead of a
+			// guessed threshold, but only if it's allowed to win.
+			streak = 0
+		} else if len(obs) > 0 && len(obs) == prevCount {
 			streak++
 			if streak >= stopStableStreakRequired {
 				return observations, nil
@@ -132,6 +237,7 @@ func cmdStop(args []string) int {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, queried for real in-flight state (best-effort — falls back to a row-count heuristic if unreachable)")
 	limit := fs.Int("limit", 50, "max observations from this session to include in the summary")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(empty to skip embedding — the summary is still persisted, just not semantically searchable)")
@@ -157,7 +263,14 @@ func cmdStop(args []string) int {
 	}
 	defer st.Close()
 
-	observations, err := waitForSessionObservations(st, in.SessionID, *limit)
+	inFlight := func(sessionID string) (int, bool) {
+		n, err := hook.QueryInFlight(*socketPath, sessionID)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	observations, err := waitForSessionObservations(st, in.SessionID, *limit, inFlight)
 	if err != nil {
 		l.Printf("FAILED BySessionID(%s): %v", in.SessionID, err)
 		return 0

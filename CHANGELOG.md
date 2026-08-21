@@ -5,6 +5,54 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.3.0 — 2026-08-21
+
+- **The worker daemon now exposes real per-session in-flight state** —
+  the architectural follow-up the Stop hook's own doc comments had named
+  as unresolved rather than attempted. A small plain-text `INFLIGHT
+  <session_id>` query, answered synchronously over the same socket the
+  fire-and-forget hook-forwarding protocol already uses (`hook.Forward`
+  and the daemon's `handleConn` now branch on which kind of payload
+  arrived), backed by a new `inflightTracker` that counts, per session,
+  how many `PostToolUse` events are currently between "received" and
+  "fully processed." `Stop` now queries this directly
+  (`hook.QueryInFlight`) instead of only ever inferring from watching the
+  observations table's row count.
+- **This closes a real gap the previous (streak-based) Stop-hook fix
+  still had**: its wait ceiling was a fixed ~45 seconds regardless of
+  what was actually happening, because the row-count heuristic had no
+  way to tell "still working" apart from "give up" beyond a fixed
+  timeout. A live re-verification run of that fix hit a real single
+  observation that took 104 seconds to process (an unusually large
+  summarization call) — well past the old ceiling — and would have been
+  cut off mid-flight, silently producing a summary missing that
+  observation. The new query lets `Stop` extend its wait to five minutes
+  once the worker confirms real activity for the session (an observation
+  already persisted, or an event actively in flight), while a genuinely
+  tool-call-free session still finishes in the original ~45s — the
+  extension requires actual evidence of activity, not just "the worker
+  answered." It also exits fast once the worker confirms nothing is left
+  in flight, rather than waiting out the full row-count streak. The
+  row-count streak can no longer independently declare "stable" while
+  the worker is simultaneously reporting real ongoing work — an override
+  this fix specifically needed, confirmed by briefly disabling it and
+  watching a dedicated test fail exactly as it should (the old heuristic
+  locking in early despite the worker's contrary signal).
+- Verified with new unit tests (the fast-exit path, the ceiling
+  extension past the old 45-attempt limit, and a non-regression test
+  proving a genuinely empty session still pays only the original
+  budget — not five minutes just because the worker happened to be
+  reachable), each confirmed as a genuine regression test by briefly
+  breaking the corresponding logic and watching the test fail before
+  restoring it. Also verified with a dedicated real-socket test in the
+  `worker` package (a real Unix socket, the actual `hook.Forward` and
+  `hook.QueryInFlight` client functions, an `observer.Handle` that
+  blocks on command) proving the query reports nonzero while an event
+  is genuinely being processed and zero once it completes. Finally
+  verified live end to end with the compiled binary: a real worker
+  daemon, a real two-tool-call `claude` session, and `Stop`'s own log
+  correctly reporting "from 2 observations" via the new query path.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and

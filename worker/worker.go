@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"time"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
@@ -69,6 +71,13 @@ type Daemon struct {
 	sessions *sessionCache
 	counters statsCounters
 	st       store.Backend
+
+	// inflight and inflightOnce back getInflight (inflight.go) — see its
+	// own doc comment for why a caller like the Stop hook can query this
+	// directly instead of inferring "is the worker still catching up on
+	// this session" from watching row counts.
+	inflight     *inflightTracker
+	inflightOnce sync.Once
 }
 
 // Stats returns a snapshot of the daemon's current activity and
@@ -211,6 +220,19 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		d.Log.Printf("REJECTED payload exceeding %d bytes from a client (likely an abnormally large tool_response) — not processing", hook.MaxPayloadBytes)
 		return
 	}
+
+	// The in-flight query protocol is the one request on this socket that
+	// gets a synchronous reply — everything else (a hook payload) is
+	// fire-and-forget, matching hook.Forward's own contract that it never
+	// waits for a response. A query is distinguished by a plain-text
+	// prefix that can never collide with a real hook payload, which is
+	// always JSON and so always starts with '{'.
+	if sid, ok := hook.ParseInFlightQuery(raw); ok {
+		n := d.getInflight().count(sid)
+		_, _ = conn.Write([]byte(strconv.Itoa(n)))
+		return
+	}
+
 	go d.process(ctx, raw)
 }
 
@@ -243,6 +265,15 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// Stats are written once after every genuine work attempt below — not
 	// for the two early-return cases above, which counted nothing.
 	defer d.recordStats()
+
+	// Marks this session "in flight" for the ENTIRE remainder of this
+	// function — through the observer call, the store insert, and the
+	// embedding call — not just the part guarded by entry.mu below, so a
+	// caller querying in-flight state sees "still working" for exactly as
+	// long as a row for this event is genuinely not yet persisted (or, for
+	// the embedding step, not yet fully queryable by semantic search).
+	d.getInflight().inc(in.SessionID)
+	defer d.getInflight().dec(in.SessionID)
 
 	queueStart := time.Now()
 	entry, err := d.sessions.getOrCreate(ctx, in.SessionID)

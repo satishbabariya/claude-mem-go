@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,4 +64,73 @@ func Forward(socketPath string, r io.Reader) (bytesSent int, err error) {
 
 	n, err := conn.Write(raw)
 	return n, err
+}
+
+// inFlightQueryPrefix opens the small plain-text query protocol the worker
+// daemon's handleConn recognizes ahead of the real (always-JSON,
+// always-"{"-prefixed) hook-forwarding payload, so the two can never be
+// confused on the wire. Unexported: ParseInFlightQuery and QueryInFlight
+// are the only sanctioned way to speak or parse this protocol, so the
+// client and server side can never drift out of sync on the exact format.
+const inFlightQueryPrefix = "INFLIGHT "
+
+// ParseInFlightQuery reports whether raw is an in-flight query (as sent by
+// QueryInFlight) rather than a hook-forwarding payload, and if so, the
+// session_id it's asking about. Called by the worker daemon's handleConn.
+func ParseInFlightQuery(raw []byte) (sessionID string, ok bool) {
+	s := string(raw)
+	if !strings.HasPrefix(s, inFlightQueryPrefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(s, inFlightQueryPrefix)), true
+}
+
+// QueryInFlight asks the worker daemon at socketPath how many PostToolUse
+// events for sessionID it currently has between "received" and "fully
+// processed," and returns that count.
+//
+// This is the direct fix for the gap the Stop hook's original polling
+// heuristic (waitForSessionObservations) documented as its own known
+// limitation: rather than inferring "has the worker caught up" by
+// watching the observations table's row count stabilize — which a
+// sequential-processing plateau can fool, and which has no way to tell
+// "genuinely done" apart from "still working" without guessing at a
+// timeout — a caller can now ask the one process that actually knows,
+// directly.
+//
+// Returns an error if the daemon isn't reachable (not started, wrong
+// socket path, crashed) or the connection fails for any other reason — a
+// caller should treat that as "unknown," not "zero," and fall back to a
+// heuristic rather than assuming nothing is in flight.
+func QueryInFlight(socketPath, sessionID string) (int, error) {
+	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(DialTimeout))
+
+	if _, err := conn.Write([]byte(inFlightQueryPrefix + sessionID)); err != nil {
+		return 0, err
+	}
+	// The server's own read (handleConn) blocks until EOF, same as it does
+	// for a real hook-forwarding payload — it has no length prefix to know
+	// otherwise. CloseWrite half-closes just this side, signaling "nothing
+	// more coming" without tearing down the connection, so the read below
+	// can still get the server's reply. Without this, both ends would
+	// block forever: the server waiting to see EOF before it even looks at
+	// what was sent, this call waiting to read a response the server never
+	// gets around to writing.
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	raw, err := io.ReadAll(io.LimitReader(conn, 32))
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return 0, fmt.Errorf("malformed in-flight response %q: %w", raw, err)
+	}
+	return n, nil
 }

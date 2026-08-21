@@ -286,6 +286,32 @@ docker compose up -d
   next observation lands), confirmed as a genuine regression test by
   temporarily reverting the streak threshold back to 2 and watching it
   fail, then restoring it.
+
+  That "legitimate architectural follow-up" is now built: the worker
+  daemon exposes real per-session in-flight state over its own socket
+  (a small plain-text `INFLIGHT <session_id>` query alongside the
+  existing fire-and-forget hook-forwarding protocol, answered
+  synchronously — see `hook.QueryInFlight`/`worker`'s `inflightTracker`),
+  and `Stop` queries it directly instead of only ever inferring from a
+  row count. This closes the gap two ways: it exits fast once the worker
+  confirms nothing is left in flight (no more waiting out a long
+  row-count streak once the real answer is already known), and — the
+  half that actually matters for correctness — it *extends* the wait
+  ceiling from ~45 seconds to five minutes once the worker confirms real
+  activity, but only then, so a genuinely tool-call-free session still
+  finishes in the original ~45s. That extension is not cosmetic: a live
+  re-verification run of the previous fix hit a real single observation
+  that took 104 seconds — longer than the old ceiling — which would have
+  been cut off mid-flight, summarizing an incomplete session, without a
+  live signal justifying the wait. A row-count streak reaching its own
+  "stable" threshold no longer overrides the worker's own "still busy"
+  answer, either — an override this fix specifically needed, verified by
+  briefly disabling it and confirming a test failure it exists to catch
+  (the old heuristic locking in early despite the worker reporting
+  ongoing work). Verified live end to end with the actual compiled
+  binary: a real worker daemon, a real two-tool-call `claude` session,
+  and `Stop`'s own log correctly reporting "from 2 observations" via the
+  new query path, not the row-count fallback.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
