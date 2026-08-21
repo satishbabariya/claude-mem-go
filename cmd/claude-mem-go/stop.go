@@ -229,6 +229,14 @@ func waitForSessionObservations(st store.Backend, sessionID string, limit int, i
 	return observations, nil
 }
 
+// summaryFetchCap bounds the re-read cmdStop does to learn a session's
+// TRUE observation count before choosing a summary window. Deliberately
+// far above the -limit ceiling of 100: it is a backstop against a
+// pathological session, not the summarization budget. At 2000 rows of
+// (id, title, subtitle, type) this is a few hundred KB and one indexed
+// query, paid once per session end.
+const summaryFetchCap = 2000
+
 // cmdStop is the Stop hook: real claude-mem's "summarize" step,
 // reimplemented from what's already persisted per tool call rather than
 // re-reading the raw transcript. Fire-and-forget like PostToolUse (real
@@ -368,6 +376,33 @@ func cmdStop(args []string) int {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 
+	// `observations` came back capped at *limit, which is where the
+	// summary's real defect lived: BySessionID orders oldest-first, so a
+	// plain LIMIT kept the FIRST *limit observations and dropped
+	// everything after them — the end of the session, which is where its
+	// conclusions are. Measured on a real 150-observation session at the
+	// default cap of 50: the summary described routine early edits, said
+	// "an extensive series of 50 sequential edits", and contained no trace
+	// of the decision recorded 50 times in the tail.
+	//
+	// So re-read the session without the summarization cap, then choose a
+	// window deliberately (head + tail, middle elided) instead of letting
+	// SQL's LIMIT choose it. summaryFetchCap still bounds the read — an
+	// unbounded query on a pathological session is its own problem — but
+	// it is far above *limit, so Total is the true count in every
+	// realistic case and the prompt can say so.
+	all := observations
+	if full, ferr := st.BySessionID(in.SessionID, summaryFetchCap); ferr != nil {
+		l.Printf("full re-read for windowing failed, falling back to the capped set: %v", ferr)
+	} else if len(full) > len(all) {
+		all = full
+	}
+	window := observer.SelectSummaryWindow(all, *limit)
+	if window.Total > len(window.Observations) {
+		l.Printf("session %s has %d observations; summarizing from %d (earliest + most recent, middle elided)",
+			in.SessionID, window.Total, len(window.Observations))
+	}
+
 	obs, err := observer.New(context.Background(), *model)
 	if err != nil {
 		l.Printf("FAILED to start observer: %v", err)
@@ -375,7 +410,7 @@ func cmdStop(args []string) int {
 	}
 	defer obs.Close()
 
-	summaryTurn, err := obs.Summarize(observations)
+	summaryTurn, err := obs.Summarize(window)
 	if err != nil {
 		l.Printf("FAILED summarizing session %s: %v", in.SessionID, err)
 		return 0

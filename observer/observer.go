@@ -73,18 +73,110 @@ func BuildPrompt(tc transcript.ToolCall) string {
 	return b.String()
 }
 
+// SummaryWindow is the slice of a session's observations that actually
+// gets sent to the model, plus the context needed to describe it
+// honestly: each entry's TRUE position in the session, and how many
+// observations the session really has.
+//
+// It exists because len(Observations) and Total are routinely different
+// and the difference used to be invisible. See SelectSummaryWindow.
+type SummaryWindow struct {
+	Observations []store.SearchResult
+	// Positions[i] is the 1-based index of Observations[i] within the
+	// full session. Same length as Observations.
+	Positions []int
+	// Total is how many observations the session actually recorded.
+	Total int
+}
+
+// SelectSummaryWindow picks at most max observations out of all, keeping
+// the earliest and the most recent and dropping the middle.
+//
+// The old behaviour was a plain LIMIT: the FIRST max observations, in
+// oldest-first order, with everything after them dropped. For a long
+// session that is close to the worst possible choice, because the end of
+// a session is where its conclusions are. Measured on a real
+// 150-observation session with the default cap of 50: the summary
+// described routine early edits and contained no trace of the decision
+// recorded 50 times in the tail.
+//
+// Head and tail rather than pure tail: the opening observations say what
+// the session set out to do, which the closing ones assume. Real
+// claude-mem summarizes from last_assistant_message alone, which is the
+// opposite bias — better than head-only, but it still cannot say how the
+// session started.
+func SelectSummaryWindow(all []store.SearchResult, max int) SummaryWindow {
+	total := len(all)
+	if max <= 0 || total <= max {
+		positions := make([]int, total)
+		for i := range positions {
+			positions[i] = i + 1
+		}
+		return SummaryWindow{Observations: all, Positions: positions, Total: total}
+	}
+	// Bias the extra one to the tail on an odd budget: conclusions are
+	// worth more than openings when something has to give.
+	head := max / 2
+	tail := max - head
+
+	out := make([]store.SearchResult, 0, max)
+	positions := make([]int, 0, max)
+	for i := 0; i < head; i++ {
+		out = append(out, all[i])
+		positions = append(positions, i+1)
+	}
+	for i := total - tail; i < total; i++ {
+		out = append(out, all[i])
+		positions = append(positions, i+1)
+	}
+	return SummaryWindow{Observations: out, Positions: positions, Total: total}
+}
+
 // BuildSummaryPrompt asks the model to synthesize one session-level
 // observation out of the individual tool-call observations already
-// recorded for that session (see store.Backend.BySessionID) — the Stop-hook
-// analog of BuildPrompt: real claude-mem's "summarize" mode, condensing a
-// whole session's user_prompt/last_assistant_message into one narrative,
-// reimplemented here from what's actually persisted per turn instead of
-// re-reading the raw transcript.
-func BuildSummaryPrompt(observations []store.SearchResult) string {
+// recorded for that session (see store.Backend.BySessionID) — the
+// Stop-hook analog of BuildPrompt: real claude-mem's "summarize" mode,
+// condensing a whole session into one narrative, reimplemented here from
+// what's actually persisted per turn instead of re-reading the raw
+// transcript.
+//
+// It renders w. When w.Total exceeds the
+// number of observations shown, the prompt says so explicitly.
+//
+// The old wording — "Here are the observations recorded during this
+// session" — was an unqualified claim that the slice WAS the whole
+// session, and the model believed it. Measured on a real 150-observation
+// session capped at 50: the summary came back titled "Iterative Helper
+// Function Refinement" asserting "an extensive series of 50 sequential
+// edits". A confident, specific, wrong count, on top of missing every
+// conclusion in the dropped tail. Truncating is a legitimate cost
+// tradeoff; truncating silently and letting the model narrate the
+// fragment as the whole is not.
+func BuildSummaryPrompt(w SummaryWindow) string {
 	var b strings.Builder
-	b.WriteString("Here are the observations recorded during this session, in order:\n\n")
-	for i, r := range observations {
-		fmt.Fprintf(&b, "%d. [%s] %s", i+1, r.Observation.Type, r.Observation.Title)
+	shown := len(w.Observations)
+	if w.Total > shown {
+		fmt.Fprintf(&b, "This session recorded %d observations. You are being shown %d of them — "+
+			"the earliest and the most recent — with the middle omitted to fit. "+
+			"The numbering below is each observation's true position in the session, "+
+			"so a gap in the numbers is where observations were left out.\n\n"+
+			"Summarize the session as a whole. Do not state or imply that it consisted only of "+
+			"what you can see here, and do not quote a total count of steps or changes.\n\n",
+			w.Total, shown)
+	} else {
+		b.WriteString("Here are the observations recorded during this session, in order:\n\n")
+	}
+	prev := 0
+	for i, r := range w.Observations {
+		pos := i + 1
+		if i < len(w.Positions) {
+			pos = w.Positions[i]
+		}
+		if prev != 0 && pos > prev+1 {
+			fmt.Fprintf(&b, "   … %d observations omitted …\n", pos-prev-1)
+		}
+		prev = pos
+		fmt.Fprintf(&b, "%d. [%s] %s", pos, r.Observation.Type, r.Observation.Title)
 		if r.Observation.Subtitle != "" {
 			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
 		}
@@ -151,8 +243,8 @@ func (o *Observer) Observe(tc transcript.ToolCall) (Turn, error) {
 // Summarize sends a session's already-recorded observations as one turn and
 // returns the synthesized session-level observation — the Stop-hook path
 // (see BuildSummaryPrompt).
-func (o *Observer) Summarize(observations []store.SearchResult) (Turn, error) {
-	return o.sendAndParse(BuildSummaryPrompt(observations))
+func (o *Observer) Summarize(w SummaryWindow) (Turn, error) {
+	return o.sendAndParse(BuildSummaryPrompt(w))
 }
 
 func (o *Observer) sendAndParse(prompt string) (Turn, error) {

@@ -7,6 +7,34 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The session summary silently described the wrong half of any long
+  session — and confidently misstated its size.** `BySessionID` orders
+  oldest-first and `stop` applied a plain `LIMIT` (default 50, hard cap
+  100), so the summary was built from the FIRST N observations and
+  everything after them was dropped: the end of the session, which is
+  where its conclusions are. `PostToolUse` is wired with `matcher: "*"`,
+  so essentially every tool call becomes an observation and any
+  substantive session clears 50 easily. Reproduced end to end on a real
+  150-observation session where the last 50 recorded a decision: the
+  summary came back titled *"Iterative Helper Function Refinement"*, with
+  no trace of the decision, asserting *"an extensive series of 50
+  sequential edits"* — a specific, confident, wrong count. The count was
+  the more serious half: the prompt opened "Here are the observations
+  recorded during this session", an unqualified claim that the slice was
+  the whole session, so the model had no way to know it held a fragment.
+  Now `SelectSummaryWindow` keeps the earliest and most recent
+  observations and elides the middle (extra one biased to the tail),
+  numbering each by its TRUE session position so a gap in the numbering
+  shows where things were left out, and `BuildSummaryPrompt` states the
+  real total and instructs the model not to quote a count. `stop`
+  re-reads the session up to `summaryFetchCap` (2000) to learn that
+  total, and logs it. Same session, after: *"Helper Code Refactoring
+  Leading to Billing Service Database Migration Decision"* — both ends
+  represented, and no invented count. A complete session's prompt is
+  unchanged and says nothing about truncation, with a test pinning that,
+  since warning on every session would train the model to hedge summaries
+  that are in fact complete.
+
 - **The Stop hook ignored `stop_hook_active`, so a blocked turn made it
   redo its most expensive work up to eight times.** Claude Code sets this
   flag on Stop and SubagentStop payloads when a turn is being retried
