@@ -416,6 +416,41 @@ process (this project doesn't cut tagged releases on a schedule).
   each confirmed as a genuine fix by temporarily removing the `process()`
   gate and watching the regression test fail with a real nil-pointer
   panic before restoring it.
+- **Added: `prompt-context` couldn't tell a real user prompt apart from a
+  synthetic Claude Code protocol notification auto-submitted as one.**
+  Claude Code can auto-submit a `<task-notification>...</task-notification>`-
+  wrapped payload as a `UserPromptSubmit` prompt (a background/subagent
+  task-completion notification, not real user text). Real claude-mem's
+  `isInternalProtocolPayload` (`tag-stripping.ts`) is checked at both its
+  `UserPromptSubmit` capture boundaries — the CLI handler
+  (`session-init.ts`, right after its project-exclusion check) and the
+  HTTP session-init route — before any privacy check or embedding. This
+  port had no equivalent at all: `prompt-context` would strip privacy
+  tags (a no-op here), report a non-private state to the worker, pay a
+  real Ollama embedding call, and inject "Memory relevant to what you
+  just asked" in response to internal plumbing, not anything the user
+  asked. Added `privacy.IsInternalProtocolPayload`, ported from
+  `tag-stripping.ts`'s own version — which combines a `\1` backreference
+  with a negative lookahead keyed off that same backreference, something
+  Go's RE2 engine can express neither half of, so this is plain string
+  operations instead (verify the whole trimmed string is exactly one
+  open tag, a body with no further occurrence of the tag name, and the
+  matching close tag). Wired into `prompt-context` in real claude-mem's
+  own order: right after the project-exclusion check, before privacy
+  stripping or the worker notification. All 12 test cases ported
+  directly from real claude-mem's own
+  `tests/utils/tag-stripping.test.ts` `isInternalProtocolPayload`
+  suite — bare/empty-body/whitespace/multiline/attributed blocks (all
+  true), an unclosed tag, user text around the block, unrelated tags,
+  an over-256KB payload, and two adjacent or separated blocks (all
+  false, the last deliberately: a deny-list per single well-formed
+  block, not concatenations of them) — every one passing against this
+  port's plain-string implementation. Verified live against the real
+  compiled binary too: a real `<task-notification>` payload correctly
+  skipped before ever attempting to reach the worker socket, confirmed
+  as a genuine fix by temporarily removing the guard and watching the
+  identical payload instead attempt a real worker notification and a
+  real Ollama embedding call before restoring it.
 
 ## 0.2.0 — 2026-08-20
 

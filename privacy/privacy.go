@@ -73,3 +73,69 @@ func StripMemoryTags(content string) string {
 	stripped, _ := StripTags(content)
 	return stripped
 }
+
+// maxProtocolPayloadBytes mirrors tag-stripping.ts's MAX_PROTOCOL_PAYLOAD_BYTES.
+const maxProtocolPayloadBytes = 256 * 1024
+
+const (
+	protocolTagName    = "task-notification"
+	protocolOpenPrefix = "<" + protocolTagName
+	protocolCloseTag   = "</" + protocolTagName + ">"
+)
+
+func isWordByte(b byte) bool {
+	return b == '_' || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || ('0' <= b && b <= '9')
+}
+
+// IsInternalProtocolPayload reports whether text is, in its entirety
+// (aside from surrounding whitespace), a single
+// <task-notification>...</task-notification> block — a synthetic Claude
+// Code protocol message (a background/subagent task-completion
+// notification) that got auto-submitted as a UserPromptSubmit prompt, not
+// real user text. Ports tag-stripping.ts's isInternalProtocolPayload.
+//
+// TS's version is one regex combining a `\1` backreference AND a negative
+// lookahead keyed off that same backreference
+// (`(?:(?!<\1\b|</\1\b)[\s\S])*`) — Go's RE2 engine can express neither.
+// Implemented instead with plain string operations verifying the whole
+// (trimmed) string is exactly one open tag, a body containing no further
+// occurrence of the tag name, and the matching close tag — the same
+// shape the backreference restricts the TS version to. The one place
+// this can diverge from TS: TS's `\b` word boundary would reject a
+// differently-named tag whose name happens to start with
+// "task-notification" followed immediately by another word character
+// (e.g. a hypothetical "<task-notificationX>"), which this port also
+// rejects via the isWordByte check below — matched deliberately, not
+// coincidentally.
+func IsInternalProtocolPayload(text string) bool {
+	if text == "" {
+		return false
+	}
+	if len(text) > maxProtocolPayloadBytes {
+		return false
+	}
+	s := strings.TrimSpace(text)
+	if !strings.HasPrefix(s, protocolOpenPrefix) {
+		return false
+	}
+	rest := s[len(protocolOpenPrefix):]
+	if rest == "" || isWordByte(rest[0]) {
+		return false
+	}
+	gt := strings.IndexByte(rest, '>')
+	if gt < 0 {
+		return false
+	}
+	body := rest[gt+1:]
+	if !strings.HasSuffix(body, protocolCloseTag) {
+		return false
+	}
+	inner := body[:len(body)-len(protocolCloseTag)]
+	if strings.Contains(inner, protocolOpenPrefix) || strings.Contains(inner, "</"+protocolTagName) {
+		// A second occurrence of the tag name anywhere in the body — two
+		// adjacent/separated blocks, or a stray nested one — means this
+		// isn't a single well-formed block spanning the whole string.
+		return false
+	}
+	return true
+}

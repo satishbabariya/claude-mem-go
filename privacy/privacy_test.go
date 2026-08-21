@@ -280,3 +280,41 @@ func TestStripMemoryTagsPrivacyEnforcementIntegration(t *testing.T) {
 		}
 	})
 }
+
+// Every case here is ported directly from real claude-mem's own
+// tests/utils/tag-stripping.test.ts describe('isInternalProtocolPayload'),
+// run directly while porting this function, not re-derived from prose.
+func TestIsInternalProtocolPayload(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"empty input", "", false},
+		{"bare task-notification block", "<task-notification>agent done</task-notification>", true},
+		{"empty-body task-notification block", "<task-notification></task-notification>", true},
+		{"surrounding whitespace", "\n  <task-notification>x</task-notification>\n", true},
+		{"multi-line payload", "<task-notification>\nline1\nline2\n</task-notification>", true},
+		{"tag has attributes", `<task-notification data-id="42">x</task-notification>`, true},
+		{"partial / unclosed tag", "<task-notification>oops", false},
+		{"surrounded by user text", "hi <task-notification>x</task-notification> more", false},
+		{"unrelated tag: private", "<private>secret</private>", false},
+		{"unrelated tag: system-reminder", "<system-reminder>hi</system-reminder>", false},
+		{"two protocol blocks separated by user text", "<task-notification>a</task-notification> hello <task-notification>b</task-notification>", false},
+		{"two adjacent protocol blocks (deny-list per single block, not concatenations)", "<task-notification>a</task-notification><task-notification>b</task-notification>", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsInternalProtocolPayload(c.input); got != c.want {
+				t.Errorf("IsInternalProtocolPayload(%q) = %v, want %v", c.input, got, c.want)
+			}
+		})
+	}
+
+	t.Run("over-large input", func(t *testing.T) {
+		huge := "<task-notification>" + strings.Repeat("a", 300*1024)
+		if IsInternalProtocolPayload(huge) {
+			t.Error("want false for input over the 256KB cap")
+		}
+	})
+}

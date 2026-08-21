@@ -72,6 +72,19 @@ func cmdPromptContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
+	if in.Prompt != "" && privacy.IsInternalProtocolPayload(in.Prompt) {
+		// Real claude-mem's own session-init.ts checks this immediately
+		// after its project-exclusion check too, before any privacy
+		// stripping or embedding — a synthetic Claude Code
+		// <task-notification>...</task-notification> payload auto-submitted
+		// as a "prompt" is not real user text, so it must never be treated
+		// as one: no privacy-state report to the worker, no embedding call,
+		// no "memory relevant to what you just asked" injected in response
+		// to internal plumbing.
+		l.Printf("skip: prompt is an internal protocol payload, not real user text")
+		fmt.Println("{}")
+		return 0
+	}
 
 	prompt := privacy.StripMemoryTags(in.Prompt)
 	private := prompt == "" && in.Prompt != ""
