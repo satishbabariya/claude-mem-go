@@ -378,6 +378,44 @@ process (this project doesn't cut tagged releases on a schedule).
   normally — both confirmed as genuine fixes by temporarily removing the
   strip call, rebuilding, watching the raw secret reach the observer/embed
   call in each case, then restoring it.
+- **Fixed: a `<private>`-wrapped prompt only redacted the prompt text
+  itself — every tool call made in that same turn was still fully
+  observed and persisted, and still landed in the Stop summary.** Real
+  claude-mem's `PrivacyCheckValidator.checkUserPromptPrivacy` is
+  consulted at both its capture boundaries — before queueing a
+  `PostToolUse` observation (`shared.ts`) and before generating a Stop
+  summary (`SessionRoutes.ts`) — and suppresses the whole turn, not just
+  the prompt, once that turn's persisted prompt stripped to nothing.
+  This port's tag-stripping (previous entry) only ever gated the prompt's
+  own embedding; nothing carried that suppression across to the tool
+  calls the private turn actually triggered. Fixed by extending the
+  worker daemon's existing plain-text socket protocol (already used for
+  the `INFLIGHT <session_id>` query) with a `PRIVATE <session_id> <0|1>`
+  marker and an `ISPRIVATE <session_id>` query. `prompt-context`
+  (`UserPromptSubmit`) sends the marker on *every* prompt — private or
+  not, matching real claude-mem's own hard-won fix for issues #2794/#2795
+  it documents in `PrivacyCheckValidator`'s own comment: an absent signal
+  must default to "not private," never "private," or a session whose
+  UserPromptSubmit simply hasn't reported in yet would have every
+  observation silently frozen. The worker's `process()` (`PostToolUse`)
+  and `stop` (`Stop`) both check the flag before doing any real work,
+  right alongside the existing project-exclusion check. Because
+  `UserPromptSubmit` is not registered `"async": true` in `hooks.json` —
+  it blocks Claude Code's turn until it returns — the marker is
+  guaranteed to reach the worker before any tool call made in response to
+  that prompt can possibly fire `PostToolUse`, so this port's version is
+  actually race-free in a way real claude-mem's own async architecture
+  isn't. Verified with new unit tests (wire-format round trips, the
+  socket protocol end to end against a real worker over a real Unix
+  socket, `process()` skipping before ever touching the nil-backed
+  session cache that would otherwise panic) plus a real live end-to-end
+  run: a real worker daemon, a `<private>` prompt followed by a real
+  `PostToolUse` and `Stop` for one session (zero rows, both confirmed
+  against the real database) against a control session with a normal
+  prompt (one real observation, one real summary, both persisted) —
+  each confirmed as a genuine fix by temporarily removing the `process()`
+  gate and watching the regression test fail with a real nil-pointer
+  panic before restoring it.
 
 ## 0.2.0 — 2026-08-20
 

@@ -267,6 +267,21 @@ func cmdStop(args []string) int {
 		l.Printf("skip: subagent context detected (agent_id=%s agent_type=%s)", in.AgentID, in.AgentType)
 		return 0
 	}
+	// Real claude-mem's own PrivacyCheckValidator makes this same check
+	// before generating a Stop-time summary (SessionRoutes.ts), not just
+	// before a PostToolUse observation — a turn a user marked entirely
+	// private (see prompt-context and worker.process's identical check)
+	// must not surface in the session summary either. Stop runs as its own
+	// process with no direct access to the worker's in-memory flag, hence
+	// the socket query rather than a direct call. A query failure (daemon
+	// unreachable) deliberately falls through to summarizing normally
+	// rather than skipping — an unknown signal must never be treated as
+	// "private," the same reasoning d.sessions.isPrivate's own doc comment
+	// gives for why an absent flag defaults to false.
+	if private, err := hook.QueryPrivate(*socketPath, in.SessionID); err == nil && private {
+		l.Printf("skip: session %s marked private for this turn", in.SessionID)
+		return 0
+	}
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {

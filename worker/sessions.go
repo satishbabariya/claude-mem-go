@@ -38,6 +38,16 @@ type sessionEntry struct {
 	lastUsed time.Time
 }
 
+// privacyFlag is the current session's "was the prompt that started this
+// turn entirely private" state — see setPrivate/isPrivate. setAt exists
+// purely so evictStalePrivacy can bound this map's lifetime the same way
+// sessionIdleTimeout already bounds byID's; it has nothing to do with the
+// privacy decision itself.
+type privacyFlag struct {
+	private bool
+	setAt   time.Time
+}
+
 // sessionCache maps a session_id to its one persistent observer.Handle.
 // newFunc is a factory rather than a hardcoded observer.New call so tests
 // can substitute a fake handle instead of spawning a real claude
@@ -47,10 +57,67 @@ type sessionCache struct {
 	byID    map[string]*sessionEntry
 	pool    *pool.Pool
 	newFunc func(ctx context.Context) (observer.Handle, error)
+
+	// privMu/priv are deliberately separate from mu/byID: setPrivate is
+	// called by the UserPromptSubmit hook (prompt-context) for EVERY
+	// prompt, private or not, often before this session has any
+	// sessionEntry at all (a purely-conversational turn with no tool
+	// calls never creates one) — it must never block on, or trigger,
+	// getOrCreate's subprocess-spawning path just to record a flag.
+	privMu sync.Mutex
+	priv   map[string]privacyFlag
 }
 
 func newSessionCache(p *pool.Pool, newFunc func(ctx context.Context) (observer.Handle, error)) *sessionCache {
 	return &sessionCache{byID: make(map[string]*sessionEntry), pool: p, newFunc: newFunc}
+}
+
+// setPrivate records whether sessionID's most recently submitted prompt was
+// entirely private (see privacy.StripMemoryTags) — called on every single
+// UserPromptSubmit, with both true and false, not just when private:
+// real claude-mem's own equivalent (PrivacyCheckValidator) re-checks a
+// specific prompt_number's persisted row fresh each time rather than
+// relying on a sticky flag, but this port has no equivalent per-turn
+// table to look up — a flag that only ever gets set to true and never
+// reset would silently suppress capture for every later turn in the
+// session too, which is a worse bug than the one this exists to fix. The
+// UserPromptSubmit hook is NOT registered async in hooks.json — it blocks
+// Claude Code's turn until it returns — so by wall-clock ordering this
+// call always lands before any PostToolUse event for a tool call made in
+// response to that same prompt can possibly arrive.
+func (c *sessionCache) setPrivate(sessionID string, private bool) {
+	c.privMu.Lock()
+	defer c.privMu.Unlock()
+	if c.priv == nil {
+		c.priv = make(map[string]privacyFlag)
+	}
+	c.priv[sessionID] = privacyFlag{private: private, setAt: time.Now()}
+}
+
+// isPrivate reports sessionID's current privacy flag — false (not
+// private) both when it was explicitly cleared AND when it was never set
+// at all, matching real claude-mem's own documented default: an absent
+// signal must never be treated as "private," since that would silently
+// freeze every observation for a session whose UserPromptSubmit simply
+// hasn't reported in yet (the exact #2794/#2795 bug its own
+// PrivacyCheckValidator doc comment describes and deliberately avoids).
+func (c *sessionCache) isPrivate(sessionID string) bool {
+	c.privMu.Lock()
+	defer c.privMu.Unlock()
+	return c.priv[sessionID].private
+}
+
+// evictStalePrivacy bounds priv's lifetime the same way evictIdle bounds
+// byID's, so a daemon that has ever seen a session doesn't grow this map
+// forever. Meant to run periodically alongside evictIdle.
+func (c *sessionCache) evictStalePrivacy() {
+	c.privMu.Lock()
+	defer c.privMu.Unlock()
+	for id, f := range c.priv {
+		if time.Since(f.setAt) > sessionIdleTimeout {
+			delete(c.priv, id)
+		}
+	}
 }
 
 // getOrCreate returns sessionID's cached entry, creating one (behind a pool

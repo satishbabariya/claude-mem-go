@@ -1277,6 +1277,78 @@ embedded and searched normally (the disabled version sent the literal
 `<private>...</private>` markup and the secret inside it straight to a
 real embedding call).
 
+### A `<private>` prompt only redacted the prompt text — its tool calls and Stop summary weren't suppressed
+
+The tag-stripping fix above only ever gated the prompt's own semantic
+embedding. Real claude-mem's privacy guarantee goes further:
+`PrivacyCheckValidator.checkUserPromptPrivacy` is consulted at both its
+actual capture boundaries — before queueing a `PostToolUse` observation
+(`shared.ts`) and before generating a Stop-time summary
+(`SessionRoutes.ts`) — and suppresses the *entire turn*, not just the
+prompt text, once that turn's persisted prompt stripped to nothing. This
+port had no equivalent: a user who wrapped a prompt in
+`<private>...</private>` still had every tool call from that turn fully
+observed by the LLM, persisted, and included in the Stop summary — the
+privacy promise silently stopped at the prompt itself.
+
+Fixed by extending the worker daemon's existing plain-text socket
+protocol — already used for the `INFLIGHT <session_id>` query — with two
+more message kinds: a fire-and-forget `PRIVATE <session_id> <0|1>`
+marker and a request/response `ISPRIVATE <session_id>` query
+(`hook.SetSessionPrivate`/`hook.QueryPrivate`, parsed by
+`hook.ParsePrivacyMarker`/`hook.ParsePrivacyQuery`). `prompt-context`
+sends the marker on **every** `UserPromptSubmit`, private or not — not
+only when private. That matters: real claude-mem's own
+`PrivacyCheckValidator` doc comment documents a real bug it exists to
+avoid (issues #2794/#2795) — a session whose `user_prompts` row is
+absent (session-init hadn't run yet) must never be treated as private,
+or every observation for that session would be silently frozen forever.
+A sticky "mark private and never clear it" flag would reproduce exactly
+that failure mode the moment a later, non-private prompt superseded an
+earlier private one, so the flag has to be actively re-asserted (to
+`false`) on every non-private prompt too, not just set once and left.
+
+The worker's `process()` (`PostToolUse`) and `stop` (`Stop`) both check
+the flag — `sessionCache.isPrivate`, defaulting to `false` for a session
+with no flag ever recorded, matching real claude-mem's own
+absent-signal-defaults-to-allow behavior — right alongside the existing
+project-exclusion check, before any real work (spawning an observer
+subprocess, opening the store) happens. `stop` runs as its own separate
+process with no direct access to the worker's in-memory state, so it
+queries `ISPRIVATE` over the socket the same way it already queries
+`INFLIGHT`; a query failure (daemon unreachable) deliberately falls
+through to summarizing normally rather than skipping, since an unknown
+signal must never be treated as "private" either.
+
+One structural difference worth calling out: real claude-mem's
+`UserPromptSubmit`-equivalent and its later observation-ingestion calls
+run on separate async paths that can genuinely race (hence #2794/#2795
+in the first place). This port's `UserPromptSubmit` hook
+(`prompt-context`) is **not** registered `"async": true` in
+`hooks.json` — it blocks Claude Code's own turn until it returns — so
+the privacy marker is guaranteed to reach the worker before Claude Code
+even begins the tool-calling turn that could fire a `PostToolUse` event
+in response to that same prompt. This port's version is race-free for a
+reason real claude-mem's own can't be: the hook chain itself enforces
+the ordering, not a lookup against a persisted row.
+
+Verified with new unit tests in the `worker` package — wire-format round
+trips for both new message kinds, the full setter/query exchange driven
+through the real client functions against a real worker over a real Unix
+socket (confirming a later `false` marker actually supersedes an earlier
+`true` one, and that a session with no marker ever sent reads back as
+not private), `process()` skipping before it ever touches the
+nil-backed session cache that would otherwise panic (mirroring the
+project-exclusion regression test's own technique), and a stale-entry
+eviction test for the map bounding this state's lifetime. Verified live
+past the unit tests too: a real worker daemon, a `<private>` prompt
+followed by real `PostToolUse` and `Stop` payloads for one session
+(confirmed zero rows in the real database across both), against a
+control session with a normal prompt (a real observation AND a real
+session summary, both persisted) — confirmed as a genuine fix by
+temporarily removing the `process()` gate and watching the regression
+test fail with a real nil-pointer panic before restoring it.
+
 ## Quick start
 
 ```sh

@@ -14,8 +14,10 @@ import (
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
 	"claude-mem-go/excludeproject"
+	"claude-mem-go/hook"
 	"claude-mem-go/privacy"
 	"claude-mem-go/store"
+	"claude-mem-go/worker"
 )
 
 // cmdPromptContext is the UserPromptSubmit hook — real claude-mem's own
@@ -52,6 +54,8 @@ func cmdPromptContext(args []string) int {
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic prompt-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
 		"empty (the default) excludes nothing")
+	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, notified of this turn's privacy state "+
+		"(best-effort — a hook payload failure here is logged, never surfaced as a Claude Code-visible hook failure)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -69,13 +73,24 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
+	prompt := privacy.StripMemoryTags(in.Prompt)
+	private := prompt == "" && in.Prompt != ""
+	// Sent for EVERY prompt, private or not — not just when private — so
+	// the worker daemon's flag for this session never goes stale once a
+	// later, non-private prompt supersedes an earlier private one. This
+	// is the only place that knows a prompt's privacy state at all, so it
+	// must report it regardless of whether -embed-model leaves the rest
+	// of this hook's own injection feature disabled below.
+	if err := hook.SetSessionPrivate(*socketPath, in.SessionID, private); err != nil {
+		l.Printf("failed to report privacy state to worker (best-effort, not fatal): %v", err)
+	}
+
 	if *embedModel == "" {
 		l.Printf("skip: semantic prompt injection disabled (-embed-model empty)")
 		fmt.Println("{}")
 		return 0
 	}
-	prompt := privacy.StripMemoryTags(in.Prompt)
-	if prompt == "" && in.Prompt != "" {
+	if private {
 		// Real claude-mem's own session-init route (SessionRoutes.ts) skips
 		// entirely — no embedding call, no injection — when a prompt is
 		// wholly wrapped in a privacy tag, its own documented convention

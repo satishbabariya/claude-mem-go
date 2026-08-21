@@ -165,6 +165,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				d.sessions.evictIdle()
+				d.sessions.evictStalePrivacy()
 			}
 		}
 	}()
@@ -267,6 +268,18 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		_, _ = conn.Write([]byte(strconv.Itoa(n)))
 		return
 	}
+	if sid, private, ok := hook.ParsePrivacyMarker(raw); ok {
+		d.sessions.setPrivate(sid, private)
+		return
+	}
+	if sid, ok := hook.ParsePrivacyQuery(raw); ok {
+		reply := "0"
+		if d.sessions.isPrivate(sid) {
+			reply = "1"
+		}
+		_, _ = conn.Write([]byte(reply))
+		return
+	}
 
 	go d.process(ctx, raw)
 }
@@ -307,8 +320,21 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		d.Log.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		return
 	}
+	// Real claude-mem's own PrivacyCheckValidator suppresses observation
+	// generation for an entire turn once its prompt stripped to nothing
+	// (see privacy package) — this port had tag-stripping on the prompt
+	// and tool payloads individually, but nothing carried that same
+	// suppression across to a private turn's tool calls. d.sessions.isPrivate
+	// defaults to false for a session with no flag set at all, not just one
+	// explicitly cleared — see its own doc comment for why that default
+	// matters (a session whose UserPromptSubmit hasn't reported in yet must
+	// never be silently treated as private).
+	if d.sessions.isPrivate(in.SessionID) {
+		d.Log.Printf("skip: session %s marked private for this turn", in.SessionID)
+		return
+	}
 	// Stats are written once after every genuine work attempt below — not
-	// for the two early-return cases above, which counted nothing.
+	// for the three early-return cases above, which counted nothing.
 	defer d.recordStats()
 
 	// Marks this session "in flight" for the ENTIRE remainder of this

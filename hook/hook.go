@@ -134,3 +134,105 @@ func QueryInFlight(socketPath, sessionID string) (int, error) {
 	}
 	return n, nil
 }
+
+// privacySetPrefix opens the fire-and-forget protocol SetSessionPrivate
+// speaks and ParsePrivacyMarker recognizes, the same way
+// inFlightQueryPrefix does for the (request/response) in-flight query —
+// never a JSON payload's actual first byte, so the two can't collide.
+const privacySetPrefix = "PRIVATE "
+
+// privacyQueryPrefix opens QueryPrivate's own (request/response) query,
+// distinct from privacySetPrefix so the worker's handleConn can tell
+// "record this session's new privacy state" apart from "tell me its
+// current one" on the same socket.
+const privacyQueryPrefix = "ISPRIVATE "
+
+// ParsePrivacyMarker reports whether raw is a privacy-state marker (as
+// sent by SetSessionPrivate) rather than a hook-forwarding payload or an
+// in-flight query, and if so, the session_id and the private flag it
+// carries. Called by the worker daemon's handleConn.
+func ParsePrivacyMarker(raw []byte) (sessionID string, private bool, ok bool) {
+	s := string(raw)
+	if !strings.HasPrefix(s, privacySetPrefix) {
+		return "", false, false
+	}
+	fields := strings.Fields(strings.TrimPrefix(s, privacySetPrefix))
+	if len(fields) != 2 {
+		return "", false, false
+	}
+	return fields[0], fields[1] == "1", true
+}
+
+// SetSessionPrivate tells the worker daemon at socketPath whether
+// sessionID's most recently submitted prompt was entirely private (empty
+// after privacy.StripMemoryTags) — the UserPromptSubmit hook
+// (prompt-context) calls this on every single prompt, private or not, so
+// the daemon's flag never goes stale once a later, non-private prompt
+// supersedes an earlier private one.
+//
+// Fire-and-forget like Forward: this call returning success means only
+// "the daemon's process now has the marker," and a caller should treat an
+// unreachable daemon the same way Forward's own callers do — log it, but
+// never fail or block the hook that triggered this.
+func SetSessionPrivate(socketPath, sessionID string, private bool) error {
+	flag := "0"
+	if private {
+		flag = "1"
+	}
+	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_, err = conn.Write([]byte(privacySetPrefix + sessionID + " " + flag))
+	return err
+}
+
+// ParsePrivacyQuery reports whether raw is a privacy query (as sent by
+// QueryPrivate) rather than a hook payload or one of this protocol's other
+// message kinds, and if so, the session_id it's asking about.
+func ParsePrivacyQuery(raw []byte) (sessionID string, ok bool) {
+	s := string(raw)
+	if !strings.HasPrefix(s, privacyQueryPrefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(s, privacyQueryPrefix)), true
+}
+
+// QueryPrivate asks the worker daemon at socketPath whether sessionID's
+// current turn was marked private, the Stop hook's (cmdStop) counterpart
+// to SetSessionPrivate — Stop runs as its own separate process, so it has
+// no direct access to the worker's in-memory flag and must ask over the
+// socket, the same way it already asks QueryInFlight for in-flight state.
+//
+// Returns an error if the daemon isn't reachable — a caller should treat
+// that as "unknown," not "not private," and fall back to summarizing
+// rather than silently dropping a real session's summary because the
+// daemon happened to be unreachable.
+func QueryPrivate(socketPath, sessionID string) (bool, error) {
+	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(DialTimeout))
+
+	if _, err := conn.Write([]byte(privacyQueryPrefix + sessionID)); err != nil {
+		return false, err
+	}
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	raw, err := io.ReadAll(io.LimitReader(conn, 8))
+	if err != nil {
+		return false, err
+	}
+	switch strings.TrimSpace(string(raw)) {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("malformed privacy-query response %q", raw)
+	}
+}
