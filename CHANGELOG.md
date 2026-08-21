@@ -7,6 +7,29 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **No headless session ever produced a session summary.** The Stop hook
+  ran, but never finished. Verified with a probe plugin whose Stop hook
+  merely slept and then wrote a file: after `claude -p` exited it
+  produced **nothing** — not at 25 seconds, and not even at 1. Claude
+  Code tears the hook process down when the session ends, and a `-p`
+  session ends the moment the answer is printed, while the summary needs
+  a settle wait plus a real model call. So every `-p` session silently
+  lost the observation this codebase calls "arguably the single most
+  information-dense observation this project produces" — including every
+  `-p`-based verification run in this project's own history, which is why
+  the soak showed `by type discovery=1` and no summary. The same probe
+  showed backgrounded work *does* outlive the session, so `stop` is now
+  detached (and only `stop`: PostToolUse forwards to the daemon and exits
+  in milliseconds, with the long work already happening inside a detached
+  worker). One trap on the way, worth recording because the first attempt
+  shipped it: detaching with `</dev/null` made every run log `FAILED
+  parsing hook payload: EOF`, because the hook's input arrives on stdin —
+  a pipe that dies with the session. The wrapper now reads the payload
+  while the parent is still alive and replays it into the child. Verified
+  end to end with a real `claude -p` session against a clean store: a
+  `discovery` observation under project `repo` **and** a `summary`, where
+  before there was only the discovery.
+
 - **The worker daemon ran stale code indefinitely after an upgrade, and
   that silently defeated the project-naming fix.** Found by a full-stack
   soak rather than by any unit test: install the plugin, run real

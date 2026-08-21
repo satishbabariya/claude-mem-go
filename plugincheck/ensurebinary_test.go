@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // scriptPath locates scripts/ensure-binary.sh relative to this package,
@@ -309,5 +310,97 @@ func TestRunHookLogsForNonContextHooks(t *testing.T) {
 	}
 	if !strings.Contains(string(logged), "go build -o claude-mem-go") {
 		t.Fatalf("the log does not say how to fix it: %s", logged)
+	}
+}
+
+// TestRunHookDetachesStopAndStillDeliversThePayload covers a failure that
+// only appears in a real headless session, and that no unit test of the
+// Go code could have found.
+//
+// Measured with a probe plugin: a Stop hook that merely slept and then
+// wrote a file produced NOTHING after `claude -p` exited — not at 25
+// seconds, and not even at 1. Claude Code tears the hook process down
+// when the session ends, and a `-p` session ends the moment the answer is
+// printed. The session summary needs a settle wait plus a real model
+// call, so it never survived: two full soak sessions captured
+// observations and produced no summary at all.
+//
+// The same probe showed backgrounded work DOES outlive the session, so
+// `stop` is detached. The catch, and the reason this test checks the
+// payload rather than just the timing: the hook's input arrives on
+// stdin, which is a pipe that dies with the session. The first attempt
+// detached with `</dev/null` and every run logged "FAILED parsing hook
+// payload: EOF". Reading stdin in the wrapper while the parent is still
+// alive, then replaying it into the child, is what makes detaching safe.
+func TestRunHookDetachesStopAndStillDeliversThePayload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash script; not exercised on windows")
+	}
+	root := t.TempDir()
+	marker := filepath.Join(root, "received.txt")
+	// A stand-in for the real binary: slow enough that an un-detached
+	// wrapper would still be blocking when we check, and it records the
+	// stdin it was given.
+	script := "#!/bin/sh\nsleep 2\ncat > " + marker + "\n"
+	if err := os.WriteFile(filepath.Join(root, "claude-mem-go"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	p, _ := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	cmd := exec.Command("bash", p, "stop")
+	cmd.Env = append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+root, "HOME="+t.TempDir())
+	cmd.Stdin = strings.NewReader(`{"session_id":"s1","hook_event_name":"Stop"}`)
+
+	start := time.Now()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("wrapper failed: %v\n%s", err, out)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("the wrapper took %s to return; `stop` must detach, not block — blocking is "+
+			"precisely what gets killed when a -p session exits", elapsed)
+	}
+
+	// The detached child must still finish, and must still have the payload.
+	deadline := time.Now().Add(15 * time.Second)
+	var got []byte
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(marker); err == nil && len(b) > 0 {
+			got = b
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if len(got) == 0 {
+		t.Fatal("the detached stop process never ran, or produced nothing — detaching must not mean discarding")
+	}
+	if !strings.Contains(string(got), `"session_id":"s1"`) {
+		t.Fatalf("the detached process received %q, not the hook payload. Redirecting its stdin from "+
+			"/dev/null is what caused 'FAILED parsing hook payload: EOF' on every real Stop.", got)
+	}
+}
+
+// TestRunHookDoesNotDetachOtherHooks pins the scope. PostToolUse forwards
+// to the daemon and exits in milliseconds — the long work happens inside
+// the worker, which is already detached — so detaching it too would add a
+// process for nothing and lose the exec.
+func TestRunHookDoesNotDetachOtherHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash script; not exercised on windows")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "claude-mem-go"),
+		[]byte("#!/bin/sh\nsleep 1\necho ran-$1\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	p, _ := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	cmd := exec.Command("bash", p, "hook")
+	cmd.Env = append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+root, "HOME="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("wrapper failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ran-hook") {
+		t.Fatalf("a non-stop hook did not run in the foreground; its output was lost: %q", out)
 	}
 }

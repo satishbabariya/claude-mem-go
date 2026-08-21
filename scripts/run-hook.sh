@@ -33,6 +33,43 @@ bin="$root/claude-mem-go"
 cmd="${1:-}"
 
 if [ -n "$root" ] && [ -x "$bin" ]; then
+	# The Stop hook is detached rather than exec'd, because otherwise its
+	# work never finishes in a headless session.
+	#
+	# Measured, not assumed: a probe plugin whose Stop hook merely slept
+	# and then wrote a file produced NOTHING after `claude -p` exited —
+	# not at 25 seconds, and not even at 1. Claude Code tears the hook
+	# process down when the session ends, and `-p` sessions end the moment
+	# the answer is printed. The session summary needs both a settle wait
+	# and a real model call, so it never survived: two full soak sessions
+	# captured observations but produced no summary at all, and every
+	# `-p`-based verification in this project has silently been missing
+	# them.
+	#
+	# The same probe showed backgrounded work DOES outlive the session, so
+	# the fix is to background it. That matches what this hook already is:
+	# hooks.json marks it async, nothing reads its stdout, and its own doc
+	# comment calls it fire-and-forget. The work stays bounded by the wait
+	# budget it already had, so this detaches a finite job, not an
+	# unbounded one.
+	#
+	# Only `stop`. PostToolUse forwards to the daemon and exits in
+	# milliseconds — the long work there happens inside the worker, which
+	# is already a detached process.
+	if [ "$cmd" = "stop" ]; then
+		# Read the payload BEFORE detaching. The hook's input arrives on
+		# stdin, which is a pipe from Claude Code that dies with the
+		# session — so a detached child inheriting it races the teardown,
+		# and pointing it at /dev/null instead just makes it read EOF.
+		# Both were observed: the first attempt at this detached with
+		# </dev/null and the daemon logged "FAILED parsing hook payload:
+		# EOF" every time. Capturing here, while the parent is still
+		# alive, and replaying it into the child is what makes the
+		# detachment safe.
+		payload=$(cat)
+		( printf '%s' "$payload" | "$bin" "$@" >/dev/null 2>&1 & ) &
+		exit 0
+	fi
 	exec "$bin" "$@"
 fi
 
