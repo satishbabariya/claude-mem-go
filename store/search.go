@@ -177,13 +177,24 @@ func clampNegativeLimit(limit int) int {
 // own search_observations tool) always passes the current project; the
 // plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
 // lookups from a terminal.
-func (s *Store) Search(project, query string, limit int) ([]SearchResult, error) {
+func (s *Store) Search(project, query, obsType string, limit int) ([]SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	args := []any{sanitizeFTSQuery(query)}
 	scope := ""
 	if project != "" {
-		scope = "AND o.project = ?"
+		scope += " AND o.project = ?"
 		args = append(args, project)
+	}
+	// obsType filters on the same small, fixed vocabulary the observer
+	// itself ever writes (discovery/change/decision from the real
+	// observer prompt, summary from the Stop hook, manual from
+	// add_observation) — real claude-mem's own search tool calls this
+	// obs_type, one of a handful of filters (date range, offset, sort
+	// order) its search has that this one doesn't; type is the one that
+	// maps directly onto an existing column with no schema change.
+	if obsType != "" {
+		scope += " AND o.type = ?"
+		args = append(args, obsType)
 	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`

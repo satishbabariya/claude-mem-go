@@ -25,7 +25,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 	}
 
 	t.Run("Search", func(t *testing.T) {
-		results, err := st.Search(project, "row", -1)
+		results, err := st.Search(project, "row", "", -1)
 		if err != nil {
 			t.Fatalf("Search(limit=-1): want a clean clamp, got an error: %v", err)
 		}

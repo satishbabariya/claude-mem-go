@@ -15,11 +15,12 @@ func cmdSearch(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
+	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual (default: every type)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 10, 100)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-limit N] <query>")
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-type discovery|change|decision|summary|manual] [-limit N] <query>")
 		return 2
 	}
 	query := fs.Arg(0)
@@ -31,7 +32,7 @@ func cmdSearch(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.Search(*project, query, *limit)
+	results, err := st.Search(*project, query, *obsType, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1

@@ -99,7 +99,7 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	// row under accumulated history. Real callers hit the identical
 	// scoping requirement for the identical reason (see Search's doc
 	// comment), so this isn't a test-only workaround.
-	results, err := st.Search(project, "claude-mem", 10)
+	results, err := st.Search(project, "claude-mem", "", 10)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error: %v", err)
 	}
@@ -114,6 +114,40 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	}
 }
 
+// TestPostgresSearchFiltersByObservationTypeWithProjectScope exercises
+// project and obsType together deliberately — the exact combination the
+// old hardcoded `$3` placeholder numbering couldn't have handled if a
+// third filter were ever added the same way; this backend now builds
+// placeholder numbers dynamically as each optional filter is appended,
+// specifically to avoid that class of mistake. Confirms both filters
+// apply correctly at once, not just each in isolation.
+func TestPostgresSearchFiltersByObservationTypeWithProjectScope(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	otherProject := uniqueProject(t)
+
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "a", project), store.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "b", project), store.Observation{Type: "decision", Title: "gadget rollout plan approved"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if _, err := st.Insert("s1", otherProject, "Bash", store.ContentHash("s1", "Bash", "c", otherProject), store.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	results, err := st.Search(project, "gadget", "discovery", 10)
+	if err != nil {
+		t.Fatalf("Search(project=%s, type=discovery): %v", project, err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search(project=%s, type=discovery) = %+v, want exactly 1 (this project's discovery row, not the other project's or the decision row)", project, results)
+	}
+	if results[0].Project != project || results[0].Observation.Type != "discovery" {
+		t.Fatalf("Search(project=%s, type=discovery) returned %+v, want project=%s type=discovery", project, results[0], project)
+	}
+}
+
 func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
@@ -122,7 +156,7 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", 10)
+	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

@@ -17,8 +17,10 @@ type Backend interface {
 	// Search full-text-searches observations; project scopes it to one
 	// project when non-empty, or every project in the store when empty. See
 	// Store.Search's doc comment for why an empty project is a deliberate,
-	// narrow exception rather than the default.
-	Search(project, query string, limit int) ([]SearchResult, error)
+	// narrow exception rather than the default. obsType additionally
+	// filters to one observation type (discovery/change/decision/summary/
+	// manual) when non-empty.
+	Search(project, query, obsType string, limit int) ([]SearchResult, error)
 	SaveEmbedding(observationID int64, vec []float32) error
 	// SemanticSearch is Search's embedding-based counterpart; project has
 	// the same scoping meaning.

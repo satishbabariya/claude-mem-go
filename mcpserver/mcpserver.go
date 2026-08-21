@@ -95,6 +95,7 @@ func tools() []toolDef {
 					"query":        map[string]any{"type": "string", "description": "Search terms"},
 					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
 					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
+					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual (default: every type)"},
 				},
 				"required": []string{"query"},
 			},
@@ -352,6 +353,7 @@ type toolCallParams struct {
 		Query       string   `json:"query"`
 		Limit       int      `json:"limit"`
 		AllProjects bool     `json:"all_projects"`
+		ObsType     string   `json:"type"`         // search_observations: filter by observation type
 		Project     string   `json:"project"`      // recent_observations, file_observations, add_observation: override the current project
 		SessionID   string   `json:"session_id"`   // session_observations
 		FilePath    string   `json:"file_path"`    // file_observations
@@ -404,7 +406,7 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	var result toolCallResult
 	switch params.Name {
 	case "search_observations":
-		result = s.runSearch(project, params.Arguments.Query, limit)
+		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit)
 	case "semantic_search_observations":
 		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
 	case "recent_observations":
@@ -427,8 +429,8 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	return s.reply(req, result)
 }
 
-func (s *Server) runSearch(project, query string, limit int) toolCallResult {
-	results, err := s.st.Search(project, query, limit)
+func (s *Server) runSearch(project, query, obsType string, limit int) toolCallResult {
+	results, err := s.st.Search(project, query, obsType, limit)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
 	}
@@ -543,7 +545,7 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 	}
 
 	if anchor == 0 {
-		matches, err := s.st.Search(project, query, 1)
+		matches, err := s.st.Search(project, query, "", 1)
 		if err != nil {
 			return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: resolving anchor via query failed: " + err.Error()}}}
 		}

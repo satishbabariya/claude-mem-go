@@ -172,6 +172,42 @@ func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
 	}
 }
 
+// TestToolsCallSearchObservationsFiltersByType confirms the "type"
+// argument reaches Backend.Search and actually narrows results, at the
+// real MCP protocol boundary — not just that store.Search's own filter
+// works (already covered by a dedicated store-level test).
+func TestToolsCallSearchObservationsFiltersByType(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	discovery, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"), store.Observation{Type: "discovery", Title: "sprocket rollout"}, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	decision, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"), store.Observation{Type: "decision", Title: "sprocket rollout plan approved"}, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"sprocket","type":"decision"}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	// ID-based, not title-based: "sprocket rollout" is itself a prefix of
+	// "sprocket rollout plan approved," so a substring check on the title
+	// text alone can't distinguish which row(s) actually came back.
+	if !strings.Contains(text, fmt.Sprintf("[%d]", decision.ID)) {
+		t.Fatalf("search_observations(type=decision) = %q, want the decision row [%d] present", text, decision.ID)
+	}
+	if strings.Contains(text, fmt.Sprintf("[%d]", discovery.ID)) {
+		t.Fatalf("search_observations(type=decision) = %q, want the discovery row [%d] excluded", text, discovery.ID)
+	}
+}
+
 // TestToolsCallLimitIsCappedRegardlessOfCallerValue seeds well over 100 rows
 // and confirms a caller-supplied limit far above 100 still returns at most
 // 100 — the same "max 100" bound real claude-mem's own mem-search skill

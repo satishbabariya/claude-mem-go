@@ -62,6 +62,20 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **`search`/`search_observations` gained a `type` filter** — the small,
+  fixed observation-type vocabulary this project's observer actually
+  writes (`discovery`/`change`/`decision`/`summary`/`manual`), the same
+  real gap real claude-mem's own search tool covers with its `obs_type`
+  parameter. Threading it through the Postgres backend found a real
+  latent footgun: the existing `project` scope clause hardcoded its
+  placeholder number (`$3`), correct only because there was never a
+  second optional filter to disturb that assumption. Rewritten to build
+  placeholder numbers dynamically as each optional filter is appended.
+  Verified against both real backends (including a dedicated Postgres
+  test applying `project` and `type` together — the exact combination
+  the old hardcoded scheme couldn't have handled safely) and a live
+  `claude` CLI session confirming the MCP tool's own `type` argument
+  correctly narrows results.
 - **`SECURITY.md`** — the trust model this project didn't have written
   down anywhere: no auth on the MCP server or worker socket (the
   boundary is the local OS user, same as any MCP server), the one real

@@ -47,24 +47,38 @@ func clampNegativeLimit(limit int) int {
 // every project in the store. See store.Store.Search's doc comment for why
 // this matters: one shared database can hold observations from every
 // project ever recorded on the machine, so an unscoped search is a genuine
-// cross-project leak, not just a ranking nuisance.
-func (s *Store) Search(project, query string, limit int) ([]store.SearchResult, error) {
+// cross-project leak, not just a ranking nuisance. obsType additionally
+// filters to one observation type when non-empty — see the SQLite
+// backend's identically-named parameter for the real, small vocabulary
+// this filters against.
+//
+// Builds its placeholder numbers dynamically (len(args) as each optional
+// filter is appended) rather than hardcoding $3/$4/etc.: two independent
+// optional filters (project, obsType) means a fixed numbering scheme
+// would need to track which combination of filters is present to know
+// what number LIMIT actually lands on — a real source of off-by-one
+// mistakes for exactly two conditionals, let alone more later.
+func (s *Store) Search(project, query, obsType string, limit int) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	scope := ""
 	args := []any{query}
+	scope := ""
 	if project != "" {
-		scope = "AND project = $3"
-		args = append(args, limit, project)
-	} else {
-		args = append(args, limit)
+		args = append(args, project)
+		scope += fmt.Sprintf(" AND project = $%d", len(args))
 	}
+	if obsType != "" {
+		args = append(args, obsType)
+		scope += fmt.Sprintf(" AND type = $%d", len(args))
+	}
+	args = append(args, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", len(args))
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
 		WHERE search_vector @@ plainto_tsquery('english', $1) `+scope+`
 		ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC
-		LIMIT $2`, args...)
+		LIMIT `+limitPlaceholder, args...)
 	if err != nil {
 		return nil, fmt.Errorf("full text search %q: %w", query, err)
 	}

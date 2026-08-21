@@ -42,12 +42,67 @@ func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("", "claude-mem", 10)
+	results, err := st.Search("", "claude-mem", "", 10)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error instead of results: %v", err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("Search(\"claude-mem\") returned %d results, want 1", len(results))
+	}
+}
+
+// TestSearchFiltersByObservationType is the real parity gap this closes:
+// real claude-mem's own search tool takes an obs_type filter (its docs
+// call out "bugfix, feature" as examples); this project's version filters
+// against the actual, small, fixed vocabulary the observer itself ever
+// writes (discovery/change/decision/summary/manual). Seeds two matching
+// titles under different types and confirms the filter actually narrows
+// results, not just accepts the argument without effect.
+func TestSearchFiltersByObservationType(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "a", "1"), Observation{Type: "discovery", Title: "widget rollout"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "b", "2"), Observation{Type: "decision", Title: "widget rollout plan approved"}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	all, err := st.Search("proj", "widget", "", 10)
+	if err != nil {
+		t.Fatalf("Search with no type filter: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("Search with no type filter returned %d results, want 2 (sanity check before filtering)", len(all))
+	}
+
+	discoveries, err := st.Search("proj", "widget", "discovery", 10)
+	if err != nil {
+		t.Fatalf("Search(type=discovery): %v", err)
+	}
+	if len(discoveries) != 1 || discoveries[0].Observation.Type != "discovery" {
+		t.Fatalf("Search(type=discovery) = %+v, want exactly the one discovery-type row", discoveries)
+	}
+
+	decisions, err := st.Search("proj", "widget", "decision", 10)
+	if err != nil {
+		t.Fatalf("Search(type=decision): %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].Observation.Type != "decision" {
+		t.Fatalf("Search(type=decision) = %+v, want exactly the one decision-type row", decisions)
+	}
+
+	none, err := st.Search("proj", "widget", "bugfix", 10)
+	if err != nil {
+		t.Fatalf("Search(type=bugfix): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("Search(type=bugfix) = %+v, want 0 (neither seeded row is that type)", none)
 	}
 }
 

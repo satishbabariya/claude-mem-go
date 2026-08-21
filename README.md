@@ -189,10 +189,25 @@ docker compose up -d
   (local embeddings + cosine similarity) search over what's been persisted.
   `-project` scopes to one project; the default (empty) searches every
   project in the store, since these are ad-hoc CLI lookups run by a human
-  who may genuinely want that.
+  who may genuinely want that. `search` also takes `-type` to filter to
+  one observation type (`discovery`/`change`/`decision`/`summary`/
+  `manual` — the actual, small, fixed vocabulary the observer itself ever
+  writes) — the same `obs_type` filter real claude-mem's own search tool
+  has, among a few others (date range, offset, sort order) this project
+  doesn't port since they don't map as directly onto an existing column.
+  Threading it through both backends found a real latent footgun in the
+  Postgres implementation's placeholder numbering: `project`'s own scope
+  clause hardcoded `$3`, assuming it was always the third argument when
+  present — correct only because there was never a second optional
+  filter to disturb that assumption. Rewritten to build placeholder
+  numbers dynamically as each optional filter is appended, verified with
+  a dedicated test against the live container that applies `project` and
+  `type` together (the exact combination the old scheme couldn't have
+  handled safely if it silently drifted).
 - **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing eight tools any MCP
   client — including Claude Code itself — can call directly:
-  `search_observations` and `semantic_search_observations` (keyword and
+  `search_observations` (now also takes `type` — see the CLI `search`
+  entry above) and `semantic_search_observations` (keyword and
   meaning-based search), `recent_observations`, `session_observations`,
   and `file_observations` — the same `RecentByProject`/`BySessionID`/
   `ObservationsForFile` reads `SessionStart`, `Stop`, and the `PreToolUse`

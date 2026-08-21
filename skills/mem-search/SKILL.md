@@ -100,6 +100,15 @@ function names, exact phrases.
 search_observations(query="authentication token expired", limit=10)
 ```
 
+Add `type` to narrow to one kind of observation — `discovery` (found
+something), `change` (did something), `decision` (chose something),
+`summary` (a session's end-of-session recap), or `manual` (explicitly
+added via `add_observation`):
+
+```
+search_observations(query="rate limiting", type="decision")
+```
+
 ### `semantic_search_observations` — meaning, not exact words
 
 Embedding-based search. Use when the user's question is phrased
