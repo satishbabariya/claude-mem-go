@@ -159,9 +159,18 @@ func TestEnsureBinaryWithoutGoExplainsItself(t *testing.T) {
 	}
 	root := fakePluginRoot(t)
 
-	// A PATH with no `go` on it. bash itself still resolves because the
-	// script is invoked as an argument to bash, not via its shebang.
-	out, code := runScript(t, root, "PATH=/usr/bin:/bin")
+	// An EMPTY directory as the entire PATH, rather than a hand-picked
+	// one like /usr/bin:/bin that merely happens to exclude Go. That
+	// guess is platform-dependent and was wrong: it passed on macOS,
+	// where Go lives in /opt/homebrew/bin, and failed on the CI runner,
+	// where Go is reachable from the default PATH — so the test built a
+	// binary and then asserted it had not. Controlling the environment
+	// beats guessing at one.
+	//
+	// bash itself still resolves, because the script is invoked as an
+	// argument to bash rather than through its shebang, and the branch
+	// under test exits before it needs any external command.
+	out, code := runScript(t, root, "PATH="+t.TempDir())
 	if code != 0 {
 		t.Fatalf("exit %d, want 0 — Setup must never block the session. Output:\n%s", code, out)
 	}
