@@ -66,8 +66,33 @@ the `-db` flag looks like:
 
 ```sh
 docker compose up -d
-./claude-mem-go ingest -db "postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
+
+# Set this once, in the profile your shell (and therefore Claude Code)
+# actually reads. It is what makes the plugin use Postgres at all:
+export CLAUDE_MEM_DB="postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
+
+./claude-mem-go ingest        # -db still works, and still wins over the env var
 ```
+
+**`CLAUDE_MEM_DB` is not a convenience — without it an installed plugin
+cannot reach Postgres at all.** Every subcommand takes `-db`, but nothing
+that runs inside a plugin install can pass it: `hooks/hooks.json` invokes
+the binary as `"$CLAUDE_PLUGIN_ROOT/claude-mem-go" start` (and `context`,
+`prompt-context`, `file-context`, `hook`, `stop`), and `.mcp.json` execs
+`... mcp` — no flags, and nowhere to add them that survives a plugin
+update.
+
+The result was a split brain, measured here before it was fixed: `doctor`
+with no flag reported `~/.claude-mem-go/observations.db`, while `doctor
+-db postgres://…` reported the Postgres store. Every hook and every MCP
+tool call took the first branch, so an operator could follow this section
+exactly, stand up Postgres, install the plugin, and have all of their
+memory silently go to SQLite — with no error, and nothing anywhere naming
+the second database.
+
+Precedence is `-db` > `$CLAUDE_MEM_DB` > `~/.claude-mem-go/observations.db`,
+and `doctor` now names which of the three won, because the symptom of
+getting it wrong looks exactly like data loss.
 
   `sslmode=disable` above is for the local Docker Compose container only
   (it's on `localhost`, nothing else can see that traffic). Every DSN

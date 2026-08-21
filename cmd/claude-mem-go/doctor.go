@@ -4,8 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"sort"
+	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
@@ -132,6 +134,28 @@ func cmdDoctor(args []string) int {
 	}
 
 	redactedDBPath := store.RedactDSN(*dbPath)
+
+	// Say WHICH source chose this store, not just which store won. The
+	// failure this exists for is a split brain that looks like data loss:
+	// hooks and MCP write to one backend while the operator's `-db`
+	// commands read another, and the symptom is "my memory is empty" with
+	// nothing anywhere naming a second database. Printing the source turns
+	// that into a one-line diagnosis. Only shown when the env var is
+	// actually set, so the common case stays quiet.
+	if envDB := strings.TrimSpace(os.Getenv(store.DBPathEnvVar)); envDB != "" {
+		switch {
+		case *dbPath == envDB:
+			fmt.Printf("  store selected by $%s (hooks and the MCP server use this too)\n", store.DBPathEnvVar)
+		default:
+			// An explicit -db beat the env var. Worth saying out loud: it
+			// means THIS command is not looking at the store the hooks are
+			// writing to, which is exactly when someone concludes their
+			// memory vanished.
+			fmt.Printf("  note: -db overrides $%s (=%s), which is what hooks and the MCP server will still use\n",
+				store.DBPathEnvVar, store.RedactDSN(envDB))
+		}
+	}
+
 	var st store.Backend
 	if opened, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)

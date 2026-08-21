@@ -36,10 +36,34 @@ they may not have known how many observations that actually covers.
 (Fall back to `claude-mem-go prune ...` on `PATH` if `$CLAUDE_PLUGIN_ROOT`
 isn't set — see `mem-doctor`'s skill for why.)
 
+## Confirm WHICH store you're about to delete from
+
+`prune` acts on one store, and which one is not obvious. With no `-db`
+flag it uses `$CLAUDE_MEM_DB` when that is set (the same store the hooks
+and MCP server write to), and the local SQLite file otherwise.
+
+That matters more here than anywhere else, in both directions. A dry run
+against the wrong store reports a count that has nothing to do with the
+data the user is thinking of — usually `0`, which reads as reassuring
+right up until `-yes` deletes from somewhere else entirely. Run
+`mem-doctor` first and show the user the store it names, so the count
+they approve is a count from the database they mean:
+
+```
+"$CLAUDE_PLUGIN_ROOT/claude-mem-go" doctor   # names the store, and says
+                                             # whether $CLAUDE_MEM_DB chose it
+```
+
+Pass `-db <postgres DSN>` explicitly if it needs to be a different store
+than the one doctor reports — and if you do, say so to the user, because
+it is then not the store their hooks are writing to.
+
 ## Flags
 
 - `-older-than-days N` — required; there is no default (an unset cutoff
   refuses to run rather than guessing).
+- `-db <path-or-DSN>` — the store to prune. Defaults to `$CLAUDE_MEM_DB`
+  if set, else the local SQLite file. See the section above.
 - `-project name` — scope to one project instead of every project in the
   store. Ask the user which they mean if it's ambiguous ("my memories" vs
   "all projects").

@@ -7,6 +7,35 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **`CLAUDE_MEM_DB` — the Postgres backend was unreachable from an
+  installed plugin.** All 15 subcommands accept `-db`, but nothing that
+  runs inside a plugin install can pass it: `hooks/hooks.json` invokes the
+  binary as `"$CLAUDE_PLUGIN_ROOT/claude-mem-go" start` (and `context`,
+  `prompt-context`, `file-context`, `hook`, `stop`), and `.mcp.json` execs
+  `... mcp`, with no flags and nowhere to add them that survives a plugin
+  update. Measured: `doctor` with no flag reported
+  `~/.claude-mem-go/observations.db` while `doctor -db postgres://…`
+  reported the Postgres store — so an operator could follow the README,
+  stand up Postgres, install the plugin, and have every hook and MCP tool
+  call silently write to SQLite instead, with no error and nothing naming
+  the second database. `store.DefaultDBPath()` now returns
+  `$CLAUDE_MEM_DB` when set, which fixes all 15 subcommands at one layer
+  and gives the precedence operators expect — an explicit `-db` still wins,
+  because flag parsing overwrites the default. Whitespace-only is treated
+  as unset (`CLAUDE_MEM_DB=$UNSET_VAR` is the shape a misconfigured
+  profile actually produces, and honoring it would point the store at a
+  file named `" "`), and surrounding whitespace is trimmed, since
+  `export CLAUDE_MEM_DB=$(cat dsn.txt)` leaves a newline that pgx rejects.
+  Proven end to end, not by inspection: the MCP server launched with zero
+  flags exactly as `.mcp.json` launches it wrote a real observation to
+  Postgres, and SQLite received nothing. `doctor` now also names which of
+  the three sources chose the store, and warns when `-db` overrides the
+  env var that hooks will still be using — because the symptom of getting
+  this wrong looks exactly like data loss. `mem-prune` and `mem-reembed`
+  gained the matching guidance; for `prune` especially, a dry run against
+  the wrong store reports a reassuring `0` right up until `-yes` deletes
+  from somewhere else.
+
 - **The Postgres test suite no longer writes to whatever database
   happens to be running.** `postgres/postgres_test.go` defaulted
   `CLAUDE_MEM_GO_TEST_POSTGRES_DSN` to

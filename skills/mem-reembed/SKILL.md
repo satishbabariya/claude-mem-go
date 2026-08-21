@@ -52,10 +52,23 @@ look before doing it, especially for a large count.
   with — this IS the model observations will become searchable under).
 - `-project name` — scope to one project instead of every project in the
   store.
+- `-db <path-or-DSN>` — the store to re-embed. Defaults to
+  `$CLAUDE_MEM_DB` if that is set (the same store the hooks and MCP
+  server use), else the local SQLite file.
 - `-yes` — actually re-embed. Omit it for the dry run.
 
 (Fall back to `claude-mem-go reembed ...` on `PATH` if
 `$CLAUDE_PLUGIN_ROOT` isn't set — see `mem-doctor`'s skill for why.)
+
+## A dry run reporting a surprising count is usually the wrong store
+
+`reembed` and `mem-doctor` must be looking at the same database for their
+numbers to mean anything together — doctor says "some observations need
+(re-)embedding," reembed says how many. If reembed reports `0` right
+after doctor flagged a problem (or a count far larger or smaller than the
+user expects), suspect the store before suspecting the data: run
+`doctor`, which names the store it used and says whether `$CLAUDE_MEM_DB`
+chose it, and pass the same `-db` to both.
 
 ## After running it
 
