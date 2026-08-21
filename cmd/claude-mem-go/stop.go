@@ -15,32 +15,61 @@ import (
 	"claude-mem-go/store"
 )
 
-// stopWaitPollInterval and stopWaitMaxAttempts bound waitForSessionObservations's
-// polling (see its own doc comment for the real race this closes).
-// stopWaitPollInterval is a var, not a const, so tests can shrink it to
-// run the same iteration-count logic near-instantly rather than actually
-// sleeping for real seconds per test case.
+// stopWaitPollInterval, stopStableStreakRequired, and stopWaitMaxAttempts
+// bound waitForSessionObservations's polling (see its own doc comment for
+// the real races this closes — there have been two). stopWaitPollInterval
+// is a var, not a const, so tests can shrink it to run the same
+// iteration-count logic near-instantly rather than actually sleeping for
+// real seconds per test case.
 var stopWaitPollInterval = 1 * time.Second
 
-const stopWaitMaxAttempts = 12 // ~12s worst case at the real interval, with margin over the real ~8s observer latency this was found against
+const (
+	// stopStableStreakRequired is how many CONSECUTIVE matching non-zero
+	// reads are needed before trusting the count as final — i.e., roughly
+	// this many seconds of confirmed no-growth. Sized well above a single
+	// observer call's own real latency (~5-8s, confirmed by hand against
+	// real sessions), not just "a couple of quick polls": a session with
+	// multiple tool calls processes them SEQUENTIALLY (one worker mutex
+	// serializes turns per session, see sessions.go), so the count can sit
+	// at N for several real seconds — long enough to look "stable" by a
+	// short window — while the NEXT observation is still mid-flight and
+	// about to become N+1.
+	stopStableStreakRequired = 10
+	// stopWaitMaxAttempts bounds the total wait regardless of streak
+	// progress — a hard ceiling so a pathological or perpetually-growing
+	// session (or one with no tool calls at all, which never gets to
+	// start a streak) can't hang this hook forever. Large enough to
+	// comfortably outlast stopStableStreakRequired's own confirmation
+	// window plus room for a few real observer calls ahead of it.
+	stopWaitMaxAttempts = 45
+)
 
-// waitForSessionObservations polls BySessionID until the count stops
-// growing across two consecutive checks (the worker's own async
-// PostToolUse pipeline has caught up), or stopWaitMaxAttempts is reached
-// — whichever comes first.
+// waitForSessionObservations polls BySessionID until the count holds
+// steady for stopStableStreakRequired consecutive checks (the worker's
+// own async PostToolUse pipeline has caught up), or stopWaitMaxAttempts
+// is reached — whichever comes first.
 //
 // A real bug found by hand, not anticipated: Stop fires the instant the
-// user's session ends, but PostToolUse is fire-and-forget — the actual
-// observation for the session's LAST tool call is a real LLM call the
-// worker daemon runs in the background, taking several real seconds. A
-// single, immediate BySessionID call can race ahead of it: reproduced
-// directly, one real session's Stop hook fired and found ZERO
-// observations (nothing to summarize) 4 seconds before the worker
-// finished persisting the one observation that session actually had. In
-// a longer session with multiple tool calls, the identical race would
-// instead silently produce a summary missing just its most recent,
-// often most contextually important, action — with nothing anywhere
-// indicating anything was missed.
+// user's session ends, but PostToolUse is fire-and-forget — each
+// observation is a real LLM call the worker daemon runs in the
+// background, taking several real seconds. A single, immediate
+// BySessionID call can race ahead of it: reproduced directly, one real
+// session's Stop hook fired and found ZERO observations (nothing to
+// summarize) 4 seconds before the worker finished persisting the one
+// observation that session actually had.
+//
+// A second real bug, found the same way against a session with TWO real
+// tool calls: this function's first version required only two
+// consecutive matching reads to trust stability, and locked in at count=1
+// (just the first tool call's observation) while the second one — for a
+// DIFFERENT tool call in the same session, still queued behind the
+// first because they're processed sequentially — was still several
+// seconds away from landing. The resulting summary silently covered only
+// part of the session. Requiring a much longer stable streak
+// (stopStableStreakRequired) closes that gap in practice by demanding
+// confirmed quiet time comfortably longer than one observation's own
+// real latency, though it's still a heuristic, not a guarantee — see
+// below.
 //
 // Safe to poll rather than accept whatever the first check finds: Stop
 // itself runs fire-and-forget (hooks.json marks it "async": true, same
@@ -48,26 +77,32 @@ const stopWaitMaxAttempts = 12 // ~12s worst case at the real interval, with mar
 // wait costs real wall-clock time in a background process, not perceived
 // latency for the user waiting on their own session to end.
 //
-// This narrows the race; it doesn't eliminate every variant of it. There
-// is no way for this hook to know for certain "have ALL PostToolUse
-// events for this session finished," only to infer it from the count no
-// longer growing across a short window — a worker under sustained heavy
-// load could still occasionally miss the last event even with this fix.
+// This narrows both races; it doesn't eliminate every variant of them.
+// There is no way for this hook to know for certain "have ALL
+// PostToolUse events for this session finished" — only to infer it from
+// the count holding steady across a long-enough window. A session with
+// many tool calls queued back to back, or a worker under sustained heavy
+// load, could in principle still exceed even this margin. A fully robust
+// fix would need the worker daemon to expose real per-session "is a turn
+// for this session currently in flight" state for this hook to query
+// directly, rather than inferring it from watching the result table —
+// a real architectural change, not a parameter to tune, and a
+// legitimate follow-up rather than something this fix attempts.
 //
-// Deliberately does NOT treat two consecutive zero-reads as "stabilized
-// at zero, genuinely nothing to summarize" — caught live, not just in a
-// unit test: a session with exactly one real tool call reads 0 on every
-// check until the worker's own observer call actually finishes, which
-// routinely took longer than one poll interval. Two zero-reads 1s apart
+// Deliberately does NOT treat matching zero-reads as "stabilized at
+// zero, genuinely nothing to summarize" — caught live, not just in a
+// unit test: a session with a real tool call reads 0 on every check
+// until the worker's own observer call actually finishes. Zero-reads
 // prove "not yet," never "never" — only a count that has gone positive
-// and THEN stops growing is real evidence of stability. A session that
-// genuinely never produces any observation (a pure conversation, no
-// tool calls at all) pays the full wait budget before this gives up —
-// an acceptable cost since Stop runs fire-and-forget, not a cost the
-// user waiting on their own session ever sees.
+// and THEN holds the required streak is treated as real evidence. A
+// session that genuinely never produces any observation (a pure
+// conversation, no tool calls at all) pays the full wait budget before
+// this gives up — an acceptable cost since Stop runs fire-and-forget,
+// not a cost the user waiting on their own session ever sees.
 func waitForSessionObservations(st store.Backend, sessionID string, limit int) ([]store.SearchResult, error) {
 	var observations []store.SearchResult
 	prevCount := -1
+	streak := 0
 	for attempt := 0; attempt < stopWaitMaxAttempts; attempt++ {
 		obs, err := st.BySessionID(sessionID, limit)
 		if err != nil {
@@ -75,7 +110,12 @@ func waitForSessionObservations(st store.Backend, sessionID string, limit int) (
 		}
 		observations = obs
 		if len(obs) > 0 && len(obs) == prevCount {
-			return observations, nil
+			streak++
+			if streak >= stopStableStreakRequired {
+				return observations, nil
+			}
+		} else {
+			streak = 0
 		}
 		prevCount = len(obs)
 		time.Sleep(stopWaitPollInterval)

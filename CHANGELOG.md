@@ -81,6 +81,28 @@ than assumed correct.
   stability. Verified with dedicated tests for each failure mode, and by
   re-running the original two real concurrent sessions — the first
   re-run still showed the flaw, the second correctly summarized both.
+- **The `Stop` hook's session summary had a *third* real bug**, found by
+  the Postgres backend's own full-stack test with a single session
+  running two real tool calls back to back: even the corrected "two
+  consecutive matching non-zero reads = stable" rule was still wrong,
+  because one worker mutex serializes observation processing per session
+  (`worker/sessions.go`) — the count can plateau at 1 for several real
+  seconds while the second tool call's observation is still mid-flight,
+  and two quick matching reads during that plateau falsely "confirm"
+  stability. Reproduced live down to the timestamp: the first tool
+  call's observation landed, the second started six seconds later on
+  the same `session_id`, and `Stop` summarized "from 1 observations"
+  instead of 2. Fixed by replacing the 2-check rule with a streak
+  counter requiring 10 consecutive matching non-zero reads (~9s of
+  confirmed no-growth, well above a single observation's own observed
+  ~5-8s latency) before trusting the count, raising the overall wait
+  budget from 12 to 45 polls to accommodate. Documented honestly as a
+  heuristic, not a guarantee — a fully robust fix needs the worker to
+  expose real per-session "turn in flight" state, a legitimate
+  architectural follow-up this fix doesn't attempt. Verified with a new
+  test reproducing the exact plateau shape, confirmed as a genuine
+  regression test by temporarily reverting the streak threshold to 2
+  and watching it fail, then restoring it.
 - **A real, full-stack integration smoke test found a third,
   more serious `migrate` bug** the targeted unit/e2e tests didn't catch:
   `SessionStart`'s `start` (spawns the worker daemon, which itself calls

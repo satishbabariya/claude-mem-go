@@ -256,6 +256,36 @@ docker compose up -d
   session paying the full budget) and by re-running the original two
   real concurrent sessions twice more — the first re-run still found
   the flaw, the second, after fixing it, correctly summarized both.
+
+  A *third* real bug, found the same way but against the Postgres
+  backend's own full-stack test with a single session running TWO real
+  tool calls back to back: even the corrected "two consecutive matching
+  non-zero reads = stable" rule was still wrong, because observations
+  for one session are processed *sequentially* — one worker mutex
+  serializes turns per session (see `worker/sessions.go`) — so the count
+  can sit at 1 for several real seconds while the second tool call's
+  observation is still mid-flight, and two quick matching reads during
+  that plateau falsely "confirm" stability. Reproduced live down to the
+  timestamp: the first tool call's observation landed, then the second
+  started six seconds later on the same `session_id`, and `Stop` fired
+  its summary in between, producing "from 1 observations" instead of 2.
+  Fixed by replacing the 2-check rule with a streak counter requiring 10
+  consecutive matching non-zero reads (~9s of confirmed no-growth,
+  chosen well above a single observation's own observed ~5-8s latency)
+  before trusting the count, with the overall wait budget raised from
+  12 to 45 polls to accommodate. This narrows the race further but is
+  still explicitly a heuristic, not a guarantee — there is no way for
+  this hook to know for certain that *every* `PostToolUse` event for a
+  session has finished, only to infer it from the count holding steady
+  long enough; a fully robust fix would need the worker to expose real
+  per-session "is a turn still in flight" state for this hook to query
+  directly, which is a legitimate architectural follow-up, not something
+  this fix attempts. Verified with a new dedicated test reproducing the
+  exact plateau shape (a count that holds at a stale, lower value for
+  several checks — fewer than the required streak — before the real
+  next observation lands), confirmed as a genuine regression test by
+  temporarily reverting the streak threshold back to 2 and watching it
+  fail, then restoring it.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based

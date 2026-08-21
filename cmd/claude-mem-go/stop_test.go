@@ -143,3 +143,31 @@ func TestWaitForSessionObservationsDoesNotStabilizeFalselyAtZero(t *testing.T) {
 		t.Fatalf("waitForSessionObservations returned %d observations, want 1 — it must not have stopped at the two leading zero-reads", len(got))
 	}
 }
+
+// TestWaitForSessionObservationsWaitsPastAPlateauForASecondToolCall is the
+// regression test for a second, more consequential real bug found live
+// against an actual session with TWO tool calls, not just a unit test:
+// this function's first version required only two consecutive matching
+// reads to trust stability. A session with multiple tool calls processes
+// them SEQUENTIALLY (see sessions.go's per-session mutex) — the first
+// tool call's observation lands, the count holds at 1 for several real
+// seconds while the SECOND tool call's observation is still mid-flight,
+// and the old rule locked in at count=1 during that plateau, producing a
+// summary that silently covered only the first of the two tool calls.
+// Simulates exactly that shape: 0, then 1 held for 5 checks (fewer than
+// stopStableStreakRequired, so the old 2-check rule would have already
+// locked in here but the fix must not), then 2 held long enough to
+// actually satisfy the real streak requirement.
+func TestWaitForSessionObservationsWaitsPastAPlateauForASecondToolCall(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	counts := []int{0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
+	be := &sequencedBackend{counts: counts}
+	got, err := waitForSessionObservations(be, "s1", 50)
+	if err != nil {
+		t.Fatalf("waitForSessionObservations: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("waitForSessionObservations returned %d observations, want 2 — it must not have locked in at the 5-check plateau of 1 (a second tool call's observation was still coming)", len(got))
+	}
+}
