@@ -737,6 +737,34 @@ process (this project doesn't cut tagged releases on a schedule).
   closing anything" gap as deliberately unaddressed, which stopped being
   true when the previous entry's fix closed it. It now points at
   `processWG`/`waitForProcessDrain` and explains the ordering.
+- **Added: `doctor` now verifies the installed plugin actually contains a
+  runnable binary — the check above could otherwise affirm an install
+  that cannot execute.** Every capture path resolves
+  `"$CLAUDE_PLUGIN_ROOT/claude-mem-go"` (all five hooks plus `.mcp.json`),
+  and that binary is gitignored, built separately, and copied into the
+  plugin cache in whatever state the tree was in at install time. Install
+  from a fresh clone without building, or unpack a release archive for
+  the wrong architecture, and the install is well-formed while every hook
+  silently fails to execute — confirmed by hand against a real install.
+  New `plugincheck.BinaryStatus` requires a regular file with an execute
+  bit at `InstallPath`/`PluginName` and then **executes** it (`version`,
+  bounded timeout) rather than only stat-ing, since a wrong-architecture
+  or truncated binary stats perfectly and fails only when run. Critical
+  only when the plugin is installed, matching real claude-mem's
+  `required: installed`, preserving the `--plugin-dir` and CLI/MCP-only
+  carve-out; a rebuilt-but-not-reinstalled tree is an informational
+  version-skew note rather than a failure. `Install.InstallPath` was
+  already parsed from the real manifest and dead in every non-test path —
+  the data was already in hand. Verified against real Claude Code state
+  across all three outcomes with the plugin genuinely installed: working
+  binary → exit 0 with its version reported; deleted binary → `✘ plugin
+  binary unusable` naming the path and remediation, exit 1; `chmod -x` →
+  `is not executable`, exit 1; restored → exit 0. Machine plugin state
+  confirmed byte-identical afterward. Unit tests cover a real compiled
+  binary, missing, non-executable, corrupt-but-executable, a directory in
+  its place, and an empty install path — confirmed genuine by
+  break/restore: reducing the check to stat-only failed both the
+  real-build and corrupt-binary tests.
 
 ## 0.2.0 — 2026-08-20
 

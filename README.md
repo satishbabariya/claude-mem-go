@@ -1861,6 +1861,64 @@ anything" gap as deliberately unaddressed, which stopped being true when
 the previous fix closed it. It now points at `processWG`/
 `waitForProcessDrain` and explains the ordering instead.
 
+### …and "installed" turned out not to mean "able to run" — the check above could affirm an install that cannot execute
+
+The plugin check above closed a real gap, and immediately opened a
+sharper one: it reports a plugin *installed* without ever verifying the
+install contains a working copy of the binary every hook actually
+invokes. That made the previous state of affairs strictly worse in one
+respect — `doctor` now affirmatively vouched for installs that cannot
+run.
+
+Every capture path resolves `"$CLAUDE_PLUGIN_ROOT/claude-mem-go"` — all
+five events in `hooks/hooks.json`, plus `.mcp.json` — and that binary is
+gitignored, built separately with `go build`, and copied into the plugin
+cache in whatever state the source tree happened to be in at install
+time. Install from a fresh clone without building first, or unpack a
+release archive for the wrong architecture, and the install is present
+and perfectly well-formed while every hook silently fails to execute.
+Real claude-mem checks the equivalent (`doctor.ts`'s "Marketplace
+runtime" stats the install's actual runtime payload, and its Bun check
+*executes* `bun --version` rather than trusting mere presence).
+
+Confirmed by hand against a real install rather than reasoned about:
+removing the binary from the real `installPath` left a plugin Claude
+Code still considers installed, whose hook command cannot run at all.
+`plugincheck.Install.InstallPath` was already being parsed from the real
+manifest and was dead in every non-test path — the data needed was
+already in hand, just unused.
+
+Added `plugincheck.BinaryStatus`, which joins `InstallPath` +
+`PluginName`, requires a regular file with an execute bit, and then
+**executes** it (`version`, under a bounded timeout) rather than only
+stat-ing — deliberately, because a wrong-architecture or truncated
+binary stats perfectly and fails only when run, which is exactly what a
+health check should catch before a real session does. Reported as
+critical **only when the plugin is installed**, matching real
+claude-mem's own `required: installed`: that preserves the deliberate
+carve-out for `--plugin-dir` and CLI/MCP-only users (who never had an
+install for this to be true of) while hard-failing the case where
+someone has installed and it genuinely cannot work. A rebuilt-but-not-
+reinstalled tree — an easy state to reach, since the cache holds a copy
+that `go build` alone never updates — is reported as an informational
+version-skew note rather than a failure, since a stale binary still runs.
+
+Verified against real Claude Code state across all three outcomes, with
+the plugin genuinely installed each time: a working binary reported
+`↳ binary OK (scope=local): claude-mem-go ac46ddcd2bff (...)` and exit
+0; deleting that binary produced `✘ plugin binary unusable ...` naming
+the exact path and remediation, **exit 1**; `chmod -x` on it produced
+`is not executable (mode -rw-r--r--)`, exit 1; restoring it returned to
+exit 0. The version-skew note also fired correctly and unprompted during
+this run, against a `-dirty` local build. Machine plugin state was
+confirmed byte-identical afterward (matching MD5s, zero residue). Unit
+tests cover a real compiled binary, a missing one, a non-executable one,
+a corrupt-but-executable one, a directory in its place, and an empty
+install path — each confirmed genuine by break/restore: reducing the
+check to stat-only failed both the real-build and corrupt-binary tests,
+the latter asserting in as many words that "a stat-only check would have
+passed this."
+
 ## Quick start
 
 ```sh

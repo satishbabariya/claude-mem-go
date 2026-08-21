@@ -16,10 +16,14 @@
 package plugincheck
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // PluginName is this plugin's name as Claude Code knows it — the "name"
@@ -101,4 +105,69 @@ func IsInstalled(path string) (bool, []Install) {
 		}
 	}
 	return len(found) > 0, found
+}
+
+// binaryProbeTimeout bounds the version probe in BinaryStatus. Generous
+// for what it does (this binary answering `version` is a few
+// milliseconds of work) but bounded regardless: doctor must never hang
+// on a pathological binary, the same reasoning behind every other
+// timeout in this project.
+var binaryProbeTimeout = 10 * time.Second
+
+// BinaryStatus verifies that an installed plugin actually contains a
+// working copy of the binary every hook invokes, returning that binary's
+// own version string.
+//
+// This exists because "installed" and "able to run" are genuinely
+// different states here, and only the first was ever checked. Every
+// capture path resolves "$CLAUDE_PLUGIN_ROOT/claude-mem-go" —
+// hooks/hooks.json for all five events, plus .mcp.json — and that binary
+// is gitignored, built separately by `go build`, and copied into the
+// plugin cache by whatever state the source tree was in at install time.
+// Install from a fresh clone without building first, or grab a release
+// archive for the wrong architecture, and the install is present and
+// well-formed while every hook silently fails to execute. Verified by
+// hand against a real install rather than reasoned about: removing the
+// binary from the real installPath left a plugin Claude Code still
+// considers installed, whose hook command cannot run at all.
+//
+// InstallPath is the plugin root itself — confirmed against a real
+// `claude plugin install`, whose manifest recorded
+// ~/.claude/plugins/cache/<marketplace>/<plugin>/<version> with the
+// built binary sitting directly inside it.
+//
+// The probe deliberately EXECUTES the binary rather than only stat-ing
+// it, mirroring real claude-mem's own doctor probing `bun --version`
+// instead of trusting the runtime's mere presence: a wrong-architecture
+// or truncated binary stats perfectly and fails only when run, which is
+// exactly the case a health check exists to catch before a real session
+// does.
+func BinaryStatus(in Install) (version string, err error) {
+	if in.InstallPath == "" {
+		return "", fmt.Errorf("install has no recorded installPath")
+	}
+	path := filepath.Join(in.InstallPath, PluginName)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w (build it with `go build -o %s ./cmd/claude-mem-go` and reinstall the plugin)", path, err, PluginName)
+	}
+	if info.IsDir() || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s exists but is not a regular file", path)
+	}
+	// 0o111, not just the owner bit: a binary readable and executable
+	// only by another user still can't be run by the hook, and one with
+	// no execute bit at all is the shape a naive archive extraction
+	// produces.
+	if info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%s is not executable (mode %s)", path, info.Mode().Perm())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), binaryProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s could not be executed: %w (wrong architecture, or a corrupt/partial build)", path, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

@@ -76,6 +76,37 @@ func cmdDoctor(args []string) int {
 			}
 		}
 		fmt.Println()
+
+		// "Installed" and "able to run" are different states, and only
+		// the first was checked before this. Every hook resolves
+		// "$CLAUDE_PLUGIN_ROOT/claude-mem-go", a gitignored binary built
+		// separately and copied into the plugin cache in whatever state
+		// the tree was in at install time — so an install can be present
+		// and well-formed while every hook silently fails to execute.
+		// Critical ONLY when the plugin is installed, exactly matching
+		// real claude-mem's own "Marketplace runtime" check
+		// (required: installed): that preserves the deliberate carve-out
+		// above for --plugin-dir and CLI/MCP-only users, who never had a
+		// plugin install for this to be true of in the first place, while
+		// still hard-failing the case where someone HAS installed and it
+		// genuinely cannot work.
+		for _, in := range installs {
+			binVersion, berr := plugincheck.BinaryStatus(in)
+			if berr != nil {
+				fmt.Printf("✘ plugin binary unusable (scope=%s): %v\n", in.Scope, berr)
+				critical = false
+				continue
+			}
+			fmt.Printf("  ↳ binary OK (scope=%s): %s\n", in.Scope, binVersion)
+			// A rebuilt-but-not-reinstalled tree is a real and easy state
+			// to end up in — the plugin cache holds a COPY, so `go build`
+			// alone never updates it. Informational, not critical: a stale
+			// binary still runs, it's just not the code the operator
+			// thinks they're running.
+			if running := buildVersionString(buildInfo); running != binVersion {
+				fmt.Printf("  ↳ … note: the installed binary differs from this one (%s) — rebuild and reinstall the plugin to sync them\n", running)
+			}
+		}
 	} else {
 		fmt.Printf("… plugin %q is NOT installed — automatic capture is inactive: no hooks fire, so nothing is being recorded.\n", plugincheck.PluginName)
 		fmt.Printf("  Install it to enable capture, or ignore this if you're using --plugin-dir or only the CLI/MCP surface.\n")
