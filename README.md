@@ -1545,6 +1545,43 @@ backdated row via direct SQL, a real `search_observations` call through
 the `mcp` subcommand with `dateStart` correctly excluding it, and
 `orderBy=date_asc` correctly ordering it first.
 
+### `search`'s type filter couldn't match more than one observation type at once
+
+Real claude-mem's own `search` tool documents `obs_type` as "Comma-
+separated for multiple" — `SearchManager.ts`/`SearchOrchestrator.ts`
+split it on comma, and `SessionSearch.ts` then builds a `type IN
+(...)` clause instead of a plain equality one when given more than one
+value. This port's `Search` only ever matched a single type exactly
+(`o.type = ?`); there was no split, no `IN` path, and no way to ask for
+"change or decision but not discovery" without two separate calls and
+merging the results by hand — a realistic query shape given the fixed,
+small observation-type vocabulary (`discovery`/`change`/`decision`/
+`summary`/`manual`) this schema already enforces with a CHECK
+constraint.
+
+Fixed with a new `store.SplitCommaList` helper (comma-split, trim, drop
+empties — the same normalization `SearchManager.ts` does) used by both
+backends' `Search`: one matching type still becomes the existing `type
+= ?` equality clause; more than one becomes `type IN (?,?,...)` (the
+Postgres backend's version slots into its existing dynamic
+placeholder-numbering scheme, added for exactly this kind of composable
+filter). No `Backend` interface change was needed — `obsType` stays a
+plain `string`, comma-separated, matching the wire shape
+`search_observations`'s `type` argument and the `search` CLI's `-type`
+flag already had.
+
+Verified against both real backends, including the live Postgres
+container: seeded three observations of three different types, confirmed
+a comma-separated filter (`"discovery,decision"`) returns exactly the
+union of the named types and excludes the third, including a case with
+whitespace around the comma (`"discovery, decision"`) to confirm
+trimming — each confirmed as a genuine test by temporarily reverting to
+single-value-only matching and watching the multi-type test fail before
+restoring the fix. Verified live end to end too: the real compiled
+binary, three seeded observations backed by real distinct types, and a
+real `search_observations` call with `type="discovery,decision"`
+correctly returning exactly those two and excluding the third.
+
 ## Quick start
 
 ```sh

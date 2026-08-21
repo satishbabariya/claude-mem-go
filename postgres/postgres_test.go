@@ -174,6 +174,38 @@ func TestPostgresSearchFiltersByObservationTypeWithProjectScope(t *testing.T) {
 	}
 }
 
+// TestPostgresSearchFiltersByCommaSeparatedObservationTypes mirrors the
+// SQLite backend's identical test — the real, live-container regression
+// test for a real gap: real claude-mem's own search tool documents
+// obs_type as "Comma-separated for multiple," which this backend (like
+// the SQLite one) had no split/IN path for at all.
+func TestPostgresSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "a", project), store.Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
+		t.Fatalf("Insert discovery: %v", err)
+	}
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "b", project), store.Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
+		t.Fatalf("Insert decision: %v", err)
+	}
+	if _, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "c", project), store.Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
+		t.Fatalf("Insert manual: %v", err)
+	}
+
+	got, err := st.Search(project, "gizmo", "discovery,decision", 10, 0, 0, 0, "")
+	if err != nil {
+		t.Fatalf("Search(type=\"discovery,decision\"): %v", err)
+	}
+	types := map[string]bool{}
+	for _, r := range got {
+		types[r.Observation.Type] = true
+	}
+	if len(got) != 2 || !types["discovery"] || !types["decision"] || types["manual"] {
+		t.Fatalf("Search(type=\"discovery,decision\") = %+v, want exactly the discovery and decision rows, not manual", got)
+	}
+}
+
 func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)

@@ -224,10 +224,20 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 	// actually applied to date range and sort order (both added here too,
 	// on the same already-indexed created_at_epoch column RecentByProject
 	// already queries — no schema change needed for these either, despite
-	// this project's own README having claimed otherwise).
-	if obsType != "" {
+	// this project's own README having claimed otherwise). Comma-separated
+	// for multiple, matching real claude-mem's own obs_type docs ("Comma-
+	// separated for multiple") and SearchManager.ts's identical split —
+	// SessionSearch.ts then branches on array-vs-string to build an IN
+	// clause instead of a plain equality one, which this mirrors exactly.
+	if types := SplitCommaList(obsType); len(types) == 1 {
 		scope += " AND o.type = ?"
-		args = append(args, obsType)
+		args = append(args, types[0])
+	} else if len(types) > 1 {
+		placeholders := strings.Repeat("?,", len(types)-1) + "?"
+		scope += " AND o.type IN (" + placeholders + ")"
+		for _, t := range types {
+			args = append(args, t)
+		}
 	}
 	if dateStartMs > 0 {
 		scope += " AND o.created_at_epoch >= ?"

@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"claude-mem-go/store"
 )
@@ -89,9 +90,19 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		args = append(args, project)
 		scope += fmt.Sprintf(" AND project = $%d", len(args))
 	}
-	if obsType != "" {
-		args = append(args, obsType)
+	// Comma-separated for multiple, matching real claude-mem's own
+	// obs_type docs and the SQLite backend's identical split (see its own
+	// doc comment on Search for the real source this ports).
+	if types := store.SplitCommaList(obsType); len(types) == 1 {
+		args = append(args, types[0])
 		scope += fmt.Sprintf(" AND type = $%d", len(args))
+	} else if len(types) > 1 {
+		placeholders := make([]string, len(types))
+		for i, t := range types {
+			args = append(args, t)
+			placeholders[i] = fmt.Sprintf("$%d", len(args))
+		}
+		scope += " AND type IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	if dateStartMs > 0 {
 		args = append(args, dateStartMs)

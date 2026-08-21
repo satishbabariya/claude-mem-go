@@ -106,6 +106,56 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 	}
 }
 
+// TestSearchFiltersByCommaSeparatedObservationTypes is the regression
+// test for a real gap: real claude-mem's own search tool documents
+// obs_type as "Comma-separated for multiple" (SearchManager.ts splits on
+// comma, SessionSearch.ts then builds a type IN (...) clause instead of
+// a plain equality one) — this port only ever matched a single type
+// exactly, with no split/IN path at all. Seeds three different types and
+// confirms a comma-separated filter returns exactly the union of the
+// named types, not just accepting the argument as an opaque single
+// string that happens to match nothing.
+func TestSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "a", "1"), Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
+		t.Fatalf("Insert discovery: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "b", "2"), Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
+		t.Fatalf("Insert decision: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "c", "3"), Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
+		t.Fatalf("Insert manual: %v", err)
+	}
+
+	got, err := st.Search("proj", "gizmo", "discovery,decision", 10, 0, 0, 0, "")
+	if err != nil {
+		t.Fatalf("Search(type=\"discovery,decision\"): %v", err)
+	}
+	types := map[string]bool{}
+	for _, r := range got {
+		types[r.Observation.Type] = true
+	}
+	if len(got) != 2 || !types["discovery"] || !types["decision"] || types["manual"] {
+		t.Fatalf("Search(type=\"discovery,decision\") = %+v, want exactly the discovery and decision rows, not manual", got)
+	}
+
+	// Whitespace around commas must be tolerated, matching SearchManager.ts's
+	// own .trim() on each split part.
+	spaced, err := st.Search("proj", "gizmo", "discovery, decision", 10, 0, 0, 0, "")
+	if err != nil {
+		t.Fatalf("Search with spaced comma list: %v", err)
+	}
+	if len(spaced) != 2 {
+		t.Fatalf("Search(type=\"discovery, decision\") = %+v, want 2 (whitespace around commas should be trimmed)", spaced)
+	}
+}
+
 // TestSearchOffsetPagesWithoutOverlapOrGap is the regression test for a
 // real gap: offset was skipped on a rationale (README: "doesn't map
 // directly onto an existing column") that never actually applied to

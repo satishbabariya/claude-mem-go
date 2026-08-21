@@ -15,7 +15,7 @@ func cmdSearch(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
-	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual (default: every type)")
+	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual. Comma-separated for multiple (default: every type)")
 	offset := fs.Int("offset", 0, "skip this many leading results, for paging past a prior call's limit")
 	dateStart := fs.String("date-start", "", "only observations created on or after this date (RFC3339 or YYYY-MM-DD)")
 	dateEnd := fs.String("date-end", "", "only observations created on or before this date (RFC3339 or YYYY-MM-DD)")

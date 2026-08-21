@@ -549,6 +549,31 @@ process (this project doesn't cut tagged releases on a schedule).
   binary, a backdated row via direct SQL, a real `search_observations`
   call correctly excluding it under `dateStart` and correctly ordering
   it first under `orderBy=date_asc`.
+- **Added: `search`'s type filter can now match more than one
+  observation type at once, matching real claude-mem's own
+  "comma-separated for multiple" `obs_type` docs.** `SearchManager.ts`/
+  `SearchOrchestrator.ts` split `obs_type` on comma;
+  `SessionSearch.ts` then builds a `type IN (...)` clause instead of a
+  plain equality one for more than one value. This port's `Search` only
+  ever matched a single type exactly, with no split/`IN` path at all —
+  no way to ask for "change or decision but not discovery" without two
+  calls and merging results by hand, despite the fixed, small,
+  CHECK-constrained type vocabulary making that a realistic query shape.
+  Added `store.SplitCommaList` (comma-split, trim, drop empties) used by
+  both backends' `Search`: one type still becomes the existing `type =
+  ?`; more than one becomes `type IN (?,?,...)` (Postgres's version
+  slots into its existing dynamic placeholder-numbering scheme). No
+  `Backend` interface change needed — `obsType` stays a plain
+  comma-separated `string`. Verified against both real backends,
+  including the live Postgres container: seeded three observations of
+  three different types, confirmed a comma-separated filter returns
+  exactly the named types' union (including a whitespace-around-commas
+  case) and excludes the rest — confirmed as a genuine test by
+  temporarily reverting to single-value-only matching and watching it
+  fail before restoring the fix. Verified live end to end too: the real
+  compiled binary, three seeded observations with real distinct types,
+  and a real `search_observations` call with a comma-separated `type`
+  argument returning exactly the expected two.
 
 ## 0.2.0 — 2026-08-20
 

@@ -140,7 +140,7 @@ func tools() []toolDef {
 					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
 					"offset":       map[string]any{"type": "integer", "description": "Skip this many leading results, for paging past a prior call's limit (default 0)"},
 					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
-					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual (default: every type)"},
+					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual. Comma-separated for multiple (default: every type)"},
 					"dateStart":    map[string]any{"type": "string", "description": "Only observations created on or after this date (RFC3339 or YYYY-MM-DD)"},
 					"dateEnd":      map[string]any{"type": "string", "description": "Only observations created on or before this date (RFC3339 or YYYY-MM-DD)"},
 					"orderBy":      map[string]any{"type": "string", "description": "Sort order: date_desc or date_asc (default: relevance)"},
