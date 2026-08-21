@@ -124,7 +124,10 @@ func cmdDoctor(args []string) int {
 		fmt.Printf("  Install it to enable capture, or ignore this if you're using --plugin-dir or only the CLI/MCP surface.\n")
 	}
 
-	if worker.IsRunning(*socketPath) {
+	// Captured, because everything derived from the stats file below is a
+	// claim about a LIVE daemon and is meaningless without one.
+	workerRunning := worker.IsRunning(*socketPath)
+	if workerRunning {
 		fmt.Printf("✔ worker daemon reachable at %s\n", *socketPath)
 	} else {
 		fmt.Printf("… worker daemon not running at %s (not necessarily a problem — `start` launches it lazily from SessionStart)\n", *socketPath)
@@ -135,8 +138,22 @@ func cmdDoctor(args []string) int {
 	// Informational only, never critical: a missing stats file just means
 	// the worker hasn't processed anything yet (or predates this feature),
 	// not that anything is broken.
+	//
+	// A dead daemon leaves its stats file behind, so everything here is
+	// history unless the daemon is actually running. Reading this output
+	// as an operator would is what exposed that: doctor reported "worker
+	// daemon not running" and then, from the same leftover file, its pool
+	// saturation, its build version, and a CRITICAL store mismatch —
+	// failing the whole run over a daemon that did not exist. The live
+	// checks below are gated on workerRunning for that reason; the
+	// activity line survives either way but says which it is.
 	if stats, err := worker.ReadStatsFile(*statsPath); err == nil {
-		fmt.Printf("… worker activity: processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d",
+		if workerRunning {
+			fmt.Print("… worker activity: ")
+		} else {
+			fmt.Print("… last worker activity before it stopped: ")
+		}
+		fmt.Printf("processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d",
 			stats.Processed, stats.Duplicates, stats.ObserverErrors, stats.InsertErrors, stats.EmbedErrors,
 			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions)
 		if stats.LastActivityAt != "" {
@@ -166,7 +183,7 @@ func cmdDoctor(args []string) int {
 		// silently while every check here still reported green. Found by
 		// running three real concurrent sessions against the default
 		// capacity of 2: two were captured, the third produced nothing.
-		if stats.PoolCapacity > 0 && stats.PoolInFlight >= stats.PoolCapacity {
+		if workerRunning && stats.PoolCapacity > 0 && stats.PoolInFlight >= stats.PoolCapacity {
 			fmt.Printf("… all %d observer slot(s) are held by cached sessions — a NEW concurrent\n"+
 				"  session's observations will wait, and eventually be dropped, until one goes idle.\n"+
 				"  Raise -max-concurrent if you routinely run more than %d sessions at once.\n",
@@ -181,7 +198,7 @@ func cmdDoctor(args []string) int {
 		// replacement failed. Informational rather than critical for
 		// exactly that reason — a stale daemon still captures, it just
 		// may apply older rules.
-		if stats.Version != "" && stats.Version != buildVersionString(buildInfo) {
+		if workerRunning && stats.Version != "" && stats.Version != buildVersionString(buildInfo) {
 			fmt.Printf("… the worker daemon is running an older build than this binary:\n")
 			fmt.Printf("    worker:    %s\n", stats.Version)
 			fmt.Printf("    this cmd:  %s\n", buildVersionString(buildInfo))
@@ -190,7 +207,7 @@ func cmdDoctor(args []string) int {
 			fmt.Printf("    if this persists, stop the daemon (pid %d) and let the next session respawn it.\n", stats.PID)
 		}
 
-		if stats.Store != "" && stats.Store != redactedDBPath {
+		if workerRunning && stats.Store != "" && stats.Store != redactedDBPath {
 			fmt.Printf("✘ the worker daemon is writing to a DIFFERENT store than this command reads:\n")
 			fmt.Printf("    worker:    %s\n", stats.Store)
 			fmt.Printf("    this cmd:  %s\n", redactedDBPath)

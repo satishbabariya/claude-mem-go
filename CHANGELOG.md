@@ -7,6 +7,27 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **`doctor` reported a dead daemon's leftover stats as live state, and
+  failed critically over it.** Found by reading `doctor`'s own output as
+  an operator would — something never done despite checks being appended
+  to it all along. The output contradicted itself on screen: it printed
+  "worker daemon not running", then from the same leftover stats file
+  reported that daemon's pool saturation, its build version, and a
+  **CRITICAL** store mismatch, ending with "Critical checks failed" over a
+  process that did not exist. A dead daemon leaves its stats file behind
+  forever, and every one of those three checks is a claim about a *live*
+  daemon — all three were added by this same effort, so this is a
+  correction of my own work. They are now gated on the daemon actually
+  being reachable. The activity line survives either way, since the
+  numbers are still useful, but says which it is: "last worker activity
+  before it stopped" rather than "worker activity". Verified in both
+  directions with real daemons — with one live on a different store, all
+  three findings fire and the store mismatch is still critical (exit 1);
+  kill it, leave the identical stats file in place, and every live-state
+  finding goes quiet with exit 0. A counterweight test pins that the
+  stale numbers are not silently presented as current, because a fix that
+  did that would be just as wrong as the bug.
+
 - **The README was 2,604 lines with no table of contents, and 62% of it
   was filed under the wrong heading.** An audit of the docs — which the
   mandate names, and which this work has been appending to all along —
