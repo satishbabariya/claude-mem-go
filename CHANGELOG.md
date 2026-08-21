@@ -7,6 +7,49 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Project identity was `filepath.Base(cwd)`, which both fragmented and
+  collided memory.** Duplicated at six call sites, with no git awareness
+  anywhere in the port. Two distinct failure modes, both demonstrated
+  against a real git repository:
+  - **Fragmentation.** A session started in a subdirectory got a
+    different project than one started at the repository root. Measured
+    on one repo: `cwd=<repo>` gave `"gitproj"`, `<repo>/src` gave
+    `"src"`, `<repo>/src/auth` gave `"auth"` — three projects for one
+    codebase, so nothing recorded in one was ever recalled in another.
+    Working in a subpackage is completely ordinary, which makes this the
+    common case, not an edge case.
+  - **Collision, which is worse.** Those fragment names are generic:
+    every repository with a `src/` directory shared the single project
+    `"src"`. That is not memory going missing but unrelated projects'
+    memory being pooled and injected into each other's sessions.
+
+  `store.ProjectContextFor` now resolves the repository root by walking up
+  for a `.git` entry — a filesystem walk, not a `git` subprocess, since
+  this runs in every hook on every tool call and git is not guaranteed to
+  be installed. Git **worktrees** get real support too, matching real
+  claude-mem's composite key: a worktree resolves to `parent/worktree`,
+  and the SessionStart read spans both it and the parent, because a
+  worktree is a branch of the same work and should still see what the
+  repository knows. Writes still go to the composite name, so the two
+  stay distinguishable — only the read widens. Verified against actual
+  `git init` and `git worktree add` rather than hand-faked `.git`
+  layouts: a worktree's `.git` is a *file* containing
+  `gitdir: <parent>/.git/worktrees/<name>`, which is what the parsing
+  keys off. A `.git` file that is not a worktree pointer (a submodule)
+  is treated as an ordinary repository rather than guessed at, since
+  inventing a parent name would silently merge two projects. Outside a
+  repository the old basename behaviour is unchanged.
+
+  **One-time discontinuity worth knowing about:** existing observations
+  keep the project names they were written under. A store that has been
+  accumulating fragments will not retroactively merge them — new
+  observations land under the repository name while old ones stay where
+  they were. No fragmentation was actually observed in this project's own
+  development store (its sessions all ran from repository roots), so this
+  is stated as a consequence of the change rather than as damage
+  measured. Re-projecting old rows is a plain `UPDATE observations SET
+  project = ... WHERE project = ...` for anyone who wants it.
+
 - **One session's repeated touches of a file crowded out every other
   session's memory of it — defeating the point of cross-session memory.**
   `PostToolUse` fires per tool call with `matcher: "*"`, so an ordinary

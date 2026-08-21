@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
@@ -136,7 +135,7 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	project := filepath.Base(in.Cwd)
+	project := store.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
 		fmt.Println("{}")

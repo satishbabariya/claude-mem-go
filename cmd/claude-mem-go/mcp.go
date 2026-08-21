@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"os"
-	"path/filepath"
 
 	"claude-mem-go/mcpserver"
 	"claude-mem-go/store"
@@ -25,7 +24,7 @@ func cmdMCP(args []string) int {
 	l := openLog("mcp.log")
 	project := ""
 	if cwd, err := os.Getwd(); err == nil {
-		project = filepath.Base(cwd)
+		project = store.ProjectFor(cwd)
 		if project == "." {
 			project = ""
 		}

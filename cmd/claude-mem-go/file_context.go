@@ -69,7 +69,7 @@ func cmdFileContext(args []string) int {
 		return 0
 	}
 
-	project := filepath.Base(in.Cwd)
+	project := store.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}

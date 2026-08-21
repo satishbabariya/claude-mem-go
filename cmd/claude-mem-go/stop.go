@@ -371,7 +371,7 @@ func cmdStop(args []string) int {
 	// fires or how the observation count changes between firings.
 	hash := store.ContentHash(in.SessionID, "SessionSummary", "session-summary", "")
 
-	project := filepath.Base(in.Cwd)
+	project := store.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}

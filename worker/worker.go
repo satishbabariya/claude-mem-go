@@ -482,7 +482,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// reflecting real last-activity time, not merely a turn's start.
 	d.sessions.touch(in.SessionID)
 
-	project := filepath.Base(in.Cwd)
+	project := store.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}

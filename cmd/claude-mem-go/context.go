@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
@@ -51,7 +51,8 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	project := filepath.Base(in.Cwd)
+	pc := store.ProjectContextFor(in.Cwd)
+	project := pc.Primary
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
 		fmt.Println("{}")
@@ -66,9 +67,18 @@ func cmdContext(args []string) int {
 	}
 	defer st.Close()
 
-	recent, err := st.RecentByProject(project, *limit)
+	// Read across every project this working directory maps to, not just
+	// the one writes go to. For an ordinary checkout that is exactly one
+	// name and this behaves as before; for a git WORKTREE it is the
+	// parent repository as well, because a worktree is a branch of the
+	// same work and a session started in it should still see what the
+	// repository already knows. Writes still go to the worktree's own
+	// composite name, so the two stay distinguishable — this only widens
+	// the read. Real claude-mem does the same (context.ts injects over
+	// getProjectContext(cwd).allProjects, not .primary).
+	recent, err := recentAcrossProjects(st, pc.AllProjects, *limit)
 	if err != nil {
-		l.Printf("FAILED RecentByProject(%s): %v", project, err)
+		l.Printf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -104,4 +114,50 @@ func formatContext(recent []store.SearchResult) string {
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// recentAcrossProjects returns the newest `limit` observations across
+// every given project, merged and re-sorted newest-first.
+//
+// Merging in Go rather than widening the Backend interface with an
+// IN-clause variant: this is the only caller that needs more than one
+// project, the list is at most two (a worktree and its parent), and a
+// per-project query is one indexed lookup each. An interface change would
+// touch both backends to serve one call site.
+//
+// Each project is fetched at the full limit and the merge trims, so a
+// worktree with plenty of its own history is not forced to give up half
+// its slots to the parent — the newest observations win regardless of
+// which project they came from.
+func recentAcrossProjects(st store.Backend, projects []string, limit int) ([]store.SearchResult, error) {
+	if len(projects) <= 1 {
+		p := ""
+		if len(projects) == 1 {
+			p = projects[0]
+		}
+		return st.RecentByProject(p, limit)
+	}
+	var all []store.SearchResult
+	seen := make(map[int64]bool)
+	for _, p := range projects {
+		rs, err := st.RecentByProject(p, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			// A row can only belong to one project, but dedupe by id
+			// anyway: it costs nothing and makes this safe if the project
+			// list ever contains a duplicate.
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			all = append(all, r)
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAtEpoch > all[j].CreatedAtEpoch })
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
 }
