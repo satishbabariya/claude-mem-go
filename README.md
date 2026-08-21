@@ -841,13 +841,46 @@ wiring, cross-compiled or not), and `doctor` ran its full real checklist
 against a fresh temp database. The workflow YAML passed `actionlint`
 before being committed, the same discipline `ci.yml` was checked with.
 
-Deliberately **not yet wired into `hooks/hooks.json`** — that still points
-at a locally-built `$CLAUDE_PLUGIN_ROOT/claude-mem-go`, and switching it to
-fetch a matching release asset automatically (a `Setup`-hook
-download-if-missing step, the same shape real claude-mem's own `Setup`
-hook covers for its version-check) is a real, separate change that
-deserves its own verification pass rather than riding along with "does the
-release pipeline produce working binaries at all."
+The **install path is now self-healing and self-announcing**, which it
+was not. The binary is gitignored — a build artifact, not source — so a
+plugin installed from a git source ships the complete Go source and no
+binary. Every hook then failed with `No such file or directory`, Claude
+Code swallowed that, and memory was silently dead forever. The trap
+compounds: `doctor` is a subcommand of the very binary that is missing,
+so the tool an operator would reach for could not run either. Reproduced
+by unpacking `git archive HEAD` and running a real session against it.
+
+Two layers, because one was demonstrably not enough:
+
+- **`Setup` hook** (`scripts/ensure-binary.sh`) builds the binary when it
+  is missing or unrunnable — matching real claude-mem's own `Setup` hook,
+  which exists to `bun install` its runtime dependencies for the same
+  class of reason. It runs off the hot path with a 300s timeout, because
+  a genuinely cold build measures ~33s here while SessionStart's hooks
+  allow 10–15s. A working binary costs one `version` call and exits. It
+  tests runnability rather than existence, since a wrong-architecture
+  binary stats fine and only fails when executed.
+- **Hook wrapper** (`scripts/run-hook.sh`) that every hook goes through,
+  because `Setup` alone could not be relied on: it was observed **not**
+  firing for a genuinely installed plugin under `claude -p`, nor during
+  `claude plugin install`. On the healthy path it `exec`s the binary. On
+  a missing one, SessionStart's `context` hook — the only place a hook
+  can put text in front of the user — returns a real `additionalContext`
+  payload, and the remaining hooks log to
+  `~/.claude-mem-go/missing-binary.log`. It deliberately does not build:
+  10–15s against a ~33s cold build would only time out.
+
+Verified end to end against a real session with no binary present: the
+session itself told the user *"To fix claude-mem-go, run this and restart
+Claude Code: cd … && go build -o claude-mem-go ./cmd/claude-mem-go"*.
+After healing, capture works through the wrapper — confirmed by a real
+observation landing in the store.
+
+Fetching a matching release asset instead of building remains unwired,
+and deliberately so: there are no published releases or tags yet, and the
+repository is private, so asset download would need auth. Building from
+the source the plugin already ships is the fix that works for the
+distribution actually in use.
 
 ### Hook coverage, audited against the shipped CLI
 
