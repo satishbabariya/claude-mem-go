@@ -598,6 +598,30 @@ over its actual socket, confirmed the daemon logged a rejection and
 stayed alive, then sent a normal-sized payload through the same daemon
 and confirmed it processed normally afterward.
 
+### Truncation used to be able to corrupt real tool output mid-character
+
+`transcript.Truncate` (and `Parse`'s internal `truncate`) caps every
+`tool_input`/`tool_response` field at `FieldCap` (1500 bytes) before it
+ever reaches an observer prompt — on the real, live hot path
+`worker.Daemon.process` runs for every single tool call. The cut was a
+plain `s[:max]` byte-offset slice, with no regard for where a multi-byte
+UTF-8 rune actually starts or ends. Confirmed directly: any non-ASCII
+character (an accented file path, an emoji, box-drawing characters from
+`tree`/`ls` output, non-English text) that happens to straddle byte 1500
+gets sliced in half, producing **invalid UTF-8** in the truncated
+result — over the volume of real tool calls a long-running daemon
+processes, "happens to straddle" is an eventual certainty, not a rare
+edge case. Fixed by walking back to the nearest real rune-start byte
+before cutting (at most 3 extra bytes trimmed, since the longest UTF-8
+encoding is 4 bytes) — verified with a unit test confirming the
+truncated result is always valid UTF-8 even when the exact cutoff is
+engineered to land mid-character, and a real end-to-end run through an
+isolated worker daemon: sent a real tool_response with multi-byte
+characters straddling the exact 1500-byte boundary over the daemon's
+actual socket, and confirmed the full real pipeline (truncate → observer
+prompt → real `claude` subprocess → persisted observation) completed
+cleanly with no encoding error anywhere.
+
 ### A negative limit, and the bigger gap it exposed: no panic recovery anywhere
 
 Auditing every `Backend` method that takes a `limit` (prompted by

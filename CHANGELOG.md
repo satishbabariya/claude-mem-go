@@ -62,6 +62,17 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **Field truncation could corrupt real tool output mid-character.**
+  `transcript.Truncate`, on the live hot path for every single tool call
+  the worker daemon processes, cut fields at a plain byte-offset slice
+  with no regard for UTF-8 rune boundaries — any non-ASCII character
+  (accented paths, emoji, box-drawing characters, non-English text)
+  straddling the 1500-byte cutoff got sliced in half, producing invalid
+  UTF-8. Fixed by walking back to the nearest real rune-start byte before
+  cutting. Verified with a unit test forcing the cutoff to land
+  mid-character, and a real end-to-end run through an isolated worker
+  daemon with an engineered multi-byte payload sent over its actual
+  socket, confirming the full real pipeline completes cleanly.
 - **`migrate.Run` had two real bugs in the framework both backends'
   schema changes depend on**, found by hand rather than assumed correct:
   it documented "ascending Version order" but never actually sorted

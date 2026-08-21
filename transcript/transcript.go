@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // FieldCap bounds each field this package extracts. Real claude-mem clamps
@@ -33,11 +34,27 @@ import (
 // arbitrarily large and this is meant to feed an LLM prompt.
 const FieldCap = 1500
 
+// truncate cuts s to at most max bytes at a real UTF-8 rune boundary, not
+// a raw byte offset. Found the hard way, not anticipated: a plain `s[:max]`
+// produces invalid UTF-8 whenever a multi-byte rune (any non-ASCII
+// character — accented file paths, emoji, box-drawing characters from
+// `tree`/`ls` output, non-English text) happens to straddle the cut point,
+// confirmed directly against a real multi-byte string. This runs on every
+// single real tool_input/tool_response the worker daemon ever processes
+// (see worker.go's process()), so "happens to straddle" isn't a rare edge
+// case over that much real traffic — it's an eventual certainty. Walking
+// back to the nearest rune-start byte trims at most 3 extra bytes (the
+// longest UTF-8 encoding is 4 bytes) to guarantee the result is always
+// valid UTF-8.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + fmt.Sprintf("...[truncated %d bytes]", len(s)-max)
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("...[truncated %d bytes]", len(s)-cut)
 }
 
 // Truncate applies FieldCap to s. Exported so callers building a ToolCall

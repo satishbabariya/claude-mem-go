@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // writeFixture writes lines (already-JSON-encoded, one per line) to a temp
@@ -120,6 +121,38 @@ func TestTruncateLongFields(t *testing.T) {
 	short := "short string"
 	if Truncate(short) != short {
 		t.Fatalf("Truncate should leave short strings unchanged, got %q", Truncate(short))
+	}
+}
+
+// TestTruncateNeverProducesInvalidUTF8 is the regression test for a real
+// bug found by hand, not anticipated: a plain byte-offset slice (s[:max])
+// produces invalid UTF-8 whenever a multi-byte rune (any non-ASCII
+// character) straddles the cut point — confirmed directly, most cut
+// points through a run of 3-byte runes landed mid-character. This runs on
+// every real tool_input/tool_response the worker daemon processes, so
+// "happens to straddle" is an eventual certainty over that much traffic,
+// not a rare edge case. Builds a string where the exact FieldCap byte
+// offset intentionally lands mid-rune, then confirms the truncated
+// portion (before the appended "...[truncated N bytes]" marker, which is
+// plain ASCII and never at issue) is always valid UTF-8.
+func TestTruncateNeverProducesInvalidUTF8(t *testing.T) {
+	// "€" is a 3-byte UTF-8 rune (E2 82 AC). Padding with 2 ASCII bytes
+	// first guarantees the boundary at FieldCap falls exactly one byte
+	// into a €, the worst case for a naive byte-offset cut.
+	s := strings.Repeat("x", FieldCap-1) + strings.Repeat("€", 200)
+	got := Truncate(s)
+	cutPortion := got
+	if idx := strings.Index(got, "...[truncated"); idx != -1 {
+		cutPortion = got[:idx]
+	}
+	if !utf8.ValidString(cutPortion) {
+		t.Fatalf("Truncate produced invalid UTF-8: %q (bytes: %v)", cutPortion, []byte(cutPortion))
+	}
+	// Confirm this test actually exercises truncation at all, and that
+	// the cut landed within a few bytes of FieldCap — not a much smaller
+	// result, which would mean the rune-boundary walk-back over-trimmed.
+	if len(cutPortion) > FieldCap || len(cutPortion) < FieldCap-3 {
+		t.Fatalf("truncated portion length = %d, want within 3 bytes of FieldCap=%d", len(cutPortion), FieldCap)
 	}
 }
 
