@@ -66,6 +66,12 @@ type sessionCache struct {
 	// getOrCreate's subprocess-spawning path just to record a flag.
 	privMu sync.Mutex
 	priv   map[string]privacyFlag
+
+	// dedupeMu/dedupe are the same kind of separate, byID-independent
+	// state as priv, for the same reason: checkAndRecordPrompt is called
+	// on every UserPromptSubmit before any tool call exists for the turn.
+	dedupeMu sync.Mutex
+	dedupe   map[string]dedupeState
 }
 
 func newSessionCache(p *pool.Pool, newFunc func(ctx context.Context) (observer.Handle, error)) *sessionCache {
@@ -116,6 +122,58 @@ func (c *sessionCache) evictStalePrivacy() {
 	for id, f := range c.priv {
 		if time.Since(f.setAt) > sessionIdleTimeout {
 			delete(c.priv, id)
+		}
+	}
+}
+
+// promptDedupeWindow matches real claude-mem's own
+// USER_PROMPT_DEDUPE_WINDOW_MS (src/shared/user-prompts.ts) — the window
+// checkAndRecordPrompt uses to decide whether a repeated UserPromptSubmit
+// for the same session and prompt text is a genuine duplicate (Claude
+// Code firing the hook more than once for one prompt, real claude-mem's
+// own issue #2515) rather than a new, later prompt that just happens to
+// repeat earlier text.
+const promptDedupeWindow = 10 * time.Second
+
+// dedupeState is a session's most recently recorded prompt hash and when
+// it was first recorded — NOT refreshed on every duplicate hit, only on
+// a genuinely new one, so the window is always measured from the
+// original prompt's own timestamp, matching real claude-mem's own
+// findRecentDuplicateUserPrompt (which checks a duplicate against the
+// original saved row's created_at, not against whichever check happened
+// most recently).
+type dedupeState struct {
+	hash      string
+	firstSeen time.Time
+}
+
+// checkAndRecordPrompt reports whether promptHash was already seen for
+// sessionID within promptDedupeWindow, and atomically records it as the
+// session's current prompt if not (or if the previous one aged out of
+// the window) — a caller must never call this more than once per real
+// UserPromptSubmit invocation, since a second call for a prompt that was
+// itself just recorded would treat it as a duplicate of itself.
+func (c *sessionCache) checkAndRecordPrompt(sessionID, promptHash string) bool {
+	c.dedupeMu.Lock()
+	defer c.dedupeMu.Unlock()
+	if st, ok := c.dedupe[sessionID]; ok && st.hash == promptHash && time.Since(st.firstSeen) < promptDedupeWindow {
+		return true
+	}
+	if c.dedupe == nil {
+		c.dedupe = make(map[string]dedupeState)
+	}
+	c.dedupe[sessionID] = dedupeState{hash: promptHash, firstSeen: time.Now()}
+	return false
+}
+
+// evictStaleDedupe bounds dedupe's lifetime the same way evictStalePrivacy
+// bounds priv's. Meant to run periodically alongside evictIdle.
+func (c *sessionCache) evictStaleDedupe() {
+	c.dedupeMu.Lock()
+	defer c.dedupeMu.Unlock()
+	for id, st := range c.dedupe {
+		if time.Since(st.firstSeen) > sessionIdleTimeout {
+			delete(c.dedupe, id)
 		}
 	}
 }

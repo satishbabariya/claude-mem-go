@@ -166,6 +166,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			case <-ticker.C:
 				d.sessions.evictIdle()
 				d.sessions.evictStalePrivacy()
+				d.sessions.evictStaleDedupe()
 			}
 		}
 	}()
@@ -275,6 +276,14 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	if sid, ok := hook.ParsePrivacyQuery(raw); ok {
 		reply := "0"
 		if d.sessions.isPrivate(sid) {
+			reply = "1"
+		}
+		_, _ = conn.Write([]byte(reply))
+		return
+	}
+	if sid, promptHash, ok := hook.ParseDedupeQuery(raw); ok {
+		reply := "0"
+		if d.sessions.checkAndRecordPrompt(sid, promptHash) {
 			reply = "1"
 		}
 		_, _ = conn.Write([]byte(reply))

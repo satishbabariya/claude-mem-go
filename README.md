@@ -1398,6 +1398,57 @@ guard and watching the identical payload instead attempt a real worker
 notification (which then logged the expected connection failure) and
 proceed to a real Ollama embedding call, before restoring it.
 
+### `prompt-context` had no protection against a duplicate `UserPromptSubmit` firing
+
+Claude Code can fire `UserPromptSubmit` more than once for the same
+prompt — a real, previously-shipped bug on the TS side, not a
+theoretical one: real claude-mem's own issue #2515 tracked exactly this,
+and its fix (`findRecentDuplicateUserPrompt`,
+`src/services/sqlite/prompts/get.ts`) checks a session's tag-stripped
+prompt text against `USER_PROMPT_DEDUPE_WINDOW_MS`
+(`src/shared/user-prompts.ts`, 10 seconds) right after its privacy check
+and before saving the prompt or doing semantic injection
+(`SessionRoutes.ts`). Without it, a duplicate firing pays its own
+embedding call and injects its own duplicate "memory relevant to what
+you just asked" block in the same turn.
+
+This port had no equivalent anywhere — no `user_prompts` table to check
+against, and no dedup logic at all. `cmdPromptContext` embedded and
+injected on every single invocation unconditionally, so a duplicate
+`UserPromptSubmit` would pay a second real Ollama round-trip and inject
+the recall block twice in one turn.
+
+Fixed by extending the worker daemon's plain-text socket protocol again
+(the same pattern `PRIVATE`/`ISPRIVATE` and `INFLIGHT` already use) with
+a `DEDUPE <session_id> <hash>` request/response call
+(`hook.CheckDuplicatePrompt`/`hook.ParseDedupeQuery`). The worker keeps a
+per-session `{lastPromptHash, firstSeen}`
+(`sessionCache.checkAndRecordPrompt`, alongside the existing
+privacy-flag state, for the same reason: it must work before any
+`sessionEntry` exists) and reports whether an identical hash was already
+recorded within the window. The window is deliberately measured from
+the *original* prompt's own timestamp, never extended just because
+someone asks again — matching real claude-mem's own semantics precisely:
+`findRecentDuplicateUserPrompt` checks against the original saved row's
+`created_at`, not against whichever check happened most recently, so a
+prompt genuinely repeated by the user after the window elapses is
+correctly treated as new rather than silently swallowed. Wired into
+`prompt-context` right after the privacy check, matching real
+claude-mem's own ordering (privacy first, then duplicate detection).
+
+Verified with new worker-package tests: a wire-format round trip, the
+full check-and-record exchange driven through the real client function
+against a real socket (including the case that matters most — a
+different, later prompt hash supersedes the earlier one, and re-checking
+that now-stale earlier hash correctly reads as NOT a duplicate anymore),
+an explicit window-expiry test, and stale-entry eviction. Verified live
+end to end too: a real worker daemon, the identical `UserPromptSubmit`
+payload sent twice for one session against a real Ollama model — the
+first call reached a real embedding/semantic-search attempt, the second
+was skipped as a duplicate — confirmed as a genuine fix by temporarily
+disabling the check and watching both calls independently reach a real
+embedding call before restoring it.
+
 ## Quick start
 
 ```sh

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -115,6 +117,19 @@ func cmdPromptContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
+	if dup, err := hook.CheckDuplicatePrompt(*socketPath, in.SessionID, promptHash(prompt)); err != nil {
+		l.Printf("failed to check duplicate-prompt state with worker (best-effort, not fatal): %v", err)
+	} else if dup {
+		// Real claude-mem's own fix for issue #2515: Claude Code can fire
+		// UserPromptSubmit more than once for the same prompt within a
+		// short window (USER_PROMPT_DEDUPE_WINDOW_MS, 10s) — without this
+		// check, each firing would pay its own Ollama embedding call and
+		// inject its own duplicate "memory relevant to what you just
+		// asked" block in the same turn.
+		l.Printf("skip: duplicate prompt for session %s within the dedupe window", in.SessionID)
+		fmt.Println("{}")
+		return 0
+	}
 	if len(prompt) < *minPromptLen {
 		l.Printf("skip: prompt too short to embed meaningfully (%d chars, want >= %d)", len(prompt), *minPromptLen)
 		fmt.Println("{}")
@@ -181,6 +196,16 @@ func truncateForLog(s string) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// promptHash hashes the (already tag-stripped) prompt text for the
+// worker's dedupe check — sent instead of the raw prompt itself, since
+// this project's plain-text socket protocol has no length-prefixing or
+// escaping for arbitrary prompt content, and the worker only ever needs
+// to compare two prompts for equality, never to read the text back.
+func promptHash(prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	return hex.EncodeToString(sum[:])
 }
 
 func formatPromptContext(matches []store.VectorMatch) string {

@@ -451,6 +451,42 @@ process (this project doesn't cut tagged releases on a schedule).
   as a genuine fix by temporarily removing the guard and watching the
   identical payload instead attempt a real worker notification and a
   real Ollama embedding call before restoring it.
+- **Added: `prompt-context` had no protection against Claude Code firing
+  `UserPromptSubmit` more than once for the same prompt — a real,
+  previously-shipped bug on the TS side (real claude-mem's issue #2515),
+  with no Go equivalent.** Real claude-mem's `findRecentDuplicateUserPrompt`
+  (`src/services/sqlite/prompts/get.ts`) checks a session's
+  tag-stripped prompt text against its own `USER_PROMPT_DEDUPE_WINDOW_MS`
+  (`src/shared/user-prompts.ts`, 10 seconds) right after its privacy
+  check and before saving the prompt or doing semantic injection
+  (`SessionRoutes.ts`) — without it, a duplicate `UserPromptSubmit`
+  firing would pay its own embedding call and inject its own duplicate
+  "memory relevant to what you just asked" block in the same turn. This
+  port had no `user_prompts` table to check against and no dedup logic
+  anywhere — `cmdPromptContext` embedded and injected on every single
+  invocation unconditionally. Fixed by extending the worker daemon's
+  plain-text socket protocol again with a `DEDUPE <session_id> <hash>`
+  request/response call (`hook.CheckDuplicatePrompt`/
+  `hook.ParseDedupeQuery`): the worker keeps a per-session
+  `{lastPromptHash, firstSeen}` (`sessionCache.checkAndRecordPrompt`,
+  alongside the existing privacy-flag state) and reports whether an
+  identical hash was already recorded within the 10s window — matching
+  real claude-mem's own semantics precisely: the window is measured from
+  the *original* prompt's timestamp, never extended by repeated
+  duplicate hits, so a prompt genuinely repeated by the user after the
+  window elapses is correctly treated as new, not silently swallowed.
+  Wired into `prompt-context` right after the privacy check, matching
+  real claude-mem's own ordering. Verified with new worker-package tests
+  (wire round trip, the check-and-record exchange over a real socket
+  including the "a different hash supersedes the old one" and
+  "re-checking a now-superseded hash isn't a duplicate" cases, explicit
+  window-expiry timing, stale-entry eviction) and live end to end: a
+  real worker daemon, the identical `UserPromptSubmit` payload sent
+  twice for one session against a real Ollama model — the first call
+  reached a real embedding/search attempt, the second was skipped as a
+  duplicate — confirmed as a genuine fix by temporarily disabling the
+  check and watching both calls instead independently reach a real
+  embedding call before restoring it.
 
 ## 0.2.0 — 2026-08-20
 

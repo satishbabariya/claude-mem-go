@@ -236,3 +236,75 @@ func QueryPrivate(socketPath, sessionID string) (bool, error) {
 		return false, fmt.Errorf("malformed privacy-query response %q", raw)
 	}
 }
+
+// dedupePrefix opens CheckDuplicatePrompt's own request/response
+// protocol, distinct from every other prefix this package defines so the
+// worker's handleConn can tell them all apart on the same socket.
+const dedupePrefix = "DEDUPE "
+
+// ParseDedupeQuery reports whether raw is a duplicate-prompt check (as
+// sent by CheckDuplicatePrompt) rather than a hook payload or one of this
+// protocol's other message kinds, and if so, the session_id and prompt
+// hash it carries. Called by the worker daemon's handleConn.
+func ParseDedupeQuery(raw []byte) (sessionID, promptHash string, ok bool) {
+	s := string(raw)
+	if !strings.HasPrefix(s, dedupePrefix) {
+		return "", "", false
+	}
+	fields := strings.Fields(strings.TrimPrefix(s, dedupePrefix))
+	if len(fields) != 2 {
+		return "", "", false
+	}
+	return fields[0], fields[1], true
+}
+
+// CheckDuplicatePrompt asks the worker daemon at socketPath whether
+// promptHash (a hex-encoded hash of a session's tag-stripped prompt text,
+// computed by the caller) was already seen for sessionID within the
+// dedup window, real claude-mem's own USER_PROMPT_DEDUPE_WINDOW_MS
+// (10s) — the fix for a real, previously-shipped bug there (real
+// claude-mem's own issue #2515): Claude Code can fire UserPromptSubmit
+// more than once for the same prompt, and without this check each firing
+// pays its own embedding call and injects its own duplicate context
+// block in the same turn.
+//
+// This is a check-AND-record call, atomic on the worker's side: if the
+// hash is genuinely new (or the previous one aged out of the window),
+// the worker records it as the new "most recent prompt" for this session
+// and reports false; a session's window only ever resets on a
+// genuinely-new prompt, never merely by asking again — matching real
+// claude-mem's own semantics (a duplicate is checked against the
+// original saved prompt's timestamp, not extended by repeated duplicate
+// hits).
+//
+// Returns an error if the daemon isn't reachable — a caller should treat
+// that as "unknown," not "duplicate," and proceed normally rather than
+// silently dropping a real prompt's context injection because the daemon
+// happened to be unreachable.
+func CheckDuplicatePrompt(socketPath, sessionID, promptHash string) (bool, error) {
+	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(DialTimeout))
+
+	if _, err := conn.Write([]byte(dedupePrefix + sessionID + " " + promptHash)); err != nil {
+		return false, err
+	}
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	raw, err := io.ReadAll(io.LimitReader(conn, 8))
+	if err != nil {
+		return false, err
+	}
+	switch strings.TrimSpace(string(raw)) {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("malformed dedupe-query response %q", raw)
+	}
+}
