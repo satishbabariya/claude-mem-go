@@ -42,7 +42,14 @@ Add `-db <postgres DSN>` to import into the Postgres backend (the
 migration path). This is safe to run more than once, or against a
 database that already has some of the data: each row keeps its original
 content-hash, so an already-present row is skipped, not duplicated —
-tell the user this if they're worried about re-running it.
+tell the user this if they're worried about re-running it. Each row's
+embedding (if it had one) travels with it too, so a SQLite→Postgres
+migration doesn't leave semantic search with nothing to search — the
+user shouldn't need to re-embed anything just because they moved
+backends. If `mem-doctor` reports `embedding_dims_consistent=false`
+afterward (e.g. the source and destination were configured with
+different embedding models at some point), that's a `mem-reembed` job,
+not an export/import problem.
 
 (Fall back to `claude-mem-go export`/`import` on `PATH` if
 `$CLAUDE_PLUGIN_ROOT` isn't set — see `mem-doctor`'s skill for why.)

@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -206,5 +208,98 @@ func TestRunRejectsDuplicateVersions(t *testing.T) {
 	}
 	if len(ran) != 0 {
 		t.Fatalf("Run partially executed duplicate-version migrations before erroring: %v — want it to fail the up-front check before applying anything", ran)
+	}
+}
+
+// TestRunSurvivesConcurrentCallersOnAFreshDatabase is the regression test
+// for a real race found by hand against this project's own actual
+// architecture: multiple independent processes (the worker daemon spawned
+// by SessionStart's `start`, and any of `context`/`file-context`/other
+// hook subcommands) each call backend.Open — and therefore migrate.Run —
+// on the SAME SQLite file, most likely to collide on a brand-new
+// database's very first session.
+//
+// Reproduced directly before this fix existed: several independent *sql.DB
+// connections to the same fresh file, run concurrently, surfaced three
+// DIFFERENT real errors depending on timing — "database is locked" (a
+// losing DDL statement, which busy_timeout doesn't cover the way it
+// covers a losing row lock), "UNIQUE constraint failed:
+// schema_migrations.version" (two connections both saw a migration as
+// unapplied and both tried to record it), and "duplicate column name" (a
+// migration's own idempotency check racing against an identical
+// concurrent check — see store.ensureContentHashColumn). Retrying the
+// whole Run() body (rather than trying to prevent the race at the SQL
+// level) fixes all three at once, since every Migration.Apply is already
+// required to be idempotent.
+//
+// Uses independent *sql.DB handles to the same file path, not goroutines
+// sharing one *sql.DB — a single connection pool can mask this race in
+// ways a real multi-process scenario never would.
+func TestRunSurvivesConcurrentCallersOnAFreshDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fresh.db")
+	migrations := []Migration{
+		{Version: 1, Name: "table one", Apply: func(ctx context.Context, db *sql.DB) error {
+			_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS t1 (id INTEGER PRIMARY KEY)`)
+			return err
+		}},
+		{Version: 2, Name: "add column", Apply: func(ctx context.Context, db *sql.DB) error {
+			rows, err := db.QueryContext(ctx, `PRAGMA table_info(t1)`)
+			if err != nil {
+				return err
+			}
+			hasCol := false
+			for rows.Next() {
+				var cid int
+				var name, ctype string
+				var notnull, pk int
+				var dflt sql.NullString
+				if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+					rows.Close()
+					return err
+				}
+				if name == "extra" {
+					hasCol = true
+				}
+			}
+			rows.Close()
+			if hasCol {
+				return nil
+			}
+			// Widens the exact check-then-ALTER window that produced a
+			// real "duplicate column name" error in production (see
+			// store.ensureContentHashColumn) — without this, whether
+			// concurrent goroutines actually land inside this race
+			// depends on scheduler luck, and a flaky-but-usually-passing
+			// test would be worse than no test at all.
+			time.Sleep(5 * time.Millisecond)
+			_, err = db.ExecContext(ctx, `ALTER TABLE t1 ADD COLUMN extra TEXT`)
+			return err
+		}},
+	}
+
+	const concurrency = 8
+	var wg sync.WaitGroup
+	errs := make([]error, concurrency)
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=5000")
+		if err != nil {
+			t.Fatalf("sql.Open %d: %v", i, err)
+		}
+		t.Cleanup(func() { db.Close() })
+		wg.Add(1)
+		go func(i int, db *sql.DB) {
+			defer wg.Done()
+			<-start // released together, to maximize real contention
+			errs[i] = Run(context.Background(), db, SQLitePlaceholder, migrations)
+		}(i, db)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Run %d: %v", i, err)
+		}
 	}
 }

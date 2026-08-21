@@ -53,6 +53,24 @@ type Placeholder func(argIndex int) string
 func SQLitePlaceholder(argIndex int) string   { return "?" }
 func PostgresPlaceholder(argIndex int) string { return fmt.Sprintf("$%d", argIndex) }
 
+// runRetryBackoff bounds how many times Run retries its entire body on
+// failure, and how long it waits between attempts. Found by hand, not
+// anticipated: this project's own real architecture has multiple
+// processes (the worker daemon spawned by SessionStart's `start`, and any
+// of `context`/`file-context`/other hook subcommands) each calling
+// backend.Open — and therefore migrate.Run — independently on the SAME
+// SQLite file, most likely to collide on a brand-new database's very
+// first session. Reproduced directly: five goroutines calling store.Open
+// concurrently on a fresh file surfaced three DIFFERENT real errors
+// depending on timing — "database is locked" (SQLite's busy_timeout does
+// not cover a losing BEGIN/DDL the way it covers a losing row lock),
+// "UNIQUE constraint failed: schema_migrations.version" (two connections
+// both saw a migration as unapplied and both tried to record it), and
+// "duplicate column name" (the same TOCTOU race inside one migration's
+// own idempotency check — see store's ensureContentHashColumn: the
+// check-then-ALTER isn't atomic against a concurrent identical check).
+var runRetryBackoff = []time.Duration{0, 50 * time.Millisecond, 150 * time.Millisecond, 400 * time.Millisecond}
+
 // Run applies every migration in migrations, in ascending Version order,
 // that isn't already recorded in schema_migrations — recording each one as
 // it succeeds, so a failure partway through leaves already-applied
@@ -71,6 +89,17 @@ func PostgresPlaceholder(argIndex int) string { return fmt.Sprintf("$%d", argInd
 // the second one sharing the same number was skipped by the "already
 // applied?" check — with no error, indistinguishable from having run
 // correctly. Rejected outright now rather than silently dropping one.
+//
+// Retries the whole check-and-apply sequence on any failure (runRetryBackoff
+// above), rather than trying to special-case each specific race error by
+// message text: every Migration.Apply is already required to be
+// idempotent (this package's own doc comment), and the "already applied?"
+// read happens fresh on each attempt, so a retry after a race-induced
+// failure simply sees whatever the OTHER process already committed and
+// skips it — correct and safe regardless of which specific error a given
+// race happened to surface as. A non-transient failure (a genuinely broken
+// migration) fails identically on every attempt and is returned after the
+// last one, not swallowed.
 func Run(ctx context.Context, db *sql.DB, ph Placeholder, migrations []Migration) error {
 	sorted := make([]Migration, len(migrations))
 	copy(sorted, migrations)
@@ -82,8 +111,33 @@ func Run(ctx context.Context, db *sql.DB, ph Placeholder, migrations []Migration
 		}
 		seen[m.Version] = m.Name
 	}
-	migrations = sorted
 
+	var lastErr error
+	for _, delay := range runRetryBackoff {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+		lastErr = runOnce(ctx, db, ph, sorted)
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("migrate.Run: giving up after %d attempts: %w", len(runRetryBackoff), lastErr)
+}
+
+// runOnce is Run's single check-and-apply pass — see Run's own doc
+// comment for why failures here are handled by retrying the whole thing
+// again rather than by trying to make this function itself race-proof.
+func runOnce(ctx context.Context, db *sql.DB, ph Placeholder, migrations []Migration) error {
 	if _, err := db.ExecContext(ctx, createTrackingTableSQL); err != nil {
 		return fmt.Errorf("create schema_migrations tracking table: %w", err)
 	}

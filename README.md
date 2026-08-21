@@ -123,6 +123,35 @@ docker compose up -d
   cleaned up afterward, confirming migrations still apply in the correct
   order there too).
 
+  A third, more serious bug in the same package was found by an actual
+  full-stack integration smoke test — a real project wired with hooks
+  pointing at explicit, isolated `-db`/`-socket` paths, run through a
+  genuine `claude` session — rather than any of the targeted unit/e2e
+  tests above: `SessionStart`'s `start` (which spawns the worker daemon,
+  which itself calls `Open`) and `context` (which also calls `Open`
+  directly) can both race to migrate the SAME brand-new SQLite file on a
+  project's very first session. Reproduced deterministically: several
+  independent connections to the same fresh file, migrated concurrently,
+  surfaced three *different* real errors depending on timing —
+  `"database is locked"` (SQLite's `busy_timeout` doesn't cover a losing
+  DDL statement the way it covers a losing row lock), `"UNIQUE constraint
+  failed: schema_migrations.version"` (two connections both saw a
+  migration as unapplied and both tried to record it), and `"duplicate
+  column name"` (a migration's own idempotency check — see
+  `ensureContentHashColumn` — racing against an identical concurrent
+  check, a classic check-then-act TOCTOU window). Fixed not by trying to
+  prevent the race at the SQL level, but by retrying `Run`'s entire
+  check-and-apply sequence on any failure: every `Migration.Apply` is
+  already required to be idempotent, and the "already applied?" read
+  happens fresh on each attempt, so a retry after a race-induced failure
+  simply sees whatever the other process already committed and skips it
+  — correct regardless of which specific error a given race happened to
+  surface as. Verified by deliberately widening the exact TOCTOU window
+  in a dedicated concurrency test (proven to reliably fail 3/3 times
+  without the fix and pass 8/8 with it, including under `-race`), and by
+  re-running the original full integration scenario that found this five
+  more times with zero failures.
+
 - **worker** — a persistent daemon, meant to be started once (see `start`)
   and left running. Listens on a Unix socket, processes PostToolUse
   payloads through a bounded `pool` of observer sessions. Opens its

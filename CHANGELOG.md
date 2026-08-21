@@ -62,6 +62,23 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **A real, full-stack integration smoke test found a third,
+  more serious `migrate` bug** the targeted unit/e2e tests didn't catch:
+  `SessionStart`'s `start` (spawns the worker daemon, which itself calls
+  `Open`) and `context` (also calls `Open` directly) can both race to
+  migrate the SAME brand-new SQLite file on a project's very first
+  session. Reproduced deterministically: concurrent connections to the
+  same fresh file surfaced three *different* real errors depending on
+  timing — `"database is locked"`, `"UNIQUE constraint failed:
+  schema_migrations.version"`, and `"duplicate column name"` (a
+  migration's own idempotency check racing against an identical
+  concurrent check). Fixed by retrying `Run`'s entire check-and-apply
+  sequence on any failure rather than trying to prevent the race at the
+  SQL level — safe because every `Migration.Apply` is already required
+  to be idempotent. Verified with a dedicated concurrency test
+  (deliberately widened race window, proven to fail 3/3 without the fix
+  and pass 8/8 with it under `-race`) and by re-running the original
+  full integration scenario five more times with zero failures.
 - **Field truncation could corrupt real tool output mid-character.**
   `transcript.Truncate`, on the live hot path for every single tool call
   the worker daemon processes, cut fields at a plain byte-offset slice
