@@ -598,6 +598,36 @@ process (this project doesn't cut tagged releases on a schedule).
   fix. Verified live end to end too: the real compiled binary, 21 real
   seeded observations, a real `timeline` call with only `anchor` given
   returning exactly all 21 rows.
+- **Added: the Postgres backend now sets a `statement_timeout` — before
+  this, a single hung query could wedge the entire 10-connection pool
+  with no self-healing.** `postgres.Open` bounds `MaxOpenConns` at 10,
+  shared by every hook process and the worker daemon, but nothing
+  bounded how long any single query on those connections could run.
+  Real claude-mem's own Postgres pool config sets a real
+  `statement_timeout` (`DEFAULT_STATEMENT_TIMEOUT_MS`, 30s, overridable
+  via `CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS`) applied by the `pg`
+  driver on every connection; this backend had no equivalent anywhere
+  (zero grep hits for `statement_timeout` before this fix). A hung query
+  — lock contention from a concurrent `prune`/`reembed`, a pathological
+  HNSW plan, a network stall — held its connection forever; enough of
+  them exhausts the whole pool and every subsequent caller blocks
+  indefinitely. Fixed by appending `statement_timeout` to the DSN before
+  `sql.Open`, so pgx applies it as a startup runtime parameter on every
+  physical connection — confirmed empirically against a real container
+  that this actually works (a `statement_timeout=2000` DSN against a
+  real `SELECT pg_sleep(5)` errored at ~2s with Postgres's own
+  "canceling statement due to statement timeout," not silently ignored).
+  Defaults to 30s matching real claude-mem's own default and env var
+  name exactly; an operator's own explicit `statement_timeout` in the
+  DSN, or a DSN that fails to parse as a URL, is left untouched. Verified
+  with unit tests on the parameter logic and, against the real live
+  container, `Open`ing with a short override and confirming a real
+  `SELECT pg_sleep(10)` errors at ~1.5s — confirmed genuine by temporarily
+  removing the `withStatementTimeout` call and watching the query run
+  the full 10s with no timeout before restoring it — plus confirming the
+  pool actually recovers afterward (an immediate `SELECT 1` on the same
+  `Store` succeeds near-instantly rather than the connection staying
+  wedged).
 
 ## 0.2.0 — 2026-08-20
 

@@ -21,6 +21,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -158,6 +161,60 @@ func pingWithRetry(ctx context.Context, db *sql.DB, backoff []time.Duration) err
 	return err
 }
 
+// defaultStatementTimeoutMS matches real claude-mem's own Postgres pool
+// default (src/storage/postgres/config.ts's DEFAULT_STATEMENT_TIMEOUT_MS)
+// exactly, applied via the identical env var name
+// (statementTimeoutEnvVar) so an operator migrating settings between the
+// two doesn't need to learn a new knob name.
+const defaultStatementTimeoutMS = 30_000
+
+const statementTimeoutEnvVar = "CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS"
+
+// withStatementTimeout returns dsn with a statement_timeout query
+// parameter appended, so pgx applies it as a startup runtime parameter
+// on every physical connection this DSN ever opens — the direct
+// equivalent of real claude-mem's own statement_timeout pool option
+// (createPostgresPool, which the "pg" driver applies identically on
+// connect). Without this, nothing here ever bounded how long a single
+// query could run: MaxOpenConns caps this pool at 10 connections total,
+// shared by every hook process and the worker daemon, and a single
+// query that hangs (lock contention from a concurrent prune/reembed, a
+// pathological query plan, a network stall) would hold its connection
+// forever — a handful of stuck queries exhausts the whole pool and
+// every subsequent caller blocks indefinitely with no self-healing.
+//
+// Left untouched if the DSN already specifies statement_timeout
+// explicitly (an operator's own choice wins), or if the DSN doesn't
+// parse as a URL at all — in the latter case sql.Open/pingWithRetry
+// fail on their own shortly after, same as any other malformed DSN;
+// silently swallowing that error here to force a timeout in would be
+// worse than just letting the real failure surface.
+//
+// Confirmed empirically against a real container, not assumed from
+// pgx's own docs: a DSN with statement_timeout=2000 appended, run
+// against a real `SELECT pg_sleep(5)`, errored at ~2s with Postgres's
+// own "canceling statement due to statement timeout" (SQLSTATE 57014)
+// rather than the parameter being silently ignored.
+func withStatementTimeout(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	q := u.Query()
+	if q.Get("statement_timeout") != "" {
+		return dsn
+	}
+	ms := defaultStatementTimeoutMS
+	if v := os.Getenv(statementTimeoutEnvVar); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ms = n
+		}
+	}
+	q.Set("statement_timeout", strconv.Itoa(ms))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // Open connects to dsn (a postgres:// URL) and ensures the schema exists.
 // embedDims must match whatever embedding model the caller will use with
 // SaveEmbedding — pass 0 to use DefaultEmbedDims. hnswEfSearch overrides
@@ -175,6 +232,7 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 		return nil, fmt.Errorf("hnsw.ef_search must be between %d and %d (or 0 to use pgvector's default), got %d",
 			hnswEfSearchMin, hnswEfSearchMax, hnswEfSearch)
 	}
+	dsn = withStatementTimeout(dsn)
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		// store.RedactDSN, not the raw dsn: a real Postgres DSN carries a

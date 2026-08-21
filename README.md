@@ -1617,6 +1617,56 @@ fail before restoring the fix. Verified live end to end too: the real
 compiled binary, 21 real seeded observations, and a real `timeline` call
 with only `anchor` given returning exactly all 21 rows.
 
+### The Postgres backend had no statement timeout — a single hung query could wedge the entire connection pool
+
+`postgres.Open` bounds `MaxOpenConns` at 10 — shared by every hook
+process and the worker daemon talking to this backend — but nothing
+bounded how long any single query on those 10 connections could run.
+Real claude-mem's own Postgres pool config sets a real
+`statement_timeout` (`src/storage/postgres/config.ts`'s
+`DEFAULT_STATEMENT_TIMEOUT_MS`, 30 seconds, overridable via
+`CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS`), applied by the `pg` driver
+on every connection it opens (`createPostgresPool`). This backend had no
+equivalent anywhere — confirmed by grep, zero hits for
+`statement_timeout` in the whole Go repo before this fix. A single hung
+query (lock contention from a concurrent `prune`/`reembed`, a
+pathological HNSW query plan, a network stall to Postgres) held its
+connection forever; a handful of them exhausts the entire 10-connection
+pool, and every subsequent caller — every `PostToolUse` hook, every MCP
+tool call — blocks indefinitely with no self-healing short of
+restarting the process.
+
+Fixed by appending a `statement_timeout` query parameter to the DSN
+before `sql.Open`, so pgx applies it as a startup runtime parameter on
+every physical connection — confirmed empirically against a real
+container (not assumed from pgx's own docs) that this actually works:
+a DSN with `statement_timeout=2000` appended, run against a real
+`SELECT pg_sleep(5)`, errored at ~2s with Postgres's own "canceling
+statement due to statement timeout" rather than the parameter being
+silently ignored. Defaults to 30 seconds (matching real claude-mem's own
+default exactly), overridable via the identical
+`CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS` env var name so an operator
+migrating settings between the two systems doesn't need to learn a new
+knob. An operator's own explicit `statement_timeout` already present in
+the DSN is left untouched, and a DSN that fails to parse as a URL is
+also returned unchanged — `sql.Open`/the ping retry fail on their own
+merits shortly after, the same as any other malformed DSN, rather than
+this silently swallowing that error to force a timeout in.
+
+Verified with unit tests covering `withStatementTimeout`'s logic
+(default applied, explicit value preserved, env var override, malformed
+DSN left alone) and, against the real live container: `Open`ing a Store
+with the env var set to a short value, running a real
+`SELECT pg_sleep(10)`, and confirming it errors at ~1.5s (not 10s) with
+the real Postgres timeout error — each confirmed as a genuine test by
+temporarily removing the `withStatementTimeout` call from `Open` and
+watching the test fail (the query ran the full 10 seconds with no
+timeout) before restoring it. Also confirmed the pool actually recovers
+afterward, not just that one query times out: a trivial `SELECT 1`
+immediately after the timed-out query succeeds near-instantly on the
+same `Store`, proving the connection came back to the pool rather than
+staying wedged.
+
 ## Quick start
 
 ```sh
