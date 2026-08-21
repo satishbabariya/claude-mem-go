@@ -96,7 +96,7 @@ func cmdPromptContext(args []string) int {
 	// must report it regardless of whether -embed-model leaves the rest
 	// of this hook's own injection feature disabled below.
 	if err := hook.SetSessionPrivate(*socketPath, in.SessionID, private); err != nil {
-		l.Printf("failed to report privacy state to worker (best-effort, not fatal): %v", err)
+		l.Warnf("failed to report privacy state to worker (best-effort, not fatal): %v", err)
 	}
 
 	if *embedModel == "" {
@@ -117,7 +117,7 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 	if dup, err := hook.CheckDuplicatePrompt(*socketPath, in.SessionID, promptHash(prompt)); err != nil {
-		l.Printf("failed to check duplicate-prompt state with worker (best-effort, not fatal): %v", err)
+		l.Warnf("failed to check duplicate-prompt state with worker (best-effort, not fatal): %v", err)
 	} else if dup {
 		// Real claude-mem's own fix for issue #2515: Claude Code can fire
 		// UserPromptSubmit more than once for the same prompt within a

@@ -393,7 +393,7 @@ func cmdStop(args []string) int {
 	// realistic case and the prompt can say so.
 	all := observations
 	if full, ferr := st.BySessionID(in.SessionID, summaryFetchCap); ferr != nil {
-		l.Printf("full re-read for windowing failed, falling back to the capped set: %v", ferr)
+		l.Warnf("full re-read for windowing failed, falling back to the capped set: %v", ferr)
 	} else if len(full) > len(all) {
 		all = full
 	}
@@ -442,11 +442,11 @@ func cmdStop(args []string) int {
 		summaryTurn.Observation.Narrative, summaryTurn.Observation.Facts)
 	vec, err := embed.NewClient(*embedModel).Embed(text)
 	if err != nil {
-		l.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
+		l.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
 		return 0
 	}
 	if err := st.SaveEmbedding(res.ID, vec); err != nil {
-		l.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
+		l.Warnf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 	}
 	return 0
 }

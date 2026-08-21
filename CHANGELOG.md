@@ -7,6 +7,25 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Nine failure messages were still logged as routine INFO, and WARN was
+  effectively unused.** The severity pass a few commits back reclassified
+  by prefix — every message beginning `FAILED` became an error — which
+  left a whole class misfiled: failures worded in lower case
+  (`embedding failed for observations.id=…`, `saving embedding … failed`,
+  `failed to report privacy state to worker`) sat at INFO next to
+  genuinely routine output. Auditing the level distribution made it
+  obvious: 32 sites at ERROR, 64 at INFO, and **2 at WARN** — a level that
+  existed and did nothing. These nine are not errors either: the
+  observation was stored and only its embedding was lost, which the code
+  itself documents as "additive only". They now log at WARN, so an
+  operator can ask three distinct questions — what broke (ERROR), what
+  degraded (WARN), what happened (INFO). Verified with the real binary
+  against a dead Ollama endpoint: at `ERROR` only the genuine failure
+  survives, while `WARN` and `INFO` both show the degradations. A related
+  audit for the opposite problem — hook paths that exit with no log at
+  all — found nothing worth changing, which is recorded here because a
+  clean negative result is worth as much as a fix.
+
 - **A routine liveness probe was logged as an ERROR on every
   SessionStart.** `worker.IsRunning` dials the daemon's socket and closes
   it immediately — that is how `start` decides whether to spawn and how

@@ -299,7 +299,7 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	if len(raw) > hook.MaxPayloadBytes {
-		d.Log.Printf("REJECTED payload exceeding %d bytes from a client (likely an abnormally large tool_response) — not processing", hook.MaxPayloadBytes)
+		d.Log.Warnf("REJECTED payload exceeding %d bytes from a client (likely an abnormally large tool_response) — not processing", hook.MaxPayloadBytes)
 		return
 	}
 
@@ -508,7 +508,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		// (auth/setup/quota/unrecoverable, which would just fail identically
 		// again). Anything else fails this turn immediately.
 		if ce, ok := turnErr.(*classify.Error); ok && (ce.Kind == classify.Transient || ce.Kind == classify.RateLimit) {
-			d.Log.Printf("observer turn failed (session evicted), retrying once on a fresh session: %v", turnErr)
+			d.Log.Warnf("observer turn failed (session evicted), retrying once on a fresh session: %v", turnErr)
 			turn, turnErr = observer.ObserveOneShot(ctx, d.Model, tc)
 		}
 		if turnErr != nil {
@@ -573,12 +573,12 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		// Additive only — keyword search on the row just inserted still
 		// works without it. A missing/unreachable Ollama must not undo a
 		// successful observation.
-		d.Log.Printf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
+		d.Log.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
 		d.counters.embedErrors.Add(1)
 		return
 	}
 	if err := d.st.SaveEmbedding(res.ID, vec); err != nil {
-		d.Log.Printf("saving embedding for observations.id=%d failed: %v", res.ID, err)
+		d.Log.Warnf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 		d.counters.embedErrors.Add(1)
 	}
 }

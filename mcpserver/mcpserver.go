@@ -872,10 +872,10 @@ func (s *Server) runAddObservation(project, title, subtitle, narrative string, f
 	if s.EmbedModel != "" {
 		text := embed.ObservationText(title, subtitle, narrative, facts)
 		if vec, embedErr := embed.NewClient(s.EmbedModel).Embed(text); embedErr != nil {
-			s.Log.Printf("add_observation: embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, embedErr)
+			s.Log.Warnf("add_observation: embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, embedErr)
 			embedNote = " (embedding failed, so semantic search won't find it — keyword search still will)"
 		} else if saveErr := s.st.SaveEmbedding(res.ID, vec); saveErr != nil {
-			s.Log.Printf("add_observation: saving embedding for observations.id=%d failed: %v", res.ID, saveErr)
+			s.Log.Warnf("add_observation: saving embedding for observations.id=%d failed: %v", res.ID, saveErr)
 			embedNote = " (embedding failed, so semantic search won't find it — keyword search still will)"
 		}
 	}
