@@ -94,6 +94,13 @@ Precedence is `-db` > `$CLAUDE_MEM_DB` > `~/.claude-mem-go/observations.db`,
 and `doctor` now names which of the three won, because the symptom of
 getting it wrong looks exactly like data loss.
 
+`CLAUDE_MEM_OLLAMA_BASE_URL` is the same idea for the embedding server.
+The address was hardcoded to `http://localhost:11434` at all ten
+`embed.NewClient` call sites, so Ollama on a shared GPU box, a container
+on another port, or any remote host simply could not be used — and since
+hooks and the MCP server take no flags, there was no way to say so. Set
+it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
+
   `sslmode=disable` above is for the local Docker Compose container only
   (it's on `localhost`, nothing else can see that traffic). Every DSN
   example in this repo uses it for the same reason — pgx's `stdlib` driver

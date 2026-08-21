@@ -50,6 +50,8 @@ look before doing it, especially for a large count.
 - `-embed-model` — the model to re-embed with (default `nomic-embed-text`,
   should normally match whatever `mcp`/`worker`/`stop` are configured
   with — this IS the model observations will become searchable under).
+  The server it talks to is `$CLAUDE_MEM_OLLAMA_BASE_URL` when set, else
+  `http://localhost:11434`.
 - `-project name` — scope to one project instead of every project in the
   store.
 - `-db <path-or-DSN>` — the store to re-embed. Defaults to
@@ -69,6 +71,27 @@ after doctor flagged a problem (or a count far larger or smaller than the
 user expects), suspect the store before suspecting the data: run
 `doctor`, which names the store it used and says whether `$CLAUDE_MEM_DB`
 chose it, and pass the same `-db` to both.
+
+## If it stops early
+
+A run that ends with `STOPPED after 5 consecutive failures` did not fail
+on the data — it stopped because the embedding service looked down, and
+deliberately did not work through the remaining rows. Report this to the
+user as an infrastructure problem, not a memory problem:
+
+- The rows already embedded are saved. The ones never attempted are
+  unchanged and still need embedding.
+- Re-running the exact same command after Ollama is healthy again
+  continues from where it stopped — it does not redo the finished rows.
+  (Verified: a run that stopped with 29 rows left re-embedded exactly
+  those 29 on the next run.)
+- The message names the server address it was using, which is the first
+  thing to check — especially if `$CLAUDE_MEM_OLLAMA_BASE_URL` points
+  somewhere unexpected.
+
+A long run prints a progress line every few seconds (`… 400 re-embedded
+— 12s elapsed, 33.1 rows/s`). Silence for more than a few seconds during
+a large run is itself worth mentioning to the user.
 
 ## After running it
 

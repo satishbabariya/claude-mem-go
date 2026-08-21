@@ -16,12 +16,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 // DefaultBaseURL is Ollama's default local server address.
 const DefaultBaseURL = "http://localhost:11434"
+
+// BaseURLEnvVar points every Ollama call at a different server.
+//
+// The address was hardcoded at all ten NewClient call sites, so a setup
+// where Ollama runs anywhere but this machine's own :11434 — a shared GPU
+// box, a container on a different port, a colleague's workstation — could
+// not embed at all, and the failure had no configuration route out of it.
+// This is the same shape of gap as CLAUDE_MEM_DB (see store.DBPathEnvVar):
+// hooks and the MCP server take no flags, so an env var is the only way
+// they can be told anything.
+//
+// Named after the CLAUDE_MEM_* family already used elsewhere here, and
+// directly analogous to real claude-mem's own CLAUDE_MEM_OPENROUTER_BASE_URL,
+// which exists so its model calls can be pointed at an Ollama/LM-Studio
+// endpoint for exactly this reason.
+const BaseURLEnvVar = "CLAUDE_MEM_OLLAMA_BASE_URL"
+
+// resolveBaseURL is $CLAUDE_MEM_OLLAMA_BASE_URL when set, else
+// DefaultBaseURL. A trailing slash is trimmed because every call site
+// concatenates a rooted path ("/api/embeddings"), and "…:11434//api/…"
+// is a 404 whose cause is not obvious from the error.
+func resolveBaseURL() string {
+	v := strings.TrimSpace(os.Getenv(BaseURLEnvVar))
+	if v == "" {
+		return DefaultBaseURL
+	}
+	return strings.TrimRight(v, "/")
+}
 
 // Client calls Ollama's /api/embeddings endpoint.
 type Client struct {
@@ -34,7 +63,7 @@ type Client struct {
 // Ollama's default local address.
 func NewClient(model string) *Client {
 	return &Client{
-		BaseURL: DefaultBaseURL,
+		BaseURL: resolveBaseURL(),
 		Model:   model,
 		HTTP:    &http.Client{Timeout: 30 * time.Second},
 	}

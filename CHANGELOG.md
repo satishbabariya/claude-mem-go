@@ -7,6 +7,40 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **`reembed` could run for four days in total silence, and the embedding
+  server's address could not be changed at all.** Three gaps in one
+  command, each measured rather than assumed. (1) The failure loop was
+  `failed++; continue` with no ceiling. A *dead* Ollama is cheap —
+  connection refused returns in ~3ms — but a *hung* one (overloaded,
+  swapping, a network partition) accepts the connection and never
+  answers, costing the full 30s HTTP timeout twice per row, once per
+  `Embed` retry; timed against a real accept-and-never-reply socket at
+  **60.02s per row**, or **101 hours** for the 6,064 rows this project's
+  own dev store needed. A circuit breaker now stops after 5 *consecutive*
+  failures — consecutive, not cumulative, because a long healthy run over
+  thousands of rows accumulates isolated failures and halting one of
+  those would be a worse bug than the original. Worth one honest
+  qualification recorded at the constant: an Ollama that is already hung
+  at startup is caught by the command's own dimension probe after the
+  same 60s, so the 101-hour case specifically requires degradation
+  *mid-run*. (2) A ~3-minute run over 6k rows printed nothing at all
+  until it finished, which is indistinguishable from the hang above; it
+  now emits a progress line (count, elapsed, rows/s) every 5 seconds —
+  time-based, not row-based, precisely because the pathological case is
+  slow rows, where "every 100 rows" would print nothing for hours. A
+  trivial run still prints only its summary. (3) The Ollama address was
+  hardcoded at all ten `embed.NewClient` call sites, so a shared GPU box
+  or any remote server could not be used and, since hooks and MCP take no
+  flags, there was no configuration route out of it —
+  `CLAUDE_MEM_OLLAMA_BASE_URL` now covers every path, trailing slash
+  trimmed. Verified end to end with the real compiled binary against real
+  Postgres and real Ollama: a run degraded mid-flight embedded 11 rows,
+  stopped at row 16 of 40, and left the remaining 29 untouched — and the
+  "re-run to continue from here" the message promises was checked rather
+  than asserted, re-embedding exactly those 29. Break/restore confirmed
+  both new behaviours: without the breaker the same scenario made **81**
+  embed calls instead of 11.
+
 - **`CLAUDE_MEM_DB` — the Postgres backend was unreachable from an
   installed plugin.** All 15 subcommands accept `-db`, but nothing that
   runs inside a plugin install can pass it: `hooks/hooks.json` invokes the
