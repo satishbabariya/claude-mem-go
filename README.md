@@ -594,6 +594,20 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
   live way: `--plugin-dir` loading this plugin into a real `claude -p`
   session and asking it to list every distinct thing the skill says
   `doctor` checks — `hnsw_ef_search` came back among them.
+- **skills/mem-timeline** — the port's answer to real claude-mem's
+  `timeline-report` and `weekly-digests` skills: a narrative report of a
+  project's history, either as one timeline or week-by-week. Only became
+  possible once `search_observations` learned to enumerate with no query
+  (see the Testing notes and CHANGELOG) — before that, a project's full
+  history could not be read through the MCP surface at all. Validated
+  with `claude plugin validate --strict` and verified live the same way
+  `mem-search` was: a real session loaded the skill and made ten genuine
+  `tools/call` invocations, confirmed in the MCP server's own log rather
+  than inferred from the reply. That live run also caught a real bug in
+  the skill's own instructions — it enumerated another project with
+  `all_projects` but omitted it from the follow-up `get_observations`,
+  which is project-scoped and rejected the ids, so the report was built
+  from titles alone. Fixed by saying so explicitly.
 - **skills/mem-prune, skills/mem-export, and skills/mem-reembed** —
   surface `prune`, `export`/`import`, and `reembed` as
   `/mem-prune`/`/mem-export`/`/mem-reembed` the same way `mem-doctor`

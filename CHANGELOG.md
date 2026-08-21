@@ -7,6 +7,26 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **New skill `mem-timeline`** — the workflow the enumeration fix above
+  exists to enable, and the port's answer to real claude-mem's
+  `timeline-report` and `weekly-digests`. Covers both shapes: a
+  full-project narrative, and a week-by-week digest driven off
+  `dateStart`/`dateEnd`. Its most load-bearing instruction is to page
+  until a call returns fewer rows than the limit — stopping at the first
+  page reports on a fraction of a project and reads exactly like a
+  complete answer, which is the same failure mode the session summary
+  itself had. Validated with `claude plugin validate --strict` and
+  verified live rather than assumed: a real session loaded the skill,
+  made ten genuine `tools/call` invocations (confirmed in the MCP
+  server's own log, not inferred from the reply), enumerated all 150
+  observations by paging exactly as instructed, and — following the
+  skill's "report honestly" section — refused to present the seeded test
+  data's repeated "decision" as a real one. That live run also found a
+  real gap in the skill itself: it passed `all_projects` when
+  enumerating but not to the follow-up `get_observations`, which is
+  scoped to the current project and rejected the ids, so the report was
+  built from titles alone. The skill now says so explicitly.
+
 - **A project's history was not walkable at all — 50 of 150 observations
   were simply unreachable through the MCP surface.** `search_observations`
   required a query (an empty one and `"*"` both returned "No matching
