@@ -7,6 +7,28 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The `mem-doctor` skill described a version of `doctor` that no
+  longer exists, and nothing checked it.** `doctor` gained five checks
+  over recent work — the plugin-install check, the plugin-binary check, an
+  empty-store-but-installed failure, a worker/store mismatch, and a
+  stale-daemon notice — and the skill that tells Claude how to *interpret*
+  its output was updated for none of them. Three had **zero mentions**,
+  including the single most misleading symptom the tool can produce
+  (`✘ the worker daemon is writing to a DIFFERENT store than this command
+  reads`, which looks like data loss and is not). A skill that describes a
+  tool as it used to behave is worse than one that says nothing, because
+  Claude acts on it. All five now have guidance saying what each finding
+  means, what it does *not* mean, and what to do. The real fix is the
+  guard, though: a test extracts every critical (`✘`) finding from
+  `doctor.go` and fails if the skill never mentions it — keyed off
+  doctor's own marker rather than a hand-maintained list, so it cannot
+  drift the same way. Scoped to criticals deliberately: those are what a
+  user is most likely to hit and least able to interpret, while demanding
+  prose for every informational line would turn the skill into a
+  transcript of the source. Break/restore confirms it catches an
+  undocumented finding, and it also asserts it found at least four — a
+  broken extraction would otherwise pass forever while checking nothing.
+
 - **`doctor` reported a dead daemon's leftover stats as live state, and
   failed critically over it.** Found by reading `doctor`'s own output as
   an operator would — something never done despite checks being appended

@@ -39,6 +39,47 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   much older than the user's recent activity, say so — that is the
   finding, even when every other line has a check mark. `claude-mem-go
   stats` prints the same information in more detail.
+- **two critical findings about the install itself**, which mean capture
+  is configured and not working — not that the store is damaged:
+  - `✘ plugin binary unusable` — the plugin is installed but its binary
+    cannot run (missing, wrong architecture, or a partial copy). Every
+    hook resolves that binary, so nothing is being captured at all.
+    Rebuilding it in the plugin root is the fix.
+  - `✘ the store is EMPTY, but the plugin is installed` — capture is
+    wired up and has never recorded anything. Distinct from the ordinary
+    "the store is empty" note, which is expected when the plugin is not
+    installed. Treat this as a real problem and look at the hook logs in
+    `~/.claude-mem-go/`.
+
+- **three findings about the worker daemon that are easy to misread** —
+  all of them describe a daemon that is running but disagrees with the
+  command you just ran. Each has a specific meaning, and none of them
+  means "the store is broken":
+  - `✘ the worker daemon is writing to a DIFFERENT store than this
+    command reads` — **critical, and the most misleading symptom in the
+    whole tool.** The daemon opened its store once at startup and never
+    re-reads `$CLAUDE_MEM_DB`. Every automatic capture path goes through
+    it, so observations are landing in the daemon's store while searches
+    and `stats` read the other one. The usual cause is that
+    `$CLAUDE_MEM_DB` changed after the daemon started. Report this as
+    "memory is being written somewhere else", not as data loss — nothing
+    is lost, it is in the store `doctor` names. The fix is to restart the
+    daemon (stop it; the next SessionStart respawns it).
+  - `… the worker daemon is running an older build` — the daemon applies
+    the rules it started with, including how project names are derived,
+    so writes and reads can silently disagree. SessionStart replaces it
+    automatically, so this normally resolves itself; only flag it if it
+    persists.
+  - `… all N observer slot(s) are held by cached sessions` — a NEW
+    concurrent session's observations will wait and eventually be
+    dropped. Relevant when the user runs several Claude Code sessions at
+    once and only some are being remembered. The fix is a larger
+    `-max-concurrent`.
+
+  None of these appear when the daemon is not running: they are claims
+  about a live daemon, and `doctor` reports the stats of a stopped one as
+  "last worker activity before it stopped" rather than as current state.
+
 - the database reachable (SQLite file or Postgres DSN, whichever `-db`
   points at), plus backend-specific facts nothing else surfaces:
   SQLite's real `journal_mode`/`foreign_keys`/`busy_timeout_ms` PRAGMA
