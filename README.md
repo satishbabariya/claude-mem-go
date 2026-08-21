@@ -1667,6 +1667,48 @@ immediately after the timed-out query succeeds near-instantly on the
 same `Store`, proving the connection came back to the pool rather than
 staying wedged.
 
+### The initial connection ping had no per-attempt timeout — a firewalled or black-holed Postgres could hang every retry, not just the query timeout above
+
+`pingWithRetry`'s own doc comment claimed a "~7.75s worst case" for the
+initial connection retry loop, "well inside every hook's 10-30s
+timeout." That bound only held if each failed attempt failed *fast*
+(connection refused, DNS failure) — every real caller in this project
+passes an undeadlined context (`context.Background()` or a
+signal-only daemon context), so a single `db.PingContext(ctx)` call
+against a host that completes the TCP handshake but never answers
+(firewalled, black-holed, a dropped route — the realistic "Postgres
+unreachable" case, not just "container still starting") had nothing
+bounding it at all. It could hang for however long the OS's own TCP/read
+timeout is, on **each** of the 6 retry attempts — turning the documented
+~7.75s bound into a potentially much longer hang, the exact outage the
+comment claimed this loop prevented. This is a distinct gap from the
+`statement_timeout` fix above: that one bounds query execution *after*
+a connection exists; this is the connection attempt itself, before any
+query is even possible. Real claude-mem's own
+`connectionTimeoutMillis`/`DEFAULT_CONNECTION_TIMEOUT_MS` (5s,
+overridable via `CLAUDE_MEM_POSTGRES_CONNECTION_TIMEOUT_MS`) is exactly
+this missing knob, passed straight into `pg.Pool` so the driver bounds
+every individual connection attempt regardless of the caller's own
+timeout — the Go port had no equivalent, relying entirely on a
+caller-supplied deadline its own comments admitted never existed.
+
+Fixed by wrapping each individual ping attempt in
+`context.WithTimeout(ctx, connectionTimeout())` rather than passing the
+caller's context straight through — `context.WithTimeout` composes
+correctly with whatever deadline the caller's context might already
+carry (the shorter of the two always wins), so this only ever tightens
+the bound, never loosens a caller's own tighter one. Defaults to 5
+seconds, matching real claude-mem's own default and env var name
+exactly. Verified with a real regression test: a real TCP listener that
+accepts a connection and then goes silent (never answering Postgres's
+startup packet — the same "connected but unresponsive" shape a
+black-holed host produces), confirming `pingWithRetry` against it now
+returns in well under a second instead of hanging — confirmed as a
+genuine test, not a tautology, by temporarily reverting to the caller's
+raw context and watching the same test hang past its own timeout
+entirely (needed an explicit bounded `-timeout` to even fail cleanly)
+before restoring the fix.
+
 ## Quick start
 
 ```sh

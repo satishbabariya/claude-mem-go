@@ -628,6 +628,29 @@ process (this project doesn't cut tagged releases on a schedule).
   pool actually recovers afterward (an immediate `SELECT 1` on the same
   `Store` succeeds near-instantly rather than the connection staying
   wedged).
+- **Fixed: `pingWithRetry`'s "~7.75s worst case" claim was false for the
+  exact failure mode it exists to guard against — a firewalled or
+  black-holed Postgres host with no per-attempt connection timeout.**
+  Every real caller passes an undeadlined context, so a single
+  `db.PingContext(ctx)` against a host that completes the TCP handshake
+  but never answers had nothing bounding it — it could hang for however
+  long the OS's own connect/read timeout is, on each of the 6 retry
+  attempts. Distinct from the `statement_timeout` fix above (that bounds
+  query execution after a connection exists; this is the connection
+  attempt itself). Real claude-mem's own `connectionTimeoutMillis`/
+  `DEFAULT_CONNECTION_TIMEOUT_MS` (5s, via
+  `CLAUDE_MEM_POSTGRES_CONNECTION_TIMEOUT_MS`) is exactly this missing
+  knob, passed into `pg.Pool` so the driver bounds every connection
+  attempt regardless of the caller's own timeout. Fixed by wrapping each
+  ping attempt in `context.WithTimeout(ctx, connectionTimeout())` —
+  composes correctly with any deadline the caller's context already
+  carries — defaulting to 5s with the identical env var name. Verified
+  with a real regression test: a real TCP listener that accepts a
+  connection and goes silent (never answering Postgres's startup
+  packet), confirming `pingWithRetry` now returns in well under a second
+  instead of hanging — confirmed genuine by temporarily reverting to the
+  caller's raw context and watching the same test hang past its own
+  bounded `-timeout` entirely before restoring the fix.
 
 ## 0.2.0 — 2026-08-20
 

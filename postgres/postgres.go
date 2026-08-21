@@ -130,16 +130,56 @@ CREATE INDEX IF NOT EXISTS idx_observations_embedding_hnsw
 // startup race — this daemon (or a hook) starting before Postgres's own
 // container finishes coming up (docker-compose.yml's healthcheck allows up
 // to 40s for that) — without turning a genuinely-down Postgres into a long
-// hang: ~7.75s worst case across 6 attempts, well inside every hook's
-// 10-30s timeout in hooks/hooks.json. A real, sustained outage is the
-// process supervisor's job (systemd/launchd's Restart=on-failure, see
-// deploy/), not this retry loop's.
+// hang: with defaultConnectionTimeoutMS bounding each individual attempt
+// (see pingWithRetry), worst case is that bound × 6 attempts plus the
+// backoff spacing below — a firewalled/black-holed host no longer hangs
+// on the OS's own TCP connect timeout (commonly 75s+, sometimes
+// effectively unbounded) on every one of the 6 attempts, the failure mode
+// a bare db.PingContext(ctx) against an undeadlined caller context was
+// still exposed to before that per-attempt bound existed. A real,
+// sustained outage is still the process supervisor's job (systemd/
+// launchd's Restart=on-failure, see deploy/), not this retry loop's.
 var connectRetryBackoff = []time.Duration{0, 250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+// defaultConnectionTimeoutMS matches real claude-mem's own Postgres pool
+// default exactly (src/storage/postgres/config.ts's
+// DEFAULT_CONNECTION_TIMEOUT_MS), applied via the identical env var name
+// (connectionTimeoutEnvVar) for the same cross-system-migration reason
+// defaultStatementTimeoutMS documents. Unlike statement_timeout (a DSN
+// parameter Postgres itself enforces once connected), this bounds the
+// TCP-connect phase itself — pgx has no equivalent DSN knob for that, so
+// it's applied as a Go-side context.WithTimeout around each individual
+// ping attempt instead (see pingWithRetry).
+const defaultConnectionTimeoutMS = 5_000
+
+const connectionTimeoutEnvVar = "CLAUDE_MEM_POSTGRES_CONNECTION_TIMEOUT_MS"
+
+func connectionTimeout() time.Duration {
+	ms := defaultConnectionTimeoutMS
+	if v := os.Getenv(connectionTimeoutEnvVar); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ms = n
+		}
+	}
+	return time.Duration(ms) * time.Millisecond
+}
 
 // pingWithRetry pings db on the schedule in backoff (the first entry is
 // always 0 — try immediately before ever sleeping), stopping early if ctx
 // is canceled/expires. Returns the last ping error if every attempt fails.
+//
+// Each individual attempt is bounded by connectionTimeout(), not ctx
+// directly — a real gap found by hand: every real caller in this project
+// passes an undeadlined context (see connectRetryBackoff's own doc
+// comment), so db.PingContext(ctx) alone could hang on a single attempt
+// for however long the OS's own TCP connect timeout is against a
+// firewalled or black-holed host — the realistic "Postgres unreachable"
+// case, not just "container still starting." context.WithTimeout
+// composes correctly with whatever deadline ctx itself might already
+// carry (the shorter of the two always wins), so this only ever tightens
+// the bound, never loosens a caller's own tighter deadline.
 func pingWithRetry(ctx context.Context, db *sql.DB, backoff []time.Duration) error {
+	timeout := connectionTimeout()
 	var err error
 	for _, delay := range backoff {
 		if delay > 0 {
@@ -151,7 +191,10 @@ func pingWithRetry(ctx context.Context, db *sql.DB, backoff []time.Duration) err
 				return ctx.Err()
 			}
 		}
-		if err = db.PingContext(ctx); err == nil {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		err = db.PingContext(attemptCtx)
+		cancel()
+		if err == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
