@@ -82,7 +82,30 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: claude-mem-go <worker|hook|ingest> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: claude-mem-go <command> [flags]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "hooks (invoked by Claude Code via hooks/hooks.json, not by hand):")
+	fmt.Fprintln(os.Stderr, "  start            spawn the worker daemon if it is not already running")
+	fmt.Fprintln(os.Stderr, "  context          SessionStart memory injection")
+	fmt.Fprintln(os.Stderr, "  prompt-context   UserPromptSubmit semantic injection")
+	fmt.Fprintln(os.Stderr, "  file-context     PreToolUse per-file memory injection")
+	fmt.Fprintln(os.Stderr, "  hook             PostToolUse capture (forwards to the daemon)")
+	fmt.Fprintln(os.Stderr, "  stop             Stop-hook session summary")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "operating the store:")
+	fmt.Fprintln(os.Stderr, "  doctor           health check; start here when something seems wrong")
+	fmt.Fprintln(os.Stderr, "  stats            what the store actually contains")
+	fmt.Fprintln(os.Stderr, "  search           full-text search; omit -q to enumerate")
+	fmt.Fprintln(os.Stderr, "  semantic-search  embedding search")
+	fmt.Fprintln(os.Stderr, "  export / import  back up, restore, or migrate between backends")
+	fmt.Fprintln(os.Stderr, "  prune            delete observations older than a cutoff")
+	fmt.Fprintln(os.Stderr, "  reembed          (re-)embed observations semantic search cannot see")
+	fmt.Fprintln(os.Stderr, "  ingest           one-shot capture from a transcript, no hooks needed")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "other:")
+	fmt.Fprintln(os.Stderr, "  worker           run the daemon in the foreground")
+	fmt.Fprintln(os.Stderr, "  mcp              serve the MCP tool surface over stdio")
+	fmt.Fprintln(os.Stderr, "  version          build version")
 }
 
 func openLog(name string) *logging.Logger {

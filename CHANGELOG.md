@@ -7,6 +7,31 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Nothing checked that `hooks.json` invokes subcommands that exist —
+  the highest-stakes wiring in the project.** Every capture hook is wired
+  by *name* through the wrapper. Rename or remove a subcommand and the Go
+  build still succeeds, every test still passes, and every hook dies at
+  runtime. Measured: an unknown subcommand prints usage and exits 2, so
+  SessionStart's `context` hook would emit usage text on stdout exactly
+  where Claude Code expects JSON, and memory injection would stop with
+  nothing anywhere saying so. All six are correct today; a test now reads
+  `main.go`'s own dispatch switch and fails if `hooks.json` names anything
+  it does not dispatch.
+
+- **The usage message advertised 3 of 18 subcommands.** Found by running
+  the binary with a bad argument and reading what it said — the same
+  "read it as a user encounters it" pass that has been productive
+  elsewhere. It listed `worker|hook|ingest` and omitted `doctor` and
+  `stats`, the two an operator reaches for first when something is wrong.
+  This is the message a user sees at the exact moment they have mistyped
+  something, so being wrong costs more than its size suggests. Now
+  grouped by what a reader is actually trying to do — hooks Claude Code
+  invokes, commands for operating the store, and everything else — with a
+  test that fails if a subcommand is ever added without appearing in it.
+  Both guards read the dispatch switch rather than a hand-maintained
+  list, and both refuse to run if that extraction finds implausibly few
+  entries, since a guard that silently stops checking is worse than none.
+
 - **Guarded the whole skill surface against the drift that already
   happened once.** After finding `mem-doctor` describing a `doctor` that
   no longer existed, the other five skills were audited the same way —
