@@ -796,6 +796,29 @@ process (this project doesn't cut tagged releases on a schedule).
   three columns, watching both Postgres tests fail, and re-applying the
   real migration.
 
+- **Fixed: boolean search operators worked on SQLite and silently broke
+  on Postgres.** `sanitizeFTSQuery` deliberately preserves uppercase
+  `AND`/`OR`/`NOT` as FTS5 operators; the Postgres backend used
+  `plainto_tsquery`, which ANDs every token and drops `OR`/`NOT` as
+  stopwords. Measured against three identical rows in both backends:
+  `"alpha OR beta"` returned all three on SQLite and one on Postgres,
+  and `"alpha NOT beta"` returned the correct row on SQLite while
+  Postgres returned *exactly the row the user asked to exclude* — no
+  error, no warning. Swapped to `websearch_to_tsquery`, which real
+  claude-mem already uses for its own Postgres search and which never
+  raises a syntax error on arbitrary input. Two further translations
+  were needed, both found by checking rather than assuming: it does not
+  honor a bare uppercase `NOT` (yielding the original bug again), so
+  `NOT term` is rewritten to `-term`; and it *does* honor lowercase
+  `or`/`not` while FTS5 only honors uppercase, so every non-operator
+  token is quoted to keep the two backends' operator rules identical.
+  The stopword difference between the engines is documented rather than
+  overclaimed as fixed. Verified with the compiled binary against the
+  live container and a real SQLite file — all queries now agree, and the
+  hyphen case that motivated `sanitizeFTSQuery` still matches, as do
+  `key:value` and `(parens)`. Confirmed genuine by reverting to
+  `plainto_tsquery` and watching the OR and NOT subtests fail.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and

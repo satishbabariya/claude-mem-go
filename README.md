@@ -1978,6 +1978,61 @@ unnoticed. Confirmed genuine by rebuilding the live column back to three
 columns and watching both Postgres tests fail, then re-applying the real
 migration (which also proved it re-runs cleanly).
 
+### Boolean search operators worked on SQLite and silently broke on Postgres
+
+`sanitizeFTSQuery` deliberately preserves uppercase `AND`/`OR`/`NOT`
+unquoted so FTS5 treats them as real operators — a documented, intentional
+feature of the SQLite backend. The Postgres backend used
+`plainto_tsquery`, which ANDs every token and treats `OR`/`NOT` as
+ordinary words (English stopwords, so they vanish entirely). Same
+`store.Backend` interface, same data, different answers.
+
+Measured against three identical rows seeded into both backends:
+
+```
+query "alpha OR beta"   sqlite=[only-alpha only-beta both]  postgres=[both]
+query "alpha NOT beta"  sqlite=[only-alpha]                 postgres=[both]
+query "alpha"           sqlite=[only-alpha both]            postgres=[only-alpha both]
+query "alpha beta"      sqlite=[both]                       postgres=[both]
+```
+
+`OR` silently lost two of three results. `NOT` was worse than lossy: it
+returned **exactly the row the user asked to exclude** and dropped the one
+they wanted — no error, no warning.
+
+Real claude-mem already uses `websearch_to_tsquery` for its own Postgres
+search (`src/storage/postgres/observations.ts`), which is also the only
+tsquery parser Postgres documents as never raising a syntax error on
+arbitrary user input — confirmed by hand against unbalanced quotes, stray
+`&`/`|`/`!`, and a bare `NOT`, none of which error.
+
+Swapping the parser alone wasn't enough, and checking rather than assuming
+turned up two things:
+
+- `websearch_to_tsquery` does **not** honor a bare uppercase `NOT` — it
+  yields `'alpha' & 'beta'`, silently ANDing the very term the user meant
+  to exclude, which is the original bug again. Negation has to be spelled
+  `-term`, so `websearchQuery` rewrites `NOT term` → `-term`.
+- `websearch_to_tsquery` **does** honor *lowercase* `or`/`not` as
+  operators, while FTS5 (and `sanitizeFTSQuery`, deliberately) only honors
+  uppercase. Left alone, a literal search for "cats or dogs" would OR on
+  one backend and AND on the other — the same divergence class, pointing
+  the other way. Quoting every non-operator token neutralizes it.
+
+One residual difference is deliberately **not** papered over: Postgres's
+`english` config strips stopwords and FTS5 doesn't, so a query made
+entirely of stopwords can still match differently. That's a fundamental
+engine difference predating this fix and affecting every query — claiming
+otherwise would be overstating the parity actually achieved.
+
+Verified against the live container and a real SQLite file with the
+compiled binary: all five queries above now return identical result sets
+on both backends, and the hyphen case that motivated `sanitizeFTSQuery` in
+the first place still matches through the new quoted path — as do
+`key:value` and `(parens)`. New tests cover the translation table and the
+OR/NOT/AND/hyphen behaviors end to end, confirmed genuine by reverting to
+`plainto_tsquery` and watching the OR and NOT subtests fail.
+
 ## Quick start
 
 ```sh

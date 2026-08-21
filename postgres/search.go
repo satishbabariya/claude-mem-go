@@ -39,11 +39,86 @@ func clampNegativeLimit(limit int) int {
 	return limit
 }
 
+// websearchQuery translates a user query into websearch_to_tsquery
+// syntax, mirroring sanitizeFTSQuery's operator rules exactly so both
+// store.Backend implementations agree on what a boolean query means.
+//
+// This exists because of a real, measured divergence, not a theoretical
+// one. This backend used plainto_tsquery, which ANDs every token and
+// treats OR/NOT as ordinary words (English stopwords, so they vanish).
+// Against three seeded rows (only-alpha, only-beta, both), identical in
+// both backends:
+//
+//	"alpha OR beta"  sqlite=[only-alpha only-beta both]  postgres=[both]
+//	"alpha NOT beta" sqlite=[only-alpha]                 postgres=[both]
+//
+// OR silently lost two of three results; NOT was worse than lossy —
+// Postgres returned exactly the row the user asked to EXCLUDE and
+// dropped the one they wanted, with no error or warning. Real
+// claude-mem uses websearch_to_tsquery for its own Postgres search
+// (src/storage/postgres/observations.ts), which is also the only
+// tsquery parser Postgres documents as never raising a syntax error on
+// arbitrary user input — confirmed by hand against unbalanced quotes,
+// stray &/|/! operators, and a bare "NOT", none of which error.
+//
+// Two translations are needed on top of the swap:
+//
+//   - "NOT term" becomes "-term". websearch_to_tsquery spells negation
+//     with a leading dash and does NOT honor a bare uppercase NOT
+//     (verified: it yields 'alpha' & 'beta', silently ANDing the term
+//     the user meant to exclude — the precise bug above).
+//   - Every non-operator token is quoted. websearch_to_tsquery treats
+//     LOWERCASE "or"/"not" as operators too, while FTS5 (and therefore
+//     sanitizeFTSQuery, deliberately) only honors them in uppercase.
+//     Without quoting, a literal search for "cats or dogs" would OR on
+//     one backend and AND on the other — the same divergence class this
+//     fixes, just pointing the other way. Quoting also neutralizes
+//     punctuation the way sanitizeFTSQuery's own quoting does; verified
+//     that "claude-mem" still matches "the claude-mem project" through
+//     the quoted path, so the hyphen case that motivated
+//     sanitizeFTSQuery does not regress here.
+//
+// One residual difference is deliberately NOT papered over: Postgres's
+// 'english' config strips stopwords and FTS5 does not, so a query whose
+// terms are stopwords can still match differently. That's a fundamental
+// engine difference predating this fix and affecting every query, not
+// something introduced or fixable here.
+func websearchQuery(query string) string {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return ""
+	}
+	quote := func(s string) string {
+		// Strip embedded quotes rather than escaping them: they'd
+		// otherwise close the phrase early. websearch_to_tsquery never
+		// errors regardless, but a token that silently changes meaning
+		// is worse than one that loses a quote character.
+		return `"` + strings.ReplaceAll(s, `"`, "") + `"`
+	}
+	out := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "AND", "OR":
+			out = append(out, fields[i])
+		case "NOT":
+			if i+1 < len(fields) {
+				out = append(out, "-"+quote(fields[i+1]))
+				i++
+			}
+			// A trailing bare NOT has nothing to negate — drop it,
+			// matching how websearch_to_tsquery ignores a dangling
+			// operator rather than erroring.
+		default:
+			out = append(out, quote(fields[i]))
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // Search runs real Postgres full-text search against the generated
-// search_vector column (see schemaSQL), ranked by ts_rank_cd. Unlike the
-// SQLite/FTS5 backend, plainto_tsquery tokenizes punctuation (including a
-// bare hyphen — the exact case that broke FTS5's grammar) without any
-// hand-written sanitizer.
+// search_vector column (see schemaSQL), ranked by ts_rank_cd, with the
+// query translated by websearchQuery so boolean operators mean the same
+// thing here as they do on the SQLite backend.
 // project scopes the search to one project when non-empty; empty searches
 // every project in the store. See store.Store.Search's doc comment for why
 // this matters: one shared database can hold observations from every
@@ -73,7 +148,7 @@ func clampNegativeLimit(limit int) int {
 func searchOrderClause(orderBy string) string {
 	switch orderBy {
 	case "", "relevance":
-		return "ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC, id"
+		return "ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) DESC, id"
 	case "date_asc":
 		return "ORDER BY created_at_epoch ASC, id ASC"
 	default:
@@ -84,7 +159,7 @@ func searchOrderClause(orderBy string) string {
 func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
-	args := []any{query}
+	args := []any{websearchQuery(query)}
 	scope := ""
 	if project != "" {
 		args = append(args, project)
@@ -120,7 +195,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
-		WHERE search_vector @@ plainto_tsquery('english', $1) `+scope+`
+		WHERE search_vector @@ websearch_to_tsquery('english', $1) `+scope+`
 		`+searchOrderClause(orderBy)+`
 		LIMIT `+limitPlaceholder+`
 		OFFSET `+offsetPlaceholder, args...)
