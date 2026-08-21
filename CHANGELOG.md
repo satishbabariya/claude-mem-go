@@ -7,6 +7,27 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Guarded the whole skill surface against the drift that already
+  happened once.** After finding `mem-doctor` describing a `doctor` that
+  no longer existed, the other five skills were audited the same way —
+  every MCP tool call they instruct Claude to make, checked against the
+  server that actually serves them. **They were clean**: all 11 tool names
+  and every parameter matched, across 30 tool calls in 6 skills. That
+  clean result is recorded rather than dressed up as a fix; the change
+  worth making was not prose but enforcement, because nothing was
+  comparing the two and that is precisely how `mem-doctor` drifted. A test
+  now parses the server's own tool definitions and fails if any skill
+  calls a tool that does not exist or passes a parameter it does not
+  accept. The distinction matters more here than in documentation: a skill
+  is an instruction Claude *acts on*, so a stale parameter is not a typo,
+  it is a failed tool call in a real session at the moment the user asked
+  for something. Only calls whose name is a real tool are validated, so
+  ordinary prose containing parentheses cannot cause a false failure, and
+  the guard self-checks twice — it fails if the extraction discovers fewer
+  than 8 tools, and fails if it finds no tool calls at all, since either
+  would leave it passing forever while checking nothing. Break/restore
+  covers both the drift it exists to catch and its own self-checks.
+
 - **The `mem-doctor` skill described a version of `doctor` that no
   longer exists, and nothing checked it.** `doctor` gained five checks
   over recent work — the plugin-install check, the plugin-binary check, an
