@@ -62,6 +62,25 @@ than assumed correct.
   WAL/foreign-keys fix actually took effect); Postgres's real connection
   pool utilization, pgvector extension version, and whether the HNSW
   index real ANN search depends on still exists.
+- **The `Stop` hook's session summary could silently skip a session, or
+  silently omit its most recent action**, found by the same real
+  full-stack integration test as the migration race above (two genuine
+  concurrent `claude` sessions through real hooks): `Stop` fires the
+  instant a session ends, but `PostToolUse`'s own observation for the
+  session's LAST tool call is a fire-and-forget async LLM call the
+  worker runs in the background — a single, immediate database read
+  raced ahead of it. Reproduced directly: one real session's `Stop` hook
+  found zero observations 4 seconds before the worker finished
+  persisting the only one that session had. Fixed by polling until the
+  count stops growing (up to ~12s, costing nothing perceptible since
+  `Stop` already runs fire-and-forget) — but the first version of that
+  fix had its own bug, caught live before shipping: treating two
+  consecutive zero-reads as "confirmed empty" is wrong, since a
+  one-tool-call session also reads zero until the observer call actually
+  finishes. Fixed to require the count go positive before trusting
+  stability. Verified with dedicated tests for each failure mode, and by
+  re-running the original two real concurrent sessions — the first
+  re-run still showed the flaw, the second correctly summarized both.
 - **A real, full-stack integration smoke test found a third,
   more serious `migrate` bug** the targeted unit/e2e tests didn't catch:
   `SessionStart`'s `start` (spawns the worker daemon, which itself calls

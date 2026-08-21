@@ -226,6 +226,36 @@ docker compose up -d
   had). Verified against a real session: seeded observations, ran `stop`
   with the real embed model, and confirmed the resulting summary was
   found by `semantic-search` using a query with zero keyword overlap.
+
+  A real, more consequential race found by an actual full-stack
+  integration test (two genuine concurrent `claude` sessions, run
+  through real hooks pointed at explicit isolated paths — not a
+  synthetic unit test): `Stop` fires the instant a session ends, but
+  `PostToolUse`'s own observation for the session's LAST tool call is a
+  real, fire-and-forget async LLM call the worker daemon runs in the
+  background, taking several real seconds. A single, immediate database
+  read raced ahead of it — reproduced directly, one real session's `Stop`
+  hook found *zero* observations 4 seconds before the worker finished
+  persisting the one observation that session actually had, silently
+  skipping the summary entirely. In a longer session, the identical race
+  would instead silently produce a summary missing just its most recent,
+  often most contextually important, action. Fixed by polling until the
+  count stops growing across consecutive checks (up to ~12s, costing
+  nothing perceptible since `Stop` already runs fire-and-forget) rather
+  than trusting a single read — but the *first* version of that fix had
+  its own real bug, caught live before it shipped: treating two
+  consecutive zero-reads as "confirmed empty" is wrong, since a session
+  with exactly one real tool call also reads zero on every check until
+  the observer call actually finishes, which routinely took longer than
+  one poll interval. Only a count that has gone *positive* and then
+  stops growing is real evidence of stability; a genuinely tool-call-free
+  session now correctly pays the full wait budget instead of exiting
+  early on a false stabilization. Verified with dedicated tests proving
+  each specific failure mode (false-positive stabilization at zero, a
+  perpetually-growing count that must still terminate, a genuinely-empty
+  session paying the full budget) and by re-running the original two
+  real concurrent sessions twice more — the first re-run still found
+  the flaw, the second, after fixing it, correctly summarized both.
 - **ingest** — one-shot: read a real transcript file, observe N tool calls,
   persist them. Useful for backfilling or testing without wiring up hooks.
 - **search** / **semantic-search** — keyword (FTS5) and meaning-based
