@@ -98,10 +98,30 @@ CREATE TABLE IF NOT EXISTS observations (
 	created_at_epoch  BIGINT NOT NULL,
 	content_hash      TEXT NOT NULL UNIQUE,
 	embedding         vector(%d),
+	-- facts/concepts are indexed here too, at weight 'D'. Leaving them out
+	-- (as this originally did) was a real, measured cross-backend
+	-- divergence, not a theoretical one: the SQLite backend's FTS5 table
+	-- has always covered all five columns, so the same observation was
+	-- keyword-searchable on one store.Backend implementation and invisible
+	-- on the other. Real claude-mem indexes them on both its engines too
+	-- (its SQLite fts5 lists facts/concepts explicitly; its Postgres
+	-- content_search tsvectors the entire observation content).
+	--
+	-- ::text on a jsonb column is immutable enough for a STORED generated
+	-- column — verified against a real Postgres 16, which rejects
+	-- non-immutable expressions here outright — and JSON's own brackets and
+	-- quotes tokenize away harmlessly ('["multi-agent system"]' yields
+	-- 'agent':3 'multi':2 'multi-ag':1 'system':4).
+	--
+	-- Weight 'D' keeps ts_rank_cd ordering preferring a title or narrative
+	-- hit over a tag hit, rather than letting a concepts match outrank the
+	-- observation's own headline.
 	search_vector     tsvector GENERATED ALWAYS AS (
 		setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
 		setweight(to_tsvector('english', coalesce(subtitle, '')), 'B') ||
-		setweight(to_tsvector('english', coalesce(narrative, '')), 'C')
+		setweight(to_tsvector('english', coalesce(narrative, '')), 'C') ||
+		setweight(to_tsvector('english', coalesce(facts::text, '')), 'D') ||
+		setweight(to_tsvector('english', coalesce(concepts::text, '')), 'D')
 	) STORED
 );
 
@@ -396,6 +416,40 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 								CHECK (type IN ('discovery', 'change', 'decision', 'summary', 'manual'));
 						END IF;
 					END $$;
+				`)
+				return err
+			},
+		},
+		{
+			// Rebuilds search_vector to also cover facts and concepts —
+			// see schemaSQL's own comment for why they belong there and
+			// why ::text/'D' are the right choices. A generated column's
+			// expression can't be ALTERed in place, so the column is
+			// dropped and re-added; Postgres recomputes it for every
+			// existing row on ADD COLUMN, so this backfills the whole
+			// table rather than only helping new writes.
+			//
+			// The index has to go first: DROP COLUMN would take it along
+			// anyway, but dropping it explicitly keeps the intent obvious
+			// and the re-CREATE below symmetric. Every statement is
+			// IF EXISTS / IF NOT EXISTS so a partially-applied run (this
+			// is the one migration here heavy enough to plausibly be
+			// interrupted on a large table) re-runs cleanly, as
+			// migrate.Run requires of every migration.
+			Version: 3,
+			Name:    "index facts and concepts in search_vector",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx, `
+					DROP INDEX IF EXISTS idx_observations_search_vector;
+					ALTER TABLE observations DROP COLUMN IF EXISTS search_vector;
+					ALTER TABLE observations ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
+						setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+						setweight(to_tsvector('english', coalesce(subtitle, '')), 'B') ||
+						setweight(to_tsvector('english', coalesce(narrative, '')), 'C') ||
+						setweight(to_tsvector('english', coalesce(facts::text, '')), 'D') ||
+						setweight(to_tsvector('english', coalesce(concepts::text, '')), 'D')
+					) STORED;
+					CREATE INDEX IF NOT EXISTS idx_observations_search_vector ON observations USING GIN(search_vector);
 				`)
 				return err
 			},

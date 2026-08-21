@@ -451,3 +451,51 @@ func TestByIDsRejectsTooManyIDs(t *testing.T) {
 		t.Errorf("ByIDs with exactly %d ids (at the limit): want success, got %v", len(exactly), err)
 	}
 }
+
+// TestSearchCoversFactsAndConcepts is the SQLite half of a cross-backend
+// parity contract. This behavior was always correct here — the FTS5 table
+// has covered all five columns since it was created — but it was never
+// asserted, which is exactly how the Postgres backend was able to drift
+// away from it unnoticed (its search_vector covered only three columns,
+// making the same observation findable through one store.Backend
+// implementation and invisible through the other). Locking it in on both
+// sides means a future change to either can't silently reintroduce the
+// divergence. Mirrors TestPostgresSearchCoversFactsAndConcepts exactly,
+// same seeded terms.
+func TestSearchCoversFactsAndConcepts(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	// The distinctive terms live ONLY in facts/concepts — nothing in
+	// title/subtitle/narrative mentions them.
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "facts", "1"),
+		Observation{Type: "discovery", Title: "unremarkable heading",
+			Facts: []string{"the zorblatt subsystem was replaced"}}, 0); err != nil {
+		t.Fatalf("Insert facts row: %v", err)
+	}
+	if _, err := st.Insert("s1", "proj", "Bash", ContentHash("s1", "Bash", "concepts", "2"),
+		Observation{Type: "discovery", Title: "another plain heading",
+			Concepts: []string{"quibblesnort architecture"}}, 0); err != nil {
+		t.Fatalf("Insert concepts row: %v", err)
+	}
+
+	factHits, err := st.Search("proj", "zorblatt", "", 10, 0, 0, 0, "")
+	if err != nil {
+		t.Fatalf("Search for a facts-only term: %v", err)
+	}
+	if len(factHits) != 1 {
+		t.Fatalf("Search(\"zorblatt\") returned %d rows, want 1 — the term exists only in facts, which the FTS5 table must cover", len(factHits))
+	}
+
+	conceptHits, err := st.Search("proj", "quibblesnort", "", 10, 0, 0, 0, "")
+	if err != nil {
+		t.Fatalf("Search for a concepts-only term: %v", err)
+	}
+	if len(conceptHits) != 1 {
+		t.Fatalf("Search(\"quibblesnort\") returned %d rows, want 1 — the term exists only in concepts, which the FTS5 table must cover", len(conceptHits))
+	}
+}

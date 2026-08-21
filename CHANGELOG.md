@@ -766,6 +766,36 @@ process (this project doesn't cut tagged releases on a schedule).
   break/restore: reducing the check to stat-only failed both the
   real-build and corrupt-binary tests.
 
+- **Fixed: Postgres keyword search silently ignored `facts` and
+  `concepts` — a measured cross-backend divergence, not a theoretical
+  one.** The SQLite backend's FTS5 table has always covered five columns
+  (`title, subtitle, narrative, facts, concepts`); the Postgres
+  backend's generated `search_vector` covered only three, so the same
+  observation was keyword-searchable through one `store.Backend`
+  implementation and invisible through the other. Real claude-mem covers
+  them on both its engines. Measured against this project's own
+  accumulated dev container (6,210 rows): 536 of 567 fact strings and
+  200 of 289 concept tags could not be found by a search for their own
+  text; reproduced with the compiled binary on a byte-identical row
+  (SQLite hit, Postgres missed) exported from Postgres and imported into
+  a fresh SQLite file. Fixed by extending `search_vector` to cover both
+  at weight `'D'`, in `schemaSQL` (fresh databases) and a new migration
+  version 3 (existing ones) — a generated column can't be `ALTER`ed in
+  place, so it's dropped and re-added, which also backfills every
+  existing row since Postgres recomputes the whole table on
+  `ADD COLUMN`. Verified against a real Postgres 16 that `jsonb::text`
+  is immutable enough for a `STORED` generated column and that JSON
+  punctuation tokenizes away harmlessly. Applied to the live container
+  in about a second across all 6,210 rows: `facts_unsearchable` 536 → 0,
+  `concepts_unsearchable` 200 → 0, every row intact, the original
+  reproduction now agreeing on both backends, and `EXPLAIN` confirming
+  the rebuilt GIN index is still chosen. New tests cover a facts-only
+  term, a concepts-only term, and the `'D'`-weight ranking guarantee,
+  plus a mirrored SQLite test making the parity contract explicit on
+  both sides — confirmed genuine by rebuilding the live column back to
+  three columns, watching both Postgres tests fail, and re-applying the
+  real migration.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and

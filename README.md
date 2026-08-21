@@ -1919,6 +1919,65 @@ check to stat-only failed both the real-build and corrupt-binary tests,
 the latter asserting in as many words that "a stat-only check would have
 passed this."
 
+### Postgres keyword search silently ignored `facts` and `concepts` — a measured cross-backend divergence
+
+The SQLite backend's FTS5 table has always covered five columns —
+`title, subtitle, narrative, facts, concepts`. The Postgres backend's
+generated `search_vector` covered only three, leaving `facts` and
+`concepts` unreachable by keyword search entirely. Two `store.Backend`
+implementations returning different results for the same query against
+the same data, which is exactly the contract that interface exists to
+guarantee. Real claude-mem covers them on both its engines (its SQLite
+`fts5(...)` lists `facts`/`concepts` explicitly; its Postgres
+`content_search` tsvectors the entire observation content).
+
+Not theoretical — measured against this project's own accumulated dev
+container (6,210 real rows): **536 of 567 fact strings and 200 of 289
+concept tags could not be found by a search for their own text.**
+Reproduced end-to-end with the compiled binary on a byte-identical row,
+exported from Postgres and imported into a fresh SQLite file:
+
+```
+SQLite:   search "multi-agent system" → [1] claude-mem project structure examined
+Postgres: search "multi-agent system" → no matches
+```
+
+The row's `narrative` contains "multi-agent" but "system" appears *only*
+in `concepts` — and `plainto_tsquery` ANDs its terms, so the whole query
+missed.
+
+Fixed by extending `search_vector` to also cover `facts` and `concepts`
+at weight `'D'`, in both `schemaSQL` (so fresh databases are correct) and
+a new **migration version 3** (so existing ones are repaired). A
+generated column's expression can't be `ALTER`ed in place, so the column
+is dropped and re-added — which is also what backfills every existing
+row, since Postgres recomputes a generated column for the whole table on
+`ADD COLUMN`. Every statement is `IF EXISTS`/`IF NOT EXISTS`, so a
+partially-applied run re-runs cleanly as `migrate.Run` requires.
+
+Two assumptions were verified against a real Postgres 16 rather than
+assumed, since both could have sunk the approach: that `jsonb::text` is
+immutable enough for a `STORED` generated column (Postgres rejects
+non-immutable expressions there outright), and that JSON's own brackets
+and quotes tokenize away harmlessly — a probe on `'["multi-agent
+system"]'` yielded `'agent':3 'multi':2 'multi-ag':1 'system':4` and
+matched correctly. Weight `'D'` keeps `ts_rank_cd` ordering preferring a
+title or narrative hit over a tag hit.
+
+Verified against the live container end to end: the migration applied in
+about a second across all 6,210 rows, after which **`facts_unsearchable`
+dropped 536 → 0 and `concepts_unsearchable` 200 → 0** with every row
+intact, the original reproduction now returns the same row on both
+backends, and `EXPLAIN` confirms the rebuilt GIN index is still chosen
+(`Bitmap Index Scan on idx_observations_search_vector`). New regression
+tests cover a facts-only term, a concepts-only term, and the `'D'`-weight
+ranking guarantee, with a mirrored SQLite test making the parity contract
+explicit on both sides — the SQLite behavior was always correct but never
+asserted, which is precisely how Postgres was able to drift away from it
+unnoticed. Confirmed genuine by rebuilding the live column back to three
+columns and watching both Postgres tests fail, then re-applying the real
+migration (which also proved it re-runs cleanly).
+
 ## Quick start
 
 ```sh
