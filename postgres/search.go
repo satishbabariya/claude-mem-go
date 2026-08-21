@@ -65,7 +65,22 @@ func clampNegativeLimit(limit int) int {
 // or skip one entirely, depending on whatever arbitrary order Postgres
 // happens to visit tied rows in — same reasoning as the SQLite backend's
 // identical tiebreaker, independently necessary here.
-func (s *Store) Search(project, query, obsType string, limit, offset int) ([]store.SearchResult, error) {
+// searchOrderClause mirrors the SQLite backend's identically-named
+// helper (see its own doc comment for the real claude-mem source this
+// ports) — same three cases, just against ts_rank_cd instead of FTS5's
+// bare rank column.
+func searchOrderClause(orderBy string) string {
+	switch orderBy {
+	case "", "relevance":
+		return "ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC, id"
+	case "date_asc":
+		return "ORDER BY created_at_epoch ASC, id ASC"
+	default:
+		return "ORDER BY created_at_epoch DESC, id DESC"
+	}
+}
+
+func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
 	args := []any{query}
@@ -78,6 +93,14 @@ func (s *Store) Search(project, query, obsType string, limit, offset int) ([]sto
 		args = append(args, obsType)
 		scope += fmt.Sprintf(" AND type = $%d", len(args))
 	}
+	if dateStartMs > 0 {
+		args = append(args, dateStartMs)
+		scope += fmt.Sprintf(" AND created_at_epoch >= $%d", len(args))
+	}
+	if dateEndMs > 0 {
+		args = append(args, dateEndMs)
+		scope += fmt.Sprintf(" AND created_at_epoch <= $%d", len(args))
+	}
 	args = append(args, limit)
 	limitPlaceholder := fmt.Sprintf("$%d", len(args))
 	args = append(args, offset)
@@ -87,7 +110,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int) ([]sto
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
 		WHERE search_vector @@ plainto_tsquery('english', $1) `+scope+`
-		ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC, id
+		`+searchOrderClause(orderBy)+`
 		LIMIT `+limitPlaceholder+`
 		OFFSET `+offsetPlaceholder, args...)
 	if err != nil {

@@ -166,6 +166,26 @@ func clampNegativeLimit(limit int) int {
 	return limit
 }
 
+// searchOrderClause mirrors real claude-mem's own
+// SessionSearch.buildOrderClause: "relevance" (also the default when
+// orderBy is empty) ranks by FTS5's own bare `rank` column, tied against
+// id for a fully deterministic order (needed for LIMIT/OFFSET pagination
+// to stay disjoint across calls — a rank tie is real, not hypothetical,
+// for identical term-frequency shapes). "date_desc"/"date_asc" switch to
+// created_at_epoch instead; any other, unrecognized value also falls
+// back to date_desc, matching buildOrderClause's own default case
+// exactly rather than silently treating it as relevance.
+func searchOrderClause(orderBy string) string {
+	switch orderBy {
+	case "", "relevance":
+		return "ORDER BY rank, o.id"
+	case "date_asc":
+		return "ORDER BY o.created_at_epoch ASC, o.id ASC"
+	default:
+		return "ORDER BY o.created_at_epoch DESC, o.id DESC"
+	}
+}
+
 // Search runs an FTS5 MATCH query across title/subtitle/narrative/facts/
 // concepts, ranked by bm25 (FTS5's built-in relevance function — lower is
 // better, so ORDER BY rank ascending is "best match first"). Ordered by
@@ -183,7 +203,7 @@ func clampNegativeLimit(limit int) int {
 // own search_observations tool) always passes the current project; the
 // plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
 // lookups from a terminal.
-func (s *Store) Search(project, query, obsType string, limit, offset int) ([]SearchResult, error) {
+func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
 	args := []any{sanitizeFTSQuery(query)}
@@ -201,10 +221,21 @@ func (s *Store) Search(project, query, obsType string, limit, offset int) ([]Sea
 	// directly onto an existing column with no schema change, and offset
 	// (added since) needs no column at all — a plain LIMIT/OFFSET on the
 	// existing ORDER BY, previously skipped on a rationale that only ever
-	// actually applied to date range and sort order.
+	// actually applied to date range and sort order (both added here too,
+	// on the same already-indexed created_at_epoch column RecentByProject
+	// already queries — no schema change needed for these either, despite
+	// this project's own README having claimed otherwise).
 	if obsType != "" {
 		scope += " AND o.type = ?"
 		args = append(args, obsType)
+	}
+	if dateStartMs > 0 {
+		scope += " AND o.created_at_epoch >= ?"
+		args = append(args, dateStartMs)
+	}
+	if dateEndMs > 0 {
+		scope += " AND o.created_at_epoch <= ?"
+		args = append(args, dateEndMs)
 	}
 	args = append(args, limit, offset)
 	rows, err := s.db.Query(`
@@ -213,7 +244,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int) ([]Sea
 		FROM observations_fts f
 		JOIN observations o ON o.id = f.rowid
 		WHERE observations_fts MATCH ? `+scope+`
-		ORDER BY rank, o.id
+		`+searchOrderClause(orderBy)+`
 		LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("fts5 search %q: %w", query, err)

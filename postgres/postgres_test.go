@@ -125,7 +125,7 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	// row under accumulated history. Real callers hit the identical
 	// scoping requirement for the identical reason (see Search's doc
 	// comment), so this isn't a test-only workaround.
-	results, err := st.Search(project, "claude-mem", "", 10, 0)
+	results, err := st.Search(project, "claude-mem", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestPostgresSearchFiltersByObservationTypeWithProjectScope(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "gadget", "discovery", 10, 0)
+	results, err := st.Search(project, "gadget", "discovery", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(project=%s, type=discovery): %v", project, err)
 	}
@@ -182,7 +182,7 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10, 0)
+	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -218,15 +218,15 @@ func TestPostgresSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 		seededIDs = append(seededIDs, res.ID)
 	}
 
-	page1, err := st.Search(project, "widget", "", 2, 0)
+	page1, err := st.Search(project, "widget", "", 2, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 1: %v", err)
 	}
-	page2, err := st.Search(project, "widget", "", 2, 2)
+	page2, err := st.Search(project, "widget", "", 2, 2, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 2: %v", err)
 	}
-	page3, err := st.Search(project, "widget", "", 2, 4)
+	page3, err := st.Search(project, "widget", "", 2, 4, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 3: %v", err)
 	}
@@ -253,6 +253,127 @@ func TestPostgresSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 			t.Fatalf("seeded row id=%d missing from paginated results entirely", id)
 		}
 	}
+}
+
+// TestPostgresSearchFiltersByDateRange mirrors the SQLite backend's
+// identical test — the real, live-container regression test for the
+// same false "doesn't map onto an existing column" excuse this
+// project's README used to justify skipping real claude-mem's
+// dateStart/dateEnd search filters. created_at_epoch already exists and
+// is already indexed on this backend too (idx_observations_created);
+// this only needed a plain WHERE clause.
+func TestPostgresSearchFiltersByDateRange(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	day := int64(24 * 60 * 60 * 1000)
+	base := int64(1700000000000)
+	var ids [3]int64
+	for i := 0; i < 3; i++ {
+		res, err := st.Insert("s1", project, "Bash",
+			store.ContentHash("s1", "Bash", "daterange", fmt.Sprintf("%s-%d", project, i)),
+			store.Observation{Type: "discovery", Title: "dateranged gadget observation"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		ids[i] = res.ID
+		epoch := base + int64(i)*day
+		if _, err := st.db.Exec(`UPDATE observations SET created_at_epoch = $1 WHERE id = $2`, epoch, res.ID); err != nil {
+			t.Fatalf("backdating row %d: %v", i, err)
+		}
+	}
+
+	fromDay1, err := st.Search(project, "gadget", "", 10, 0, base+day, 0, "")
+	if err != nil {
+		t.Fatalf("Search with dateStart: %v", err)
+	}
+	if got := pgIDSet(fromDay1); !got[ids[1]] || !got[ids[2]] || got[ids[0]] {
+		t.Fatalf("Search(dateStart=day1) returned ids %v, want day1 and day2 only (not day0)", got)
+	}
+
+	toDay1, err := st.Search(project, "gadget", "", 10, 0, 0, base+day, "")
+	if err != nil {
+		t.Fatalf("Search with dateEnd: %v", err)
+	}
+	if got := pgIDSet(toDay1); !got[ids[0]] || !got[ids[1]] || got[ids[2]] {
+		t.Fatalf("Search(dateEnd=day1) returned ids %v, want day0 and day1 only (not day2)", got)
+	}
+
+	onlyDay1, err := st.Search(project, "gadget", "", 10, 0, base+day, base+day, "")
+	if err != nil {
+		t.Fatalf("Search with both bounds: %v", err)
+	}
+	if len(onlyDay1) != 1 || onlyDay1[0].ID != ids[1] {
+		t.Fatalf("Search(dateStart=dateEnd=day1) = %+v, want exactly [day1]", onlyDay1)
+	}
+}
+
+func pgIDSet(results []store.SearchResult) map[int64]bool {
+	m := make(map[int64]bool, len(results))
+	for _, r := range results {
+		m[r.ID] = true
+	}
+	return m
+}
+
+// TestPostgresSearchOrderBy mirrors the SQLite backend's identical test
+// against this backend's own ts_rank_cd-based relevance ordering —
+// confirms date_desc/date_asc sort by created_at_epoch regardless of
+// text-match rank, and that an unrecognized orderBy value falls back to
+// date_desc, matching real claude-mem's own buildOrderClause default
+// case.
+func TestPostgresSearchOrderBy(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	day := int64(24 * 60 * 60 * 1000)
+	base := int64(1700000000000)
+	var ids [3]int64
+	for i := 0; i < 3; i++ {
+		res, err := st.Insert("s1", project, "Bash",
+			store.ContentHash("s1", "Bash", "orderby", fmt.Sprintf("%s-%d", project, i)),
+			store.Observation{Type: "discovery", Title: "orderby flavored widget"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		ids[i] = res.ID
+		if _, err := st.db.Exec(`UPDATE observations SET created_at_epoch = $1 WHERE id = $2`,
+			base+int64(i)*day, res.ID); err != nil {
+			t.Fatalf("backdating row %d: %v", i, err)
+		}
+	}
+
+	desc, err := st.Search(project, "widget", "", 10, 0, 0, 0, "date_desc")
+	if err != nil {
+		t.Fatalf("Search date_desc: %v", err)
+	}
+	if len(desc) != 3 || desc[0].ID != ids[2] || desc[1].ID != ids[1] || desc[2].ID != ids[0] {
+		t.Fatalf("Search(orderBy=date_desc) ids = %v, want newest-first [%d,%d,%d]", pgIDList(desc), ids[2], ids[1], ids[0])
+	}
+
+	asc, err := st.Search(project, "widget", "", 10, 0, 0, 0, "date_asc")
+	if err != nil {
+		t.Fatalf("Search date_asc: %v", err)
+	}
+	if len(asc) != 3 || asc[0].ID != ids[0] || asc[1].ID != ids[1] || asc[2].ID != ids[2] {
+		t.Fatalf("Search(orderBy=date_asc) ids = %v, want oldest-first [%d,%d,%d]", pgIDList(asc), ids[0], ids[1], ids[2])
+	}
+
+	garbage, err := st.Search(project, "widget", "", 10, 0, 0, 0, "banana")
+	if err != nil {
+		t.Fatalf("Search with unrecognized orderBy: %v", err)
+	}
+	if len(garbage) != 3 || garbage[0].ID != ids[2] || garbage[1].ID != ids[1] || garbage[2].ID != ids[0] {
+		t.Fatalf("Search(orderBy=\"banana\") ids = %v, want the same as date_desc [%d,%d,%d]", pgIDList(garbage), ids[2], ids[1], ids[0])
+	}
+}
+
+func pgIDList(results []store.SearchResult) []int64 {
+	out := make([]int64, len(results))
+	for i, r := range results {
+		out[i] = r.ID
+	}
+	return out
 }
 
 // TestPostgresByIDsFetchesExactRowsAndOmitsUnknownIDs verifies `= ANY($1)`

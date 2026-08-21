@@ -22,8 +22,14 @@ type Backend interface {
 	// manual) when non-empty. offset skips that many leading results
 	// (after ranking, before limit) — the pagination real claude-mem's own
 	// search tool has and this one lacked until now; 0 behaves exactly as
-	// it always has.
-	Search(project, query, obsType string, limit, offset int) ([]SearchResult, error)
+	// it always has. dateStartMs/dateEndMs (Unix epoch milliseconds, 0 =
+	// unbounded on that side) filter to created_at_epoch >= dateStartMs
+	// and/or <= dateEndMs, real claude-mem's own dateStart/dateEnd search
+	// filters. orderBy selects "relevance" (the default when empty — rank
+	// order) or "date_desc"/"date_asc"; any other value is treated as
+	// date_desc, matching real claude-mem's own SessionSearch.buildOrderClause
+	// fallback.
+	Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]SearchResult, error)
 	SaveEmbedding(observationID int64, vec []float32) error
 	// SemanticSearch is Search's embedding-based counterpart; project has
 	// the same scoping meaning.

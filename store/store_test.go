@@ -149,7 +149,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		t.Fatalf("CountByProject = %d, want 1", count)
 	}
 
-	results, err := st.Search("", "race condition", "", 10, 0)
+	results, err := st.Search("", "race condition", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		t.Fatalf("round-tripped Facts = %v, want %v", results[0].Observation.Facts, o.Facts)
 	}
 
-	if noResults, err := st.Search("", "completely unrelated query xyzzy", "", 10, 0); err != nil {
+	if noResults, err := st.Search("", "completely unrelated query xyzzy", "", 10, 0, 0, 0, ""); err != nil {
 		t.Fatalf("Search: %v", err)
 	} else if len(noResults) != 0 {
 		t.Fatalf("Search for an unrelated query returned %d results, want 0", len(noResults))

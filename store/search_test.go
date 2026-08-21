@@ -42,7 +42,7 @@ func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("", "claude-mem", "", 10, 0)
+	results, err := st.Search("", "claude-mem", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error instead of results: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	all, err := st.Search("proj", "widget", "", 10, 0)
+	all, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search with no type filter: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search with no type filter returned %d results, want 2 (sanity check before filtering)", len(all))
 	}
 
-	discoveries, err := st.Search("proj", "widget", "discovery", 10, 0)
+	discoveries, err := st.Search("proj", "widget", "discovery", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=discovery): %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=discovery) = %+v, want exactly the one discovery-type row", discoveries)
 	}
 
-	decisions, err := st.Search("proj", "widget", "decision", 10, 0)
+	decisions, err := st.Search("proj", "widget", "decision", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=decision): %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=decision) = %+v, want exactly the one decision-type row", decisions)
 	}
 
-	none, err := st.Search("proj", "widget", "bugfix", 10, 0)
+	none, err := st.Search("proj", "widget", "bugfix", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=bugfix): %v", err)
 	}
@@ -134,15 +134,15 @@ func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 		seededIDs = append(seededIDs, res.ID)
 	}
 
-	page1, err := st.Search("proj", "widget", "", 2, 0)
+	page1, err := st.Search("proj", "widget", "", 2, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 1: %v", err)
 	}
-	page2, err := st.Search("proj", "widget", "", 2, 2)
+	page2, err := st.Search("proj", "widget", "", 2, 2, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 2: %v", err)
 	}
-	page3, err := st.Search("proj", "widget", "", 2, 4)
+	page3, err := st.Search("proj", "widget", "", 2, 4, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 3: %v", err)
 	}
@@ -169,6 +169,145 @@ func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 			t.Fatalf("seeded row id=%d missing from paginated results entirely", id)
 		}
 	}
+}
+
+// TestSearchFiltersByDateRange is the regression test for a real gap:
+// this project's own README excused skipping real claude-mem's
+// dateStart/dateEnd search filters with a rationale ("doesn't map onto
+// an existing column without a schema redesign") that was false — the
+// exact same shape of false excuse the offset test above already caught
+// for pagination. created_at_epoch already exists and is already
+// indexed (RecentByProject already queries it); this only needed a plain
+// WHERE clause. Seeds 3 rows with distinct, directly-set timestamps (not
+// Insert's own time.Now(), for exact control) and confirms dateStart/
+// dateEnd narrow results the same way real claude-mem's
+// SessionSearch.ts's identical >=/<= clauses do.
+func TestSearchFiltersByDateRange(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	day := int64(24 * 60 * 60 * 1000)
+	base := int64(1700000000000) // an arbitrary but fixed reference point
+	var ids [3]int64
+	for i := 0; i < 3; i++ {
+		res, err := st.Insert("s1", "proj", "Bash",
+			ContentHash("s1", "Bash", "daterange", string(rune('a'+i))),
+			Observation{Type: "discovery", Title: "dateranged gadget observation"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		ids[i] = res.ID
+		epoch := base + int64(i)*day
+		if _, err := st.db.Exec(`UPDATE observations SET created_at_epoch = ? WHERE id = ?`, epoch, res.ID); err != nil {
+			t.Fatalf("backdating row %d: %v", i, err)
+		}
+	}
+
+	// dateStart excludes day 0, keeps days 1 and 2.
+	fromDay1, err := st.Search("proj", "gadget", "", 10, 0, base+day, 0, "")
+	if err != nil {
+		t.Fatalf("Search with dateStart: %v", err)
+	}
+	if got := idSet(fromDay1); !got[ids[1]] || !got[ids[2]] || got[ids[0]] {
+		t.Fatalf("Search(dateStart=day1) returned ids %v, want day1 and day2 only (not day0)", got)
+	}
+
+	// dateEnd excludes day 2, keeps days 0 and 1.
+	toDay1, err := st.Search("proj", "gadget", "", 10, 0, 0, base+day, "")
+	if err != nil {
+		t.Fatalf("Search with dateEnd: %v", err)
+	}
+	if got := idSet(toDay1); !got[ids[0]] || !got[ids[1]] || got[ids[2]] {
+		t.Fatalf("Search(dateEnd=day1) returned ids %v, want day0 and day1 only (not day2)", got)
+	}
+
+	// Both bounds together isolate exactly day 1.
+	onlyDay1, err := st.Search("proj", "gadget", "", 10, 0, base+day, base+day, "")
+	if err != nil {
+		t.Fatalf("Search with both bounds: %v", err)
+	}
+	if len(onlyDay1) != 1 || onlyDay1[0].ID != ids[1] {
+		t.Fatalf("Search(dateStart=dateEnd=day1) = %+v, want exactly [day1]", onlyDay1)
+	}
+}
+
+func idSet(results []SearchResult) map[int64]bool {
+	m := make(map[int64]bool, len(results))
+	for _, r := range results {
+		m[r.ID] = true
+	}
+	return m
+}
+
+// TestSearchOrderBy locks in real claude-mem's own
+// SessionSearch.buildOrderClause semantics: "date_desc"/"date_asc" sort
+// by created_at_epoch regardless of text-match rank, and any other,
+// unrecognized value falls back to date_desc rather than silently being
+// treated as "relevance" — the exact fallback buildOrderClause's own
+// default case implements.
+func TestSearchOrderBy(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	day := int64(24 * 60 * 60 * 1000)
+	base := int64(1700000000000)
+	var ids [3]int64
+	for i := 0; i < 3; i++ {
+		res, err := st.Insert("s1", "proj", "Bash",
+			ContentHash("s1", "Bash", "orderby", string(rune('a'+i))),
+			Observation{Type: "discovery", Title: "orderby flavored widget"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		ids[i] = res.ID
+		if _, err := st.db.Exec(`UPDATE observations SET created_at_epoch = ? WHERE id = ?`,
+			base+int64(i)*day, res.ID); err != nil {
+			t.Fatalf("backdating row %d: %v", i, err)
+		}
+	}
+
+	desc, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "date_desc")
+	if err != nil {
+		t.Fatalf("Search date_desc: %v", err)
+	}
+	if len(desc) != 3 || desc[0].ID != ids[2] || desc[1].ID != ids[1] || desc[2].ID != ids[0] {
+		t.Fatalf("Search(orderBy=date_desc) ids = %v, want newest-first [%d,%d,%d]", idList(desc), ids[2], ids[1], ids[0])
+	}
+
+	asc, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "date_asc")
+	if err != nil {
+		t.Fatalf("Search date_asc: %v", err)
+	}
+	if len(asc) != 3 || asc[0].ID != ids[0] || asc[1].ID != ids[1] || asc[2].ID != ids[2] {
+		t.Fatalf("Search(orderBy=date_asc) ids = %v, want oldest-first [%d,%d,%d]", idList(asc), ids[0], ids[1], ids[2])
+	}
+
+	// Real claude-mem's own buildOrderClause treats any unrecognized
+	// orderBy value the same as date_desc, not as "relevance" — ported
+	// deliberately, not an accidental catch-all.
+	garbage, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "banana")
+	if err != nil {
+		t.Fatalf("Search with unrecognized orderBy: %v", err)
+	}
+	if len(garbage) != 3 || garbage[0].ID != ids[2] || garbage[1].ID != ids[1] || garbage[2].ID != ids[0] {
+		t.Fatalf("Search(orderBy=\"banana\") ids = %v, want the same as date_desc [%d,%d,%d]", idList(garbage), ids[2], ids[1], ids[0])
+	}
+}
+
+func idList(results []SearchResult) []int64 {
+	out := make([]int64, len(results))
+	for i, r := range results {
+		out[i] = r.ID
+	}
+	return out
 }
 
 // TestByIDsFetchesExactRowsAndOmitsUnknownIDs is the get_observations MCP

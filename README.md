@@ -355,11 +355,12 @@ docker compose up -d
   `obs_type`/`offset` filters real claude-mem's own search tool has.
   `-offset` was skipped in an earlier pass on a rationale that never
   actually applied to it: real claude-mem also has a date-range filter and
-  a sort-order option this project genuinely doesn't port since neither
-  maps onto an existing column without a real schema/query redesign, but
-  offset needed no column at all — a plain `LIMIT`/`OFFSET` on the
-  existing query, the same shape `RecentByProject` and every other
-  paginated read here already use for `limit`. Both backends' `Search`
+  a sort-order option this project's README used to claim neither
+  mapped onto an existing column without a real schema/query redesign —
+  also false, and since fixed; see below. Offset itself needed no column
+  at all — a plain `LIMIT`/`OFFSET` on the existing query, the same shape
+  `RecentByProject` and every other paginated read here already use for
+  `limit`. Both backends' `Search`
   now order by rank (bm25/`ts_rank_cd`) THEN `id`, not rank alone: a rank
   tie between two rows is real (identical term-frequency shape scores
   identically), and pagination via `LIMIT`/`OFFSET` needs a fully
@@ -1495,6 +1496,54 @@ observation, the actual `SessionStart` hook's `additionalContext` output
 (captured via the real `context` subcommand) diffed against the new
 tool's output for the same project and database through the real `mcp`
 subcommand — byte-for-byte identical.
+
+### `search` couldn't filter by date range or change sort order — despite this README's own claim that it needed a schema redesign
+
+This README used to excuse skipping real claude-mem's `dateStart`/
+`dateEnd`/`orderBy` search filters with a claim that neither "maps onto
+an existing column without a real schema/query redesign." That was
+false in exactly the same way this same paragraph already proved the
+`-offset` excuse false: real claude-mem's `SessionSearch.ts` implements
+both as plain `WHERE`/`ORDER BY` clauses against `created_at_epoch` — a
+column this schema already has and already indexes
+(`idx_observations_created`, the same one `RecentByProject` already
+queries). No migration, no new column, nothing this port's simpler
+schema lacked.
+
+Fixed by extending `Store.Search`/`postgres.Store.Search` with
+`dateStartMs, dateEndMs int64` (Unix epoch milliseconds, 0 = unbounded)
+and `orderBy string`. Date bounds are a straightforward `AND
+created_at_epoch >= ?`/`<= ?`. `orderBy` mirrors real claude-mem's own
+`SessionSearch.buildOrderClause` precisely: `"relevance"` (also the
+default when empty) ranks by the existing rank-then-id order;
+`"date_desc"`/`"date_asc"` switch to `created_at_epoch`, tied against
+`id` for the same pagination-determinism reason the rank tiebreak
+exists; any other, unrecognized value falls back to `date_desc` —
+matching `buildOrderClause`'s own default case exactly rather than
+silently treating a typo as "relevance."
+
+Wired through the `search_observations` MCP tool (`dateStart`/`dateEnd`
+as RFC3339 or bare `YYYY-MM-DD` strings, `orderBy`, matching real
+claude-mem's own tool schema) and the `search` CLI subcommand
+(`-date-start`/`-date-end`/`-order-by`). Date-string parsing
+(`store.ParseDateArg`) accepts the same two forms real claude-mem's
+`new Date(s).getTime()` does (a bare date is UTC midnight) plus a raw
+epoch-milliseconds string, shared by both call sites so they can't drift
+on what counts as a valid date.
+
+Verified against both real backends, including the live Postgres
+container: seeded rows with distinct, directly-set `created_at_epoch`
+values (not `Insert`'s own `time.Now()`, for exact control) and
+confirmed `dateStart` alone, `dateEnd` alone, and both together isolate
+exactly the expected rows; confirmed `date_desc`/`date_asc` return the
+expected newest-first/oldest-first id order and that an unrecognized
+`orderBy` value produces the identical order `date_desc` does — each
+confirmed as a genuine test, not a tautology, by temporarily removing
+the date-filter clause and watching the date-range test fail before
+restoring it. Verified live end to end too: the real compiled binary, a
+backdated row via direct SQL, a real `search_observations` call through
+the `mcp` subcommand with `dateStart` correctly excluding it, and
+`orderBy=date_asc` correctly ordering it first.
 
 ## Quick start
 

@@ -141,6 +141,9 @@ func tools() []toolDef {
 					"offset":       map[string]any{"type": "integer", "description": "Skip this many leading results, for paging past a prior call's limit (default 0)"},
 					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
 					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual (default: every type)"},
+					"dateStart":    map[string]any{"type": "string", "description": "Only observations created on or after this date (RFC3339 or YYYY-MM-DD)"},
+					"dateEnd":      map[string]any{"type": "string", "description": "Only observations created on or before this date (RFC3339 or YYYY-MM-DD)"},
+					"orderBy":      map[string]any{"type": "string", "description": "Sort order: date_desc or date_asc (default: relevance)"},
 				},
 				"required": []string{"query"},
 			},
@@ -450,6 +453,9 @@ type toolCallParams struct {
 		Anchor      int64    `json:"anchor"`       // timeline
 		DepthBefore int      `json:"depth_before"` // timeline
 		DepthAfter  int      `json:"depth_after"`  // timeline
+		DateStart   string   `json:"dateStart"`    // search_observations
+		DateEnd     string   `json:"dateEnd"`      // search_observations
+		OrderBy     string   `json:"orderBy"`      // search_observations
 	} `json:"arguments"`
 }
 
@@ -496,7 +502,16 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	case "important_workflow":
 		result = runImportantWorkflow()
 	case "search_observations":
-		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit, offset)
+		dateStartMs, dsErr := store.ParseDateArg(params.Arguments.DateStart)
+		dateEndMs, deErr := store.ParseDateArg(params.Arguments.DateEnd)
+		if dsErr != nil {
+			result = toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search_observations: invalid dateStart: " + dsErr.Error()}}}
+		} else if deErr != nil {
+			result = toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search_observations: invalid dateEnd: " + deErr.Error()}}}
+		} else {
+			result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit, offset,
+				dateStartMs, dateEndMs, params.Arguments.OrderBy)
+		}
 	case "semantic_search_observations":
 		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
 	case "observation_context":
@@ -570,8 +585,8 @@ func runImportantWorkflow() toolCallResult {
 **Why:** 10x token savings. Never fetch full details without filtering first.`}}}
 }
 
-func (s *Server) runSearch(project, query, obsType string, limit, offset int) toolCallResult {
-	results, err := s.st.Search(project, query, obsType, limit, offset)
+func (s *Server) runSearch(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) toolCallResult {
+	results, err := s.st.Search(project, query, obsType, limit, offset, dateStartMs, dateEndMs, orderBy)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
 	}
@@ -715,7 +730,7 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 	}
 
 	if anchor == 0 {
-		matches, err := s.st.Search(project, query, "", 1, 0)
+		matches, err := s.st.Search(project, query, "", 1, 0, 0, 0, "")
 		if err != nil {
 			return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: resolving anchor via query failed: " + err.Error()}}}
 		}

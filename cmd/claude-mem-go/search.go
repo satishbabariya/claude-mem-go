@@ -17,6 +17,9 @@ func cmdSearch(args []string) int {
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual (default: every type)")
 	offset := fs.Int("offset", 0, "skip this many leading results, for paging past a prior call's limit")
+	dateStart := fs.String("date-start", "", "only observations created on or after this date (RFC3339 or YYYY-MM-DD)")
+	dateEnd := fs.String("date-end", "", "only observations created on or before this date (RFC3339 or YYYY-MM-DD)")
+	orderBy := fs.String("order-by", "", "sort order: date_desc or date_asc (default: relevance)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 10, 100)
 	if *offset < 0 {
@@ -24,10 +27,22 @@ func cmdSearch(args []string) int {
 	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-type discovery|change|decision|summary|manual] [-limit N] [-offset N] <query>")
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-type discovery|change|decision|summary|manual] "+
+			"[-limit N] [-offset N] [-date-start date] [-date-end date] [-order-by relevance|date_desc|date_asc] <query>")
 		return 2
 	}
 	query := fs.Arg(0)
+
+	dateStartMs, err := store.ParseDateArg(*dateStart)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAILED parsing -date-start: %v\n", err)
+		return 2
+	}
+	dateEndMs, err := store.ParseDateArg(*dateEnd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAILED parsing -date-end: %v\n", err)
+		return 2
+	}
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
@@ -36,7 +51,7 @@ func cmdSearch(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.Search(*project, query, *obsType, *limit, *offset)
+	results, err := st.Search(*project, query, *obsType, *limit, *offset, dateStartMs, dateEndMs, *orderBy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1

@@ -520,6 +520,35 @@ process (this project doesn't cut tagged releases on a schedule).
   seeded observation, the actual `SessionStart` hook's `additionalContext`
   output diffed byte-for-byte against the new tool's output for the same
   project and database — identical.
+- **Added: `search`'s date-range filter and sort order — this README
+  had claimed both needed a real schema/query redesign, which was
+  false.** Real claude-mem's own search tool takes `dateStart`/
+  `dateEnd`/`orderBy` (`SessionSearch.ts`'s `>=`/`<=` clauses and
+  `buildOrderClause` against `created_at_epoch`), a column this schema
+  already has and already indexes (`idx_observations_created`) — the
+  identical shape of false excuse this same section already caught for
+  `-offset` a few entries back. Added `dateStartMs, dateEndMs int64` and
+  `orderBy string` to `Store.Search`/`postgres.Store.Search`: a plain
+  `AND created_at_epoch >= ?`/`<= ?`, and an order clause matching real
+  claude-mem's own `buildOrderClause` precisely — `"relevance"` (default)
+  ranks by the existing rank-then-id tiebreak, `"date_desc"`/
+  `"date_asc"` switch to `created_at_epoch` (tied against `id` for the
+  same pagination-determinism reason), and any unrecognized value falls
+  back to `date_desc` rather than silently becoming "relevance." Wired
+  through `search_observations` (`dateStart`/`dateEnd` as RFC3339 or
+  bare `YYYY-MM-DD`, `orderBy`) and the `search` CLI's new
+  `-date-start`/`-date-end`/`-order-by` flags, sharing one
+  `store.ParseDateArg` so both call sites agree on what counts as a
+  valid date. Verified against both real backends, including the live
+  Postgres container: seeded rows with directly-set `created_at_epoch`
+  values, confirmed `dateStart`/`dateEnd`/both-together isolate exactly
+  the expected rows and `date_desc`/`date_asc`/an unrecognized value
+  produce the expected id order — each confirmed as a genuine test by
+  temporarily removing the date-filter clause and watching it fail
+  before restoring it. Verified live end to end too: the real compiled
+  binary, a backdated row via direct SQL, a real `search_observations`
+  call correctly excluding it under `dateStart` and correctly ordering
+  it first under `orderBy=date_asc`.
 
 ## 0.2.0 — 2026-08-20
 
