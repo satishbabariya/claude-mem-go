@@ -69,8 +69,19 @@ func TestDoctorDoesNotReportALiveStateForADeadDaemon(t *testing.T) {
 			t.Errorf("reported %q for a daemon that is not running:\n%s", phantom, out)
 		}
 	}
-	if code != 0 {
-		t.Errorf("exit %d — a dead daemon's leftover stats must not fail the run critically:\n%s", code, out)
+	// The exit code is deliberately NOT asserted unconditionally. doctor
+	// aggregates every critical check, and on a machine without the
+	// `claude` CLI — every CI runner here — it exits non-zero for that
+	// entirely legitimate reason. Asserting exit 0 conflated "no phantom
+	// criticals" with "nothing else is wrong", and CI caught it: the run
+	// failed while the phantom findings were correctly absent.
+	//
+	// The property this test owns is the absence of live-state findings
+	// for a dead daemon, asserted directly above. The exit code is only
+	// meaningful when nothing else is failing, so check it only then.
+	if !strings.Contains(out, "✘") && code != 0 {
+		t.Errorf("exit %d with no critical check reported — a dead daemon's leftover stats "+
+			"must not fail the run:\n%s", code, out)
 	}
 	// The history is still worth showing, but must be labelled as history.
 	if !strings.Contains(out, "last worker activity before it stopped") {
