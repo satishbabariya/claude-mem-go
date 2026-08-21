@@ -37,7 +37,7 @@ func cmdFileContext(args []string) int {
 
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
-		l.Printf("FAILED parsing hook payload: %v", err)
+		l.Errorf("FAILED parsing hook payload: %v", err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -64,7 +64,7 @@ func cmdFileContext(args []string) int {
 		FilePath string `json:"file_path"`
 	}
 	if err := json.Unmarshal(in.ToolInput, &toolInput); err != nil || toolInput.FilePath == "" {
-		l.Printf("FAILED reading file_path from tool_input: %v (%s)", err, in.ToolInput)
+		l.Errorf("FAILED reading file_path from tool_input: %v (%s)", err, in.ToolInput)
 		fmt.Println("{}")
 		return 0
 	}
@@ -76,7 +76,7 @@ func cmdFileContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -87,7 +87,7 @@ func cmdFileContext(args []string) int {
 	// how the query's ORDER BY ended up being the whole policy.
 	results, err := st.ObservationsForFile(project, toolInput.FilePath, store.FileContextCandidateLimit(*limit))
 	if err != nil {
-		l.Printf("FAILED ObservationsForFile(%s): %v", toolInput.FilePath, err)
+		l.Errorf("FAILED ObservationsForFile(%s): %v", toolInput.FilePath, err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -143,7 +143,7 @@ func cmdFileContext(args []string) int {
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
-		l.Printf("FAILED marshaling output: %v", err)
+		l.Errorf("FAILED marshaling output: %v", err)
 		fmt.Println("{}")
 		return 0
 	}

@@ -3,9 +3,9 @@ package mcpserver
 import (
 	"bufio"
 	"bytes"
+	"claude-mem-go/logging"
 	"encoding/json"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,7 +43,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	}
 	st.Close() // Server.Run opens its own handle
 
-	return &Server{DBPath: dbPath, Log: log.New(&bytes.Buffer{}, "", 0)}, dbPath
+	return &Server{DBPath: dbPath, Log: logging.New(&bytes.Buffer{}, "", 0)}, dbPath
 }
 
 // runLines feeds each line as one JSON-RPC message and returns every
@@ -232,7 +232,7 @@ func TestToolsCallSearchObservationsFiltersByType(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"sprocket","type":"decision"}}}`,
 	})
@@ -272,7 +272,7 @@ func TestToolsCallSearchObservationsOffsetSkipsLeadingResults(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	unoffset := toolCallText(t, runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"gizmo","limit":1}}}`,
 	})[0])
@@ -319,7 +319,7 @@ func TestToolsCallLimitIsCappedRegardlessOfCallerValue(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets","limit":99999}}}`,
 	})
@@ -388,7 +388,7 @@ func TestSearchObservationsScopesToServerProject(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "project-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "project-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets"}}}`,
 	})
@@ -401,7 +401,7 @@ func TestSearchObservationsScopesToServerProject(t *testing.T) {
 	}
 
 	// all_projects:true is the explicit escape hatch — it must see both.
-	s2 := &Server{DBPath: dbPath, Project: "project-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "project-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"widgets","all_projects":true}}}`,
 	})
@@ -461,7 +461,7 @@ func TestToolsCallRecentObservationsScopesToServerProjectOrOverride(t *testing.T
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{}}}`,
 	})
@@ -470,7 +470,7 @@ func TestToolsCallRecentObservationsScopesToServerProjectOrOverride(t *testing.T
 		t.Fatalf("recent_observations defaulted to the server project incorrectly: %q", text)
 	}
 
-	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{"project":"proj-b"}}}`,
 	})
@@ -516,7 +516,7 @@ func TestToolsCallSessionObservationsReturnsOnlyThatSessionInOrder(t *testing.T)
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_observations","arguments":{"session_id":"session-x"}}}`,
 	})
@@ -562,7 +562,7 @@ func TestToolsCallFileObservationsFindsMentionsScopedToProject(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_observations","arguments":{"file_path":"main.go"}}}`,
 	})
@@ -607,7 +607,7 @@ func TestToolsCallGetObservationsReturnsFullDetailAndScopesToProject(t *testing.
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_observations","arguments":{"ids":[%d,%d]}}}`, ra.ID, rb.ID),
 	})
@@ -688,7 +688,7 @@ func TestToolsCallTimelineWithDirectAnchorReturnsSurroundingContext(t *testing.T
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d,"depth_before":1,"depth_after":1}}}`, anchorID),
 	})
@@ -723,7 +723,7 @@ func TestToolsCallTimelineResolvesAnchorFromQuery(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"query":"rate limiting"}}}`,
 	})
@@ -763,7 +763,7 @@ func TestToolsCallTimelineRejectsBothAnchorAndQuery(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d,"query":"anything"}}}`, res.ID),
 	})
@@ -799,7 +799,7 @@ func TestToolsCallTimelineDefaultDepthIsTen(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"timeline","arguments":{"anchor":%d}}}`, anchorID),
 	})
@@ -827,7 +827,7 @@ func TestToolsCallAddObservationPersistsAndIsFindable(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"decided to use Postgres for scale","narrative":"team agreed local SQLite wasn't enough","facts":["fact one"],"concepts":["architecture"]}}}`,
 	})
@@ -836,7 +836,7 @@ func TestToolsCallAddObservationPersistsAndIsFindable(t *testing.T) {
 		t.Fatalf("add_observation response = %q, want it to confirm the observation was remembered", text)
 	}
 
-	s2 := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recent_observations","arguments":{}}}`,
 	})
@@ -867,7 +867,7 @@ func TestToolsCallAddObservationIsSemanticallySearchable(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"switched the database to Postgres for production scale","narrative":"local SQLite could not keep up with concurrent writes"}}}`,
 	})
@@ -876,7 +876,7 @@ func TestToolsCallAddObservationIsSemanticallySearchable(t *testing.T) {
 		t.Fatalf("add_observation reported an embedding failure even though Ollama is reachable: %q", text)
 	}
 
-	s2 := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"semantic_search_observations","arguments":{"query":"why did we move off of sqlite"}}}`,
 	})
@@ -896,7 +896,7 @@ func TestToolsCallAddObservationIsIdempotentWithinASession(t *testing.T) {
 		t.Fatalf("first add_observation call: want success, got %v", resp[0])
 	}
 
-	s2 := &Server{DBPath: dbPath, Project: "proj", SessionID: s.SessionID, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "proj", SessionID: s.SessionID, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{call})
 	text2 := toolCallText(t, resp2[0])
 	if !strings.Contains(text2, "Already remembered") {
@@ -1068,7 +1068,7 @@ func TestToolsCallObservationContextReturnsThePromptContextHookFormat(t *testing
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"observation_context","arguments":{"query":"why did we move off of sqlite"}}}`,
 	})
@@ -1117,7 +1117,7 @@ func TestToolsCallSessionStartContextReturnsTheContextHookFormat(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
 	})
@@ -1150,7 +1150,7 @@ func TestToolsCallSessionStartContextDefaultLimitMatchesRealHook(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
 	})
@@ -1178,7 +1178,7 @@ func TestToolsCallSessionStartContextScopesToServerProjectOrOverride(t *testing.
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
 	})
@@ -1187,7 +1187,7 @@ func TestToolsCallSessionStartContextScopesToServerProjectOrOverride(t *testing.
 		t.Fatalf("session_start_context defaulted to the server project incorrectly: %q", text)
 	}
 
-	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s2 := &Server{DBPath: dbPath, Project: "proj-a", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp2 := runLines(t, s2, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{"project":"proj-b"}}}`,
 	})
@@ -1221,7 +1221,7 @@ func TestToolsCallSessionStartContextEmptyProjectSaysSo(t *testing.T) {
 	}
 	st.Close()
 
-	s := &Server{DBPath: dbPath, Project: "empty-proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	s := &Server{DBPath: dbPath, Project: "empty-proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
 	resp := runLines(t, s, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
 	})

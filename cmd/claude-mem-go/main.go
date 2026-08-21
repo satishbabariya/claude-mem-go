@@ -25,6 +25,7 @@
 package main
 
 import (
+	"claude-mem-go/logging"
 	"fmt"
 	"log"
 	"os"
@@ -84,10 +85,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: claude-mem-go <worker|hook|ingest> [flags]")
 }
 
-func openLog(name string) *log.Logger {
+func openLog(name string) *logging.Logger {
 	w, err := newRotatingWriter(store.DefaultHome()+"/"+name, defaultMaxLogBytes)
 	if err != nil {
-		return log.New(os.Stderr, "", log.LstdFlags)
+		return logging.New(os.Stderr, "", log.LstdFlags)
 	}
-	return log.New(w, "", log.LstdFlags)
+	return logging.New(w, "", log.LstdFlags)
 }

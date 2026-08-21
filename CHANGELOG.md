@@ -7,6 +7,36 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Log levels — 97 call sites had exactly one implicit severity.** Real
+  claude-mem has had leveled logging from the start
+  (`src/utils/logger.ts`: `LogLevel{DEBUG,INFO,WARN,ERROR,SILENT}` read
+  from `CLAUDE_MEM_LOG_LEVEL`); this port had no level concept at all, so
+  there was no way to quiet routine chatter or ask for more detail, and
+  nothing separated "this is fine" from "this failed". The cost was
+  measured rather than assumed: a real install's `hook.log` held **76
+  routine "forwarded N bytes" lines against 2 genuine failures** — the
+  information needed to filter was already there, in an informal prefix
+  convention (23 sites beginning `FAILED`, 16 `skip:`, 7 `no `), just not
+  machine-readable. New `logging` package with the same level names and
+  the same `CLAUDE_MEM_LOG_LEVEL` variable, so one setting configures
+  either implementation. `Logger` **embeds** `*log.Logger`, so all 97
+  existing `Printf` call sites compile untouched and pick up filtering for
+  free; `Printf` is deliberately overridden to mean Info rather than
+  "always print", since otherwise every legacy call site would outrank
+  `Errorf` by being unsuppressable — inverting the hierarchy the package
+  exists to create. 32 `FAILED` sites were reclassified to `Errorf` by
+  their own existing prefix, and the single per-tool-call line to
+  `Debugf`. Verified with the real binary: `DEBUG` shows that line and
+  `INFO` hides it, `SILENT` suppresses everything, an `ERROR` is emitted
+  at every level above it, and a typo'd level falls back to INFO rather
+  than silencing — a configuration mistake must not hide its own
+  evidence, which for fire-and-forget hooks is the only diagnosis there
+  is. The level prints as a bare leading word, so `grep FAILED` keeps
+  working and `grep ERROR` now does too. Deliberately **not** structured
+  JSON: real claude-mem emits leveled text, these files are read directly
+  by humans and quoted by `doctor`, and changing format would break every
+  existing habit for no parity gain.
+
 - **The worker daemon could be writing to a different store than
   everything else read, invisibly.** The daemon opens its store once at
   start and never re-reads `$CLAUDE_MEM_DB` — correctly, since switching

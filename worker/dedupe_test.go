@@ -2,7 +2,7 @@ package worker
 
 import (
 	"bytes"
-	"log"
+	"claude-mem-go/logging"
 	"testing"
 	"time"
 
@@ -35,7 +35,7 @@ func TestParseDedupeQueryRoundTrips(t *testing.T) {
 // checked again immediately IS a duplicate; a genuinely different hash
 // for the same session is not.
 func TestCheckDuplicatePromptReflectsRealState(t *testing.T) {
-	d := &Daemon{Log: log.New(&bytes.Buffer{}, "", 0)}
+	d := &Daemon{Log: logging.New(&bytes.Buffer{}, "", 0)}
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{}}
 	socketPath := newTestSocket(t, d)
 

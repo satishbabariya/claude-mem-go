@@ -14,10 +14,10 @@ package worker
 import (
 	"bufio"
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -57,7 +57,7 @@ type Daemon struct {
 	DBPath        string
 	SocketPath    string
 	MaxConcurrent int // mirrors CLAUDE_MEM_MAX_CONCURRENT_AGENTS's default of 2
-	Log           *log.Logger
+	Log           *logging.Logger
 	// StatsPath is where Stats snapshots are written after every processed
 	// event — see stats.go. Empty disables writing (tests mostly want this;
 	// a real daemon always wants it, so cmd's daemon construction sets it to
@@ -124,7 +124,7 @@ func (d *Daemon) recordStats() {
 		return
 	}
 	if err := writeStatsFile(d.StatsPath, d.Stats()); err != nil {
-		d.Log.Printf("FAILED writing stats file %s: %v", d.StatsPath, err)
+		d.Log.Errorf("FAILED writing stats file %s: %v", d.StatsPath, err)
 	}
 }
 
@@ -202,7 +202,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		metricsSrv := &http.Server{Addr: d.MetricsAddr, Handler: mux}
 		go func() {
 			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				d.Log.Printf("FAILED serving metrics on %s: %v", d.MetricsAddr, err)
+				d.Log.Errorf("FAILED serving metrics on %s: %v", d.MetricsAddr, err)
 			}
 		}()
 		go func() {
@@ -287,7 +287,7 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			d.Log.Printf("client connected but never sent a complete payload within %s — closing (stalled client, or a bug in a caller not going through hook.Forward)", handleConnReadTimeout)
 		} else {
-			d.Log.Printf("FAILED reading from client: %v", err)
+			d.Log.Errorf("FAILED reading from client: %v", err)
 		}
 		return
 	}
@@ -393,7 +393,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 
 	in, err := claudeagent.ParseHookInput(bytes.NewReader(raw))
 	if err != nil {
-		d.Log.Printf("FAILED parsing payload: %v (%d bytes)", err, len(raw))
+		d.Log.Errorf("FAILED parsing payload: %v (%d bytes)", err, len(raw))
 		return
 	}
 	if in.ToolName == "" {
@@ -439,7 +439,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	queueStart := time.Now()
 	entry, err := d.sessions.getOrCreate(ctx, in.SessionID)
 	if err != nil {
-		d.Log.Printf("FAILED to get/create observer session for %s: %v", in.SessionID, err)
+		d.Log.Errorf("FAILED to get/create observer session for %s: %v", in.SessionID, err)
 		d.counters.observerErrors.Add(1)
 		return
 	}
@@ -489,7 +489,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 			turn, turnErr = observer.ObserveOneShot(ctx, d.Model, tc)
 		}
 		if turnErr != nil {
-			d.Log.Printf("FAILED observer turn: %v", turnErr)
+			d.Log.Errorf("FAILED observer turn: %v", turnErr)
 			d.counters.observerErrors.Add(1)
 			return
 		}
@@ -507,7 +507,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	hash := store.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
 	res, err := d.st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
-		d.Log.Printf("FAILED sqlite insert: %v", err)
+		d.Log.Errorf("FAILED sqlite insert: %v", err)
 		d.counters.insertErrors.Add(1)
 		return
 	}

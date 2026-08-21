@@ -1,8 +1,8 @@
 package main
 
 import (
+	"claude-mem-go/logging"
 	"flag"
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -51,7 +51,7 @@ func cmdStart(args []string) int {
 
 	self, err := os.Executable()
 	if err != nil {
-		l.Printf("FAILED to resolve our own executable path: %v", err)
+		l.Errorf("FAILED to resolve our own executable path: %v", err)
 		return 1
 	}
 	workerArgs := []string{
@@ -69,14 +69,14 @@ func cmdStart(args []string) int {
 		workerArgs = append(workerArgs, "-excluded-projects", *excludedProjects)
 	}
 	if err := worker.SpawnDetached(self, workerArgs); err != nil {
-		l.Printf("FAILED to spawn worker: %v", err)
+		l.Errorf("FAILED to spawn worker: %v", err)
 		return 1
 	}
 	l.Printf("spawned a detached worker, waiting for it to become ready")
 	waitForReady(*socketPath, l)
 	return 0
 }
-func waitForReady(socketPath string, l *log.Logger) {
+func waitForReady(socketPath string, l *logging.Logger) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if worker.IsRunning(socketPath) {

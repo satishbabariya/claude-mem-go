@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +26,7 @@ import (
 // independent of any specific bug.
 func TestProcessPanicRecoverySurvives(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 
 	payload := []byte(`{"session_id":"s1","cwd":"/proj","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{}}`)
 

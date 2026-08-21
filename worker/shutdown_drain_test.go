@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,7 +60,7 @@ func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 	handle := &blockingHandleWithValidType{release: release}
 	p := pool.New(2)
 	d := &Daemon{
-		Log: log.New(&bytes.Buffer{}, "", 0),
+		Log: logging.New(&bytes.Buffer{}, "", 0),
 		st:  st,
 	}
 	d.sessions = newSessionCache(p, func(ctx context.Context) (observer.Handle, error) {
@@ -104,7 +104,7 @@ func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 // non-regression counterpart: a daemon with no dispatched work at all
 // must not wait out processDrainGracePeriod for no reason.
 func TestWaitForProcessDrainReturnsImmediatelyWithNothingInFlight(t *testing.T) {
-	d := &Daemon{Log: log.New(&bytes.Buffer{}, "", 0)}
+	d := &Daemon{Log: logging.New(&bytes.Buffer{}, "", 0)}
 	start := time.Now()
 	d.waitForProcessDrain()
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {

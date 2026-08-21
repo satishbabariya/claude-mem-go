@@ -41,7 +41,7 @@ func cmdContext(args []string) int {
 
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
-		l.Printf("FAILED parsing hook payload: %v", err)
+		l.Errorf("FAILED parsing hook payload: %v", err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -61,7 +61,7 @@ func cmdContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -78,7 +78,7 @@ func cmdContext(args []string) int {
 	// getProjectContext(cwd).allProjects, not .primary).
 	recent, err := recentAcrossProjects(st, pc.AllProjects, *limit)
 	if err != nil {
-		l.Printf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
+		l.Errorf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -95,7 +95,7 @@ func cmdContext(args []string) int {
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
-		l.Printf("FAILED marshaling output: %v", err)
+		l.Errorf("FAILED marshaling output: %v", err)
 		fmt.Println("{}")
 		return 0
 	}

@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"net"
 	"strings"
 	"testing"
@@ -25,7 +25,7 @@ import (
 // fail this test too.
 func TestHandleConnRejectsOversizedPayload(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 
 	serverConn, clientConn := net.Pipe()
 	done := make(chan struct{})
@@ -65,7 +65,7 @@ func TestHandleConnRejectsOversizedPayload(t *testing.T) {
 // nothing at all.
 func TestHandleConnClosesStalledClientAfterReadDeadline(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 
 	original := handleConnReadTimeout
 	handleConnReadTimeout = 50 * time.Millisecond

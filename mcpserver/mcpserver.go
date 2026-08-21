@@ -18,13 +18,13 @@ package mcpserver
 import (
 	"bufio"
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"runtime/debug"
 	"strings"
 
@@ -330,7 +330,7 @@ type Server struct {
 	// comment. Ignored entirely for a SQLite DBPath. 0 (the zero value)
 	// leaves pgvector's built-in default (40) in place.
 	HNSWEfSearch int
-	Log          *log.Logger
+	Log          *logging.Logger
 
 	st store.Backend
 }
@@ -372,7 +372,7 @@ func (s *Server) Run(r io.Reader, w io.Writer) error {
 		}
 		out, err := json.Marshal(resp)
 		if err != nil {
-			s.Log.Printf("FAILED marshaling response: %v", err)
+			s.Log.Errorf("FAILED marshaling response: %v", err)
 			continue
 		}
 		if _, err := w.Write(append(out, '\n')); err != nil {

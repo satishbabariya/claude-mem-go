@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -423,7 +423,7 @@ func TestProcessTouchesSessionAfterSuccessfulTurn(t *testing.T) {
 	const delay = 50 * time.Millisecond
 	entry := &sessionEntry{handle: &slowFakeHandle{delay: delay}}
 
-	d := &Daemon{Log: log.New(&bytes.Buffer{}, "", 0), st: st}
+	d := &Daemon{Log: logging.New(&bytes.Buffer{}, "", 0), st: st}
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
 
 	beforeCall := time.Now()

@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +21,7 @@ import (
 // the exclusion check happens first, not just that it exists somewhere.
 func TestProcessSkipsExcludedProjectBeforeAnyRealWork(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0), ExcludedProjects: "excluded-*"}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0), ExcludedProjects: "excluded-*"}
 
 	payload := []byte(`{"session_id":"s1","cwd":"/tmp/excluded-project","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{}}`)
 
@@ -60,7 +60,7 @@ func TestProcessSkipsExcludedProjectBeforeAnyRealWork(t *testing.T) {
 // without ExcludedProjects set at all).
 func TestProcessDoesNotSkipAnUnmatchedProject(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0), ExcludedProjects: "excluded-*"}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0), ExcludedProjects: "excluded-*"}
 
 	payload := []byte(`{"session_id":"s1","cwd":"/tmp/normal-project","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{}}`)
 

@@ -66,7 +66,7 @@ func MetricsHandler(d *Daemon) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		if err := WriteMetrics(w, d.Stats()); err != nil {
-			d.Log.Printf("FAILED writing metrics response: %v", err)
+			d.Log.Errorf("FAILED writing metrics response: %v", err)
 		}
 	})
 }

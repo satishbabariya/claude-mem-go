@@ -64,7 +64,7 @@ func cmdPromptContext(args []string) int {
 
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
-		l.Printf("FAILED parsing hook payload: %v", err)
+		l.Errorf("FAILED parsing hook payload: %v", err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -144,14 +144,14 @@ func cmdPromptContext(args []string) int {
 
 	vec, err := embed.NewClient(*embedModel).Embed(prompt)
 	if err != nil {
-		l.Printf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
+		l.Errorf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
 		fmt.Println("{}")
 		return 0
 	}
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -159,7 +159,7 @@ func cmdPromptContext(args []string) int {
 
 	matches, err := st.SemanticSearch(project, vec, *limit)
 	if err != nil {
-		l.Printf("FAILED SemanticSearch for project=%s: %v", project, err)
+		l.Errorf("FAILED SemanticSearch for project=%s: %v", project, err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -176,7 +176,7 @@ func cmdPromptContext(args []string) int {
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
-		l.Printf("FAILED marshaling output: %v", err)
+		l.Errorf("FAILED marshaling output: %v", err)
 		fmt.Println("{}")
 		return 0
 	}

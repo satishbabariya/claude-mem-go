@@ -1,13 +1,13 @@
 package worker
 
 import (
+	"claude-mem-go/logging"
 	"io"
-	"log"
 	"path/filepath"
 	"testing"
 )
 
-func nopLogger() *log.Logger { return log.New(io.Discard, "", 0) }
+func nopLogger() *logging.Logger { return logging.New(io.Discard, "", 0) }
 
 func TestStatsCountersSnapshotReflectsIncrements(t *testing.T) {
 	var c statsCounters

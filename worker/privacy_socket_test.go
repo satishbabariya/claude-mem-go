@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -85,7 +85,7 @@ func newTestSocket(t *testing.T, d *Daemon) string {
 // (the case that matters most: this is what stops the flag going stale
 // once a session's next prompt isn't private) reads back as false too.
 func TestSetSessionPrivateThenQueryPrivateReflectsRealState(t *testing.T) {
-	d := &Daemon{Log: log.New(&bytes.Buffer{}, "", 0)}
+	d := &Daemon{Log: logging.New(&bytes.Buffer{}, "", 0)}
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{}}
 	socketPath := newTestSocket(t, d)
 
@@ -145,7 +145,7 @@ func TestSetSessionPrivateThenQueryPrivateReflectsRealState(t *testing.T) {
 // just that it exists somewhere.
 func TestProcessSkipsWhenSessionMarkedPrivate(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 	d.sessions = &sessionCache{}
 	d.sessions.setPrivate("s1", true)
 
@@ -177,7 +177,7 @@ func TestProcessSkipsWhenSessionMarkedPrivate(t *testing.T) {
 // privacy state involved.
 func TestProcessDoesNotSkipWhenNotMarkedPrivate(t *testing.T) {
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 	d.sessions = &sessionCache{}
 
 	payload := []byte(`{"session_id":"s1","cwd":"/proj","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{}}`)

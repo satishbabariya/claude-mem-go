@@ -260,7 +260,7 @@ func cmdStop(args []string) int {
 
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
-		l.Printf("FAILED parsing hook payload: %v", err)
+		l.Errorf("FAILED parsing hook payload: %v", err)
 		return 0
 	}
 	if in.SessionID == "" {
@@ -318,7 +318,7 @@ func cmdStop(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		return 0
 	}
 	defer st.Close()
@@ -358,7 +358,7 @@ func cmdStop(args []string) int {
 	}
 	observations, err := waitForSessionObservations(st, in.SessionID, *limit, inFlight)
 	if err != nil {
-		l.Printf("FAILED BySessionID(%s): %v", in.SessionID, err)
+		l.Errorf("FAILED BySessionID(%s): %v", in.SessionID, err)
 		return 0
 	}
 	if len(observations) == 0 {
@@ -405,20 +405,20 @@ func cmdStop(args []string) int {
 
 	obs, err := observer.New(context.Background(), *model)
 	if err != nil {
-		l.Printf("FAILED to start observer: %v", err)
+		l.Errorf("FAILED to start observer: %v", err)
 		return 0
 	}
 	defer obs.Close()
 
 	summaryTurn, err := obs.Summarize(window)
 	if err != nil {
-		l.Printf("FAILED summarizing session %s: %v", in.SessionID, err)
+		l.Errorf("FAILED summarizing session %s: %v", in.SessionID, err)
 		return 0
 	}
 
 	res, err := st.Insert(in.SessionID, project, "SessionSummary", hash, summaryTurn.Observation, summaryTurn.Result.CostUSD)
 	if err != nil {
-		l.Printf("FAILED sqlite insert: %v", err)
+		l.Errorf("FAILED sqlite insert: %v", err)
 		return 0
 	}
 	if !res.Inserted {

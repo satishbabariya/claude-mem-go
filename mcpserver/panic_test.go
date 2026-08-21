@@ -2,7 +2,7 @@ package mcpserver
 
 import (
 	"bytes"
-	"log"
+	"claude-mem-go/logging"
 	"strings"
 	"testing"
 
@@ -79,7 +79,7 @@ var _ store.Backend = panickingBackend{}
 // isError-shaped JSON-RPC error instead of the connection just dying.
 func TestHandlePanicRecoverySurvivesAndReturnsCleanError(t *testing.T) {
 	var logBuf bytes.Buffer
-	s := &Server{Project: "proj", Log: log.New(&logBuf, "", 0)}
+	s := &Server{Project: "proj", Log: logging.New(&logBuf, "", 0)}
 	s.st = panickingBackend{} // bypass Run()/backend.Open — this is a fault-injection double, not a real store
 
 	req := rpcRequest{

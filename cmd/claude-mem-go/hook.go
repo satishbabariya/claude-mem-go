@@ -18,9 +18,9 @@ func cmdHook(args []string) int {
 	if err != nil {
 		// A missing/unreachable daemon must never surface as a Claude
 		// Code-visible hook failure — log loudly, exit clean.
-		l.Printf("FAILED forwarding to worker at %s: %v (is `claude-mem-go worker` running?)", *socketPath, err)
+		l.Errorf("FAILED forwarding to worker at %s: %v (is `claude-mem-go worker` running?)", *socketPath, err)
 		return 0
 	}
-	l.Printf("forwarded %d bytes to worker, exiting immediately", n)
+	l.Debugf("forwarded %d bytes to worker, exiting immediately", n)
 	return 0
 }

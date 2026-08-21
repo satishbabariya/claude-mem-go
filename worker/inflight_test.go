@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -94,7 +94,7 @@ func TestInFlightQueryReflectsARealInProgressEvent(t *testing.T) {
 	}
 	defer ln.Close()
 
-	d := &Daemon{Log: log.New(&logBuf, "", 0), st: st}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0), st: st}
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
 
 	ctx, cancel := context.WithCancel(context.Background())

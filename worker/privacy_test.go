@@ -2,8 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"claude-mem-go/logging"
 	"context"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,7 +44,7 @@ func TestProcessStripsPrivacyTagsBeforeObserving(t *testing.T) {
 	entry := &sessionEntry{handle: handle}
 
 	var logBuf bytes.Buffer
-	d := &Daemon{Log: log.New(&logBuf, "", 0)}
+	d := &Daemon{Log: logging.New(&logBuf, "", 0)}
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
