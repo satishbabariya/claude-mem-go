@@ -196,13 +196,36 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 }
 
+// handleConnReadTimeout bounds how long handleConn will wait for a client
+// to finish sending its payload — see handleConn's own doc comment for
+// the real leak this closes. A var, not a const, so a test can shrink it
+// to run the same "did the deadline actually fire" assertion near-
+// instantly rather than waiting out the real production value.
+var handleConnReadTimeout = 30 * time.Second
+
 // handleConn reads exactly one hook payload, then processes it in the
 // background. The client (hook.Forward) doesn't wait for a response — it
 // writes and closes — so there's nothing to ACK over the wire; what matters
 // is that the work now happens on the daemon's own process, which the
 // client's exit cannot kill.
+//
+// A real gap found by hand, not yet hit in production but real
+// nonetheless: nothing here bounded wall-clock time, only byte count
+// (hook.MaxPayloadBytes) — a client that dials this socket and then never
+// writes or closes (a stalled process, a hung network namespace, or
+// simply a bug in some future or different client that doesn't go
+// through hook.Forward) leaks this goroutine and its underlying FD for as
+// long as the daemon runs, which per sessionIdleTimeout's own doc comment
+// is meant to be days. More relevant now that INFLIGHT queries
+// (hook.QueryInFlight) share this same socket as a synchronous
+// request/response protocol, not just the original one-way hook forward
+// — the client side already sets its own deadline (see QueryInFlight),
+// but nothing on this, the server side, ever did. handleConnReadTimeout
+// is generous enough that neither a normal hook forward (near-instant on
+// a local Unix socket) nor a real INFLIGHT query ever comes close to it.
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(handleConnReadTimeout))
 	// hook.MaxPayloadBytes, not unbounded: hook.Forward already enforces
 	// this on the client side, but this daemon is the one long-lived
 	// process every project on the machine shares — a future or
@@ -213,7 +236,11 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	// buffer more than one byte past the limit.
 	raw, err := io.ReadAll(io.LimitReader(bufio.NewReader(conn), hook.MaxPayloadBytes+1))
 	if err != nil {
-		d.Log.Printf("FAILED reading from client: %v", err)
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			d.Log.Printf("client connected but never sent a complete payload within %s — closing (stalled client, or a bug in a caller not going through hook.Forward)", handleConnReadTimeout)
+		} else {
+			d.Log.Printf("FAILED reading from client: %v", err)
+		}
 		return
 	}
 	if len(raw) > hook.MaxPayloadBytes {

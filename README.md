@@ -801,6 +801,25 @@ over its actual socket, confirmed the daemon logged a rejection and
 stayed alive, then sent a normal-sized payload through the same daemon
 and confirmed it processed normally afterward.
 
+Bounded in bytes, but not in wall-clock time until a later pass found the
+gap: `handleConn`'s read had no deadline at all, only the byte cap above —
+a client that dials the socket and never writes or closes (a stalled
+process, or a bug in some future caller not going through `hook.Forward`)
+leaked that goroutine and its underlying file descriptor for as long as
+the daemon ran, which is meant to be days. More relevant once the
+`INFLIGHT` query protocol (see the Stop-hook section above) started
+sharing this same socket as a synchronous request/response exchange, not
+just the original one-way hook forward — the client side already set its
+own deadline, but the server side never did. Fixed with a
+`handleConnReadTimeout` (30s, generous enough that neither a normal hook
+forward nor a real `INFLIGHT` query — both near-instant on a local Unix
+socket — ever come close to it). Verified with a real `net.Conn` (not
+mocked): a test shrinks the timeout, connects a client that deliberately
+never writes or closes, and confirms `handleConn` actually returns once
+the deadline elapses rather than hanging — confirmed as a genuine
+regression test by temporarily removing the deadline call and watching
+the test time out before restoring it.
+
 ### Truncation used to be able to corrupt real tool output mid-character
 
 `transcript.Truncate` (and `Parse`'s internal `truncate`) caps every

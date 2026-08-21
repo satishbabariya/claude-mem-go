@@ -154,6 +154,23 @@ process (this project doesn't cut tagged releases on a schedule).
   `offset` argument actually reaches `Search`, not just that `Search`
   itself works) and live end to end against the shared Postgres
   container through the compiled binary, paging real accumulated data.
+- **`worker.handleConn` now bounds wall-clock time, not just byte count**.
+  Before this, a client that dials the daemon's socket and never writes
+  or closes (a stalled process, or a bug in some future caller not going
+  through `hook.Forward`) leaked that goroutine and its underlying file
+  descriptor for as long as the daemon ran — meant to be days. More
+  relevant now that the `INFLIGHT` query protocol shares this socket as a
+  synchronous request/response exchange, not just the original one-way
+  hook forward: the client side (`hook.QueryInFlight`) already set its
+  own deadline, but the server side never did. Fixed with a
+  `handleConnReadTimeout` (30s — generous enough that neither a normal
+  hook forward nor a real `INFLIGHT` query, both near-instant on a local
+  Unix socket, ever approach it). Verified with a real `net.Conn`: a test
+  shrinks the timeout, connects a client that deliberately never writes
+  or closes, and confirms `handleConn` actually returns once the deadline
+  elapses — confirmed as a genuine regression test by temporarily
+  removing the deadline call and watching the test time out before
+  restoring it.
 
 ## 0.2.0 — 2026-08-20
 
