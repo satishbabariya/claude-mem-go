@@ -168,7 +168,13 @@ func clampNegativeLimit(limit int) int {
 
 // Search runs an FTS5 MATCH query across title/subtitle/narrative/facts/
 // concepts, ranked by bm25 (FTS5's built-in relevance function — lower is
-// better, so ORDER BY rank ascending is "best match first").
+// better, so ORDER BY rank ascending is "best match first"). Ordered by
+// rank THEN id, not rank alone: bm25 ties are real (rows with identical
+// term-frequency shape score identically), and pagination via LIMIT/OFFSET
+// needs a fully deterministic order or two consecutive calls with
+// different offsets could return the same row twice or skip one entirely,
+// depending only on whatever arbitrary order SQLite happens to visit tied
+// rows in.
 //
 // project scopes the search to one project when non-empty; empty searches
 // every project in the store. This store is a single shared database across
@@ -177,8 +183,9 @@ func clampNegativeLimit(limit int) int {
 // own search_observations tool) always passes the current project; the
 // plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
 // lookups from a terminal.
-func (s *Store) Search(project, query, obsType string, limit int) ([]SearchResult, error) {
+func (s *Store) Search(project, query, obsType string, limit, offset int) ([]SearchResult, error) {
 	limit = clampNegativeLimit(limit)
+	offset = clampNegativeLimit(offset)
 	args := []any{sanitizeFTSQuery(query)}
 	scope := ""
 	if project != "" {
@@ -190,21 +197,24 @@ func (s *Store) Search(project, query, obsType string, limit int) ([]SearchResul
 	// observer prompt, summary from the Stop hook, manual from
 	// add_observation) — real claude-mem's own search tool calls this
 	// obs_type, one of a handful of filters (date range, offset, sort
-	// order) its search has that this one doesn't; type is the one that
-	// maps directly onto an existing column with no schema change.
+	// order) its search used to have that this one didn't; type maps
+	// directly onto an existing column with no schema change, and offset
+	// (added since) needs no column at all — a plain LIMIT/OFFSET on the
+	// existing ORDER BY, previously skipped on a rationale that only ever
+	// actually applied to date range and sort order.
 	if obsType != "" {
 		scope += " AND o.type = ?"
 		args = append(args, obsType)
 	}
-	args = append(args, limit)
+	args = append(args, limit, offset)
 	rows, err := s.db.Query(`
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified
 		FROM observations_fts f
 		JOIN observations o ON o.id = f.rowid
 		WHERE observations_fts MATCH ? `+scope+`
-		ORDER BY rank
-		LIMIT ?`, args...)
+		ORDER BY rank, o.id
+		LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("fts5 search %q: %w", query, err)
 	}

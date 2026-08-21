@@ -138,6 +138,7 @@ func tools() []toolDef {
 				"properties": map[string]any{
 					"query":        map[string]any{"type": "string", "description": "Search terms"},
 					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
+					"offset":       map[string]any{"type": "integer", "description": "Skip this many leading results, for paging past a prior call's limit (default 0)"},
 					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
 					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual (default: every type)"},
 				},
@@ -419,6 +420,7 @@ type toolCallParams struct {
 	Arguments struct {
 		Query       string   `json:"query"`
 		Limit       int      `json:"limit"`
+		Offset      int      `json:"offset"` // search_observations: skip this many leading results
 		AllProjects bool     `json:"all_projects"`
 		ObsType     string   `json:"type"`         // search_observations: filter by observation type
 		Project     string   `json:"project"`      // recent_observations, file_observations, add_observation: override the current project
@@ -453,6 +455,10 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	} else if limit > maxLimit {
 		limit = maxLimit
 	}
+	offset := params.Arguments.Offset
+	if offset < 0 {
+		offset = 0
+	}
 
 	project := s.Project
 	if params.Arguments.AllProjects {
@@ -475,7 +481,7 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	case "important_workflow":
 		result = runImportantWorkflow()
 	case "search_observations":
-		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit)
+		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit, offset)
 	case "semantic_search_observations":
 		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
 	case "observation_context":
@@ -537,8 +543,8 @@ func runImportantWorkflow() toolCallResult {
 **Why:** 10x token savings. Never fetch full details without filtering first.`}}}
 }
 
-func (s *Server) runSearch(project, query, obsType string, limit int) toolCallResult {
-	results, err := s.st.Search(project, query, obsType, limit)
+func (s *Server) runSearch(project, query, obsType string, limit, offset int) toolCallResult {
+	results, err := s.st.Search(project, query, obsType, limit, offset)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
 	}
@@ -653,7 +659,7 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 	}
 
 	if anchor == 0 {
-		matches, err := s.st.Search(project, query, "", 1)
+		matches, err := s.st.Search(project, query, "", 1, 0)
 		if err != nil {
 			return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: resolving anchor via query failed: " + err.Error()}}}
 		}

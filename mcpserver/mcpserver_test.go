@@ -245,6 +245,57 @@ func TestToolsCallSearchObservationsFiltersByType(t *testing.T) {
 	}
 }
 
+// TestToolsCallSearchObservationsOffsetSkipsLeadingResults is the
+// regression test for a real gap at the MCP protocol boundary: offset
+// reaching store.Search correctly (already covered by a dedicated
+// store-level test) doesn't by itself prove the MCP argument wiring
+// works — "offset" has to actually be read from params.Arguments,
+// clamped, and threaded through runSearch. Seeds two rows and confirms
+// offset=1 excludes the first-ranked one, matching the un-offset call's
+// own top result.
+func TestToolsCallSearchObservationsOffsetSkipsLeadingResults(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	first, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"), store.Observation{Type: "discovery", Title: "gizmo rollout phase one"}, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	second, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"), store.Observation{Type: "discovery", Title: "gizmo rollout phase two"}, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: log.New(&bytes.Buffer{}, "", 0)}
+	unoffset := toolCallText(t, runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"gizmo","limit":1}}}`,
+	})[0])
+	offsetResp := toolCallText(t, runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_observations","arguments":{"query":"gizmo","limit":1,"offset":1}}}`,
+	})[0])
+
+	if unoffset == offsetResp {
+		t.Fatalf("offset=1 returned the identical result as offset=0: %q — offset argument isn't reaching Search", unoffset)
+	}
+	// Whichever row ranked first without an offset must be the one excluded
+	// once offset=1 skips it — the other seeded row must appear instead.
+	var skipped, expected int64
+	if strings.Contains(unoffset, fmt.Sprintf("[%d]", first.ID)) {
+		skipped, expected = first.ID, second.ID
+	} else {
+		skipped, expected = second.ID, first.ID
+	}
+	if strings.Contains(offsetResp, fmt.Sprintf("[%d]", skipped)) {
+		t.Fatalf("offset=1 result = %q, want the first-ranked row [%d] excluded", offsetResp, skipped)
+	}
+	if !strings.Contains(offsetResp, fmt.Sprintf("[%d]", expected)) {
+		t.Fatalf("offset=1 result = %q, want the second-ranked row [%d] present", offsetResp, expected)
+	}
+}
+
 // TestToolsCallLimitIsCappedRegardlessOfCallerValue seeds well over 100 rows
 // and confirms a caller-supplied limit far above 100 still returns at most
 // 100 — the same "max 100" bound real claude-mem's own mem-search skill

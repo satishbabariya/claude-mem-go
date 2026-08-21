@@ -190,7 +190,7 @@ func TestPruneCleansUpFTSIndexToo(t *testing.T) {
 	}
 	setCreatedAtEpoch(t, st, old.ID, 1000)
 
-	before, err := st.Search("", "xyzzy-plumbus", "", 10)
+	before, err := st.Search("", "xyzzy-plumbus", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search before prune: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestPruneCleansUpFTSIndexToo(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	after, err := st.Search("", "xyzzy-plumbus", "", 10)
+	after, err := st.Search("", "xyzzy-plumbus", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search after prune: %v", err)
 	}

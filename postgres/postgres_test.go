@@ -100,7 +100,7 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	// row under accumulated history. Real callers hit the identical
 	// scoping requirement for the identical reason (see Search's doc
 	// comment), so this isn't a test-only workaround.
-	results, err := st.Search(project, "claude-mem", "", 10)
+	results, err := st.Search(project, "claude-mem", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestPostgresSearchFiltersByObservationTypeWithProjectScope(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "gadget", "discovery", 10)
+	results, err := st.Search(project, "gadget", "discovery", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(project=%s, type=discovery): %v", project, err)
 	}
@@ -157,13 +157,75 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10)
+	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	for _, r := range results {
 		if r.Project == project {
 			t.Fatalf("Search for an unrelated term matched project %s — false positive", project)
+		}
+	}
+}
+
+// TestPostgresSearchOffsetPagesWithoutOverlapOrGap is the real,
+// live-container regression test for a real gap: offset was skipped on a
+// rationale (README: "doesn't map directly onto an existing column")
+// that never actually applied to offset itself — it needs no column at
+// all, just LIMIT/OFFSET on the existing query. Same scenario as the
+// SQLite backend's identical test, independently necessary here since
+// this backend's own ORDER BY (ts_rank_cd, then id) is a separate query
+// this session added its own tiebreaker to. Seeds 5 rows that all match
+// the same term, confirms 3 pages of size 2/2/1 are disjoint and
+// together cover every seeded row exactly once.
+func TestPostgresSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	var seededIDs []int64
+	for i := 0; i < 5; i++ {
+		res, err := st.Insert("s1", project, "Bash",
+			store.ContentHash("s1", "Bash", "page", fmt.Sprintf("%s-%d", project, i)),
+			store.Observation{Type: "discovery", Title: "paginated widget rollout"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		seededIDs = append(seededIDs, res.ID)
+	}
+
+	page1, err := st.Search(project, "widget", "", 2, 0)
+	if err != nil {
+		t.Fatalf("Search page 1: %v", err)
+	}
+	page2, err := st.Search(project, "widget", "", 2, 2)
+	if err != nil {
+		t.Fatalf("Search page 2: %v", err)
+	}
+	page3, err := st.Search(project, "widget", "", 2, 4)
+	if err != nil {
+		t.Fatalf("Search page 3: %v", err)
+	}
+	if len(page1) != 2 || len(page2) != 2 || len(page3) != 1 {
+		t.Fatalf("page sizes = %d, %d, %d, want 2, 2, 1 (5 rows paged 2 at a time)", len(page1), len(page2), len(page3))
+	}
+
+	seen := map[int64]int{}
+	for _, page := range [][]store.SearchResult{page1, page2, page3} {
+		for _, r := range page {
+			seen[r.ID]++
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("pages together covered %d distinct rows, want all 5 seeded rows exactly once: %v", len(seen), seen)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("row id=%d appeared %d times across pages, want exactly once (offset must not overlap between pages)", id, count)
+		}
+	}
+	for _, id := range seededIDs {
+		if seen[id] != 1 {
+			t.Fatalf("seeded row id=%d missing from paginated results entirely", id)
 		}
 	}
 }

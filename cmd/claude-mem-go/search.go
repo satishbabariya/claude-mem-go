@@ -16,11 +16,15 @@ func cmdSearch(args []string) int {
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual (default: every type)")
+	offset := fs.Int("offset", 0, "skip this many leading results, for paging past a prior call's limit")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 10, 100)
+	if *offset < 0 {
+		*offset = 0
+	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-type discovery|change|decision|summary|manual] [-limit N] <query>")
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go search [-db path] [-project name] [-type discovery|change|decision|summary|manual] [-limit N] [-offset N] <query>")
 		return 2
 	}
 	query := fs.Arg(0)
@@ -32,7 +36,7 @@ func cmdSearch(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.Search(*project, query, *obsType, *limit)
+	results, err := st.Search(*project, query, *obsType, *limit, *offset)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1

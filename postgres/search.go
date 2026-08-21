@@ -58,8 +58,16 @@ func clampNegativeLimit(limit int) int {
 // would need to track which combination of filters is present to know
 // what number LIMIT actually lands on — a real source of off-by-one
 // mistakes for exactly two conditionals, let alone more later.
-func (s *Store) Search(project, query, obsType string, limit int) ([]store.SearchResult, error) {
+//
+// Ordered by rank THEN id, not rank alone: ts_rank_cd ties are real, and
+// pagination via LIMIT/OFFSET needs a fully deterministic order or two
+// consecutive calls at different offsets could return the same row twice
+// or skip one entirely, depending on whatever arbitrary order Postgres
+// happens to visit tied rows in — same reasoning as the SQLite backend's
+// identical tiebreaker, independently necessary here.
+func (s *Store) Search(project, query, obsType string, limit, offset int) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
+	offset = clampNegativeLimit(offset)
 	args := []any{query}
 	scope := ""
 	if project != "" {
@@ -72,13 +80,16 @@ func (s *Store) Search(project, query, obsType string, limit int) ([]store.Searc
 	}
 	args = append(args, limit)
 	limitPlaceholder := fmt.Sprintf("$%d", len(args))
+	args = append(args, offset)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args))
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
 		WHERE search_vector @@ plainto_tsquery('english', $1) `+scope+`
-		ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC
-		LIMIT `+limitPlaceholder, args...)
+		ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC, id
+		LIMIT `+limitPlaceholder+`
+		OFFSET `+offsetPlaceholder, args...)
 	if err != nil {
 		return nil, fmt.Errorf("full text search %q: %w", query, err)
 	}

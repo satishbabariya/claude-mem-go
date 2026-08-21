@@ -26,7 +26,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 	}
 
 	t.Run("Search", func(t *testing.T) {
-		results, err := st.Search("proj", "row", "", -1)
+		results, err := st.Search("proj", "row", "", -1, 0)
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}

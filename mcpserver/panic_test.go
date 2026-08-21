@@ -22,7 +22,7 @@ func (panickingBackend) Insert(string, string, string, string, store.Observation
 func (panickingBackend) CountByProject(string) (int, error) {
 	panic("panickingBackend: CountByProject")
 }
-func (panickingBackend) Search(string, string, string, int) ([]store.SearchResult, error) {
+func (panickingBackend) Search(string, string, string, int, int) ([]store.SearchResult, error) {
 	panic("panickingBackend: Search")
 }
 func (panickingBackend) SaveEmbedding(int64, []float32) error {

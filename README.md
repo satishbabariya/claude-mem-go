@@ -351,10 +351,28 @@ docker compose up -d
   who may genuinely want that. `search` also takes `-type` to filter to
   one observation type (`discovery`/`change`/`decision`/`summary`/
   `manual` — the actual, small, fixed vocabulary the observer itself ever
-  writes) — the same `obs_type` filter real claude-mem's own search tool
-  has, among a few others (date range, offset, sort order) this project
-  doesn't port since they don't map as directly onto an existing column.
-  Threading it through both backends found a real latent footgun in the
+  writes) and `-offset`, to page past a prior call's `-limit` — the same
+  `obs_type`/`offset` filters real claude-mem's own search tool has.
+  `-offset` was skipped in an earlier pass on a rationale that never
+  actually applied to it: real claude-mem also has a date-range filter and
+  a sort-order option this project genuinely doesn't port since neither
+  maps onto an existing column without a real schema/query redesign, but
+  offset needed no column at all — a plain `LIMIT`/`OFFSET` on the
+  existing query, the same shape `RecentByProject` and every other
+  paginated read here already use for `limit`. Both backends' `Search`
+  now order by rank (bm25/`ts_rank_cd`) THEN `id`, not rank alone: a rank
+  tie between two rows is real (identical term-frequency shape scores
+  identically), and pagination via `LIMIT`/`OFFSET` needs a fully
+  deterministic order or two calls at different offsets could return the
+  same row twice or skip one, depending on whatever arbitrary order the
+  database happens to visit tied rows in. Verified against both real
+  backends (including the live Postgres container) with a dedicated test
+  seeding 5 matching rows and confirming 3 pages of size 2/2/1 are
+  disjoint and together cover every seeded row exactly once — not just
+  "offset changes the result," which a non-deterministic order could also
+  produce by accident.
+  Threading `-type` through both backends (separately from offset, added
+  earlier) found a real latent footgun in the
   Postgres implementation's placeholder numbering: `project`'s own scope
   clause hardcoded `$3`, assuming it was always the third argument when
   present — correct only because there was never a second optional
@@ -365,8 +383,8 @@ docker compose up -d
   handled safely if it silently drifted).
 - **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing ten tools any MCP
   client — including Claude Code itself — can call directly:
-  `search_observations` (now also takes `type` — see the CLI `search`
-  entry above) and `semantic_search_observations` (keyword and
+  `search_observations` (now also takes `type` and `offset` — see the CLI
+  `search` entry above) and `semantic_search_observations` (keyword and
   meaning-based search), `recent_observations`, `session_observations`,
   and `file_observations` — the same `RecentByProject`/`BySessionID`/
   `ObservationsForFile` reads `SessionStart`, `Stop`, and the `PreToolUse`

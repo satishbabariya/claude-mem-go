@@ -42,7 +42,7 @@ func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("", "claude-mem", "", 10)
+	results, err := st.Search("", "claude-mem", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error instead of results: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	all, err := st.Search("proj", "widget", "", 10)
+	all, err := st.Search("proj", "widget", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search with no type filter: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search with no type filter returned %d results, want 2 (sanity check before filtering)", len(all))
 	}
 
-	discoveries, err := st.Search("proj", "widget", "discovery", 10)
+	discoveries, err := st.Search("proj", "widget", "discovery", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(type=discovery): %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=discovery) = %+v, want exactly the one discovery-type row", discoveries)
 	}
 
-	decisions, err := st.Search("proj", "widget", "decision", 10)
+	decisions, err := st.Search("proj", "widget", "decision", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(type=decision): %v", err)
 	}
@@ -97,12 +97,77 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=decision) = %+v, want exactly the one decision-type row", decisions)
 	}
 
-	none, err := st.Search("proj", "widget", "bugfix", 10)
+	none, err := st.Search("proj", "widget", "bugfix", 10, 0)
 	if err != nil {
 		t.Fatalf("Search(type=bugfix): %v", err)
 	}
 	if len(none) != 0 {
 		t.Fatalf("Search(type=bugfix) = %+v, want 0 (neither seeded row is that type)", none)
+	}
+}
+
+// TestSearchOffsetPagesWithoutOverlapOrGap is the regression test for a
+// real gap: offset was skipped on a rationale (README: "doesn't map
+// directly onto an existing column") that never actually applied to
+// offset itself — it needs no column at all, just LIMIT/OFFSET on the
+// existing query. Seeds 5 rows that all match the same term, confirms
+// page 1 (limit=2, offset=0) and page 2 (limit=2, offset=2) are disjoint
+// and together with page 3 (offset=4) cover every seeded row exactly
+// once — not just "offset changes the result," which a broken
+// (non-deterministic) ordering could also produce by accident.
+func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	var seededIDs []int64
+	for i := 0; i < 5; i++ {
+		res, err := st.Insert("s1", "proj", "Bash",
+			ContentHash("s1", "Bash", "page", string(rune('a'+i))),
+			Observation{Type: "discovery", Title: "paginated widget rollout"}, 0)
+		if err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+		seededIDs = append(seededIDs, res.ID)
+	}
+
+	page1, err := st.Search("proj", "widget", "", 2, 0)
+	if err != nil {
+		t.Fatalf("Search page 1: %v", err)
+	}
+	page2, err := st.Search("proj", "widget", "", 2, 2)
+	if err != nil {
+		t.Fatalf("Search page 2: %v", err)
+	}
+	page3, err := st.Search("proj", "widget", "", 2, 4)
+	if err != nil {
+		t.Fatalf("Search page 3: %v", err)
+	}
+	if len(page1) != 2 || len(page2) != 2 || len(page3) != 1 {
+		t.Fatalf("page sizes = %d, %d, %d, want 2, 2, 1 (5 rows paged 2 at a time)", len(page1), len(page2), len(page3))
+	}
+
+	seen := map[int64]int{}
+	for _, page := range [][]SearchResult{page1, page2, page3} {
+		for _, r := range page {
+			seen[r.ID]++
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("pages together covered %d distinct rows, want all 5 seeded rows exactly once: %v", len(seen), seen)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("row id=%d appeared %d times across pages, want exactly once (offset must not overlap between pages)", id, count)
+		}
+	}
+	for _, id := range seededIDs {
+		if seen[id] != 1 {
+			t.Fatalf("seeded row id=%d missing from paginated results entirely", id)
+		}
 	}
 }
 

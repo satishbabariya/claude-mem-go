@@ -116,7 +116,7 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	before, err := st.Search(project, "xyzzy-plumbus", "", 10)
+	before, err := st.Search(project, "xyzzy-plumbus", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search before prune: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	after, err := st.Search(project, "xyzzy-plumbus", "", 10)
+	after, err := st.Search(project, "xyzzy-plumbus", "", 10, 0)
 	if err != nil {
 		t.Fatalf("Search after prune: %v", err)
 	}

@@ -128,6 +128,32 @@ process (this project doesn't cut tagged releases on a schedule).
   `version`/`doctor` already use), so it can't go stale the same way
   again. Confirmed live: the compiled binary's `initialize` response now
   reports the real build commit, matching `git rev-parse HEAD` exactly.
+- **`Backend.Search` gains `offset` pagination** (`search` CLI's
+  `-offset`, `search_observations`'s `offset` argument), in both the
+  SQLite and Postgres backends. Real claude-mem's own search tool has
+  this; this project's README previously justified skipping it on a
+  rationale ("doesn't map as directly onto an existing column") that
+  never actually applied to offset specifically — that reasoning holds
+  for the date-range filter and sort-order option this project genuinely
+  doesn't port, but offset needs no column at all, just a plain
+  `LIMIT`/`OFFSET` on the existing query, the same shape every other
+  paginated read here already uses for `limit`. Fixing the doc's own
+  inaccurate justification alongside implementing the feature it
+  wrongly covered. Both backends' `Search` now order by rank
+  (bm25/`ts_rank_cd`) THEN `id`, not rank alone — a rank tie between two
+  rows is real, and pagination via `LIMIT`/`OFFSET` needs a fully
+  deterministic order or two calls at different offsets could return the
+  same row twice or skip one, depending on whatever arbitrary order the
+  database happens to visit tied rows in. Verified against both real
+  backends (including the live Postgres container) with a dedicated test
+  seeding 5 matching rows and confirming 3 pages of size 2/2/1 are
+  disjoint and together cover every seeded row exactly once, each
+  confirmed as a genuine regression test by temporarily dropping the
+  `OFFSET` clause and watching the test fail before restoring it. Also
+  verified at the MCP protocol boundary (a dedicated test proving the
+  `offset` argument actually reaches `Search`, not just that `Search`
+  itself works) and live end to end against the shared Postgres
+  container through the compiled binary, paging real accumulated data.
 
 ## 0.2.0 — 2026-08-20
 
