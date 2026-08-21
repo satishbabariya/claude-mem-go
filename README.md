@@ -878,6 +878,27 @@ deliberately not wired: `stop` builds its summary from observations
 already persisted per tool call, not from the live context, so compaction
 does not destroy anything it needs.
 
+### The handler diff against real claude-mem is exhausted
+
+Recorded so it isn't re-mined. Real claude-mem's hook logic lives in
+seven files under `src/cli/handlers/` (1,061 lines). All seven have been
+read line-by-line against this port's equivalents. What each produced:
+
+| handler | maps to | outcome |
+|---|---|---|
+| `summarize.ts` | `stop` | **gap found**: `stop_hook_active` re-entry guard |
+| `file-context.ts` | `file-context` | **two gaps**: file-mtime staleness gate; per-session dedup + specificity scoring |
+| `context.ts` | `context` | **gap found**: git-root project resolution and worktree `allProjects` reads |
+| `observation.ts` | `hook` | at parity — its three guards all present; its missing-`cwd` throw is a transcript-path fallback here, which is strictly better |
+| `session-init.ts` | `prompt-context` | at parity or ahead — the `>= 20` prompt gate and internal-protocol skip were already present, plus duplicate-prompt dedup and privacy tag-stripping that real claude-mem has no equivalent of |
+| `user-message.ts` | — | Cursor-only banner (Discord link, promo line, viewer URL). UI, and out of scope |
+| `file-edit.ts` | — | Cursor's `afterFileEdit`. Claude Code has no analogue: `PostToolUse` with `matcher: "*"` already captures Edit/Write natively |
+
+The one thing deliberately left unported is `file-context.ts`'s
+`FILE_READ_GATE_MIN_BYTES` size gate — the constant's value is not
+defined anywhere findable in that repo, and inventing a tuning threshold
+would not be parity.
+
 ### Why the worker/hook split
 
 An earlier version had the `PostToolUse` hook call the observer directly.
