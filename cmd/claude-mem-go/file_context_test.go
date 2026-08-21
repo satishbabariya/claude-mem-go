@@ -141,3 +141,50 @@ func TestFileContextInjectsWhenTheFileCannotBeStatted(t *testing.T) {
 		t.Fatalf("context was suppressed for a file that could not be statted; unknown must fail open.\nstdout: %s\nlog: %s", out, logOut)
 	}
 }
+
+// TestFileContextInjectsAcrossSessionsNotJustTheLatest is the end-to-end
+// version of store.TestSelectFileContextRecoversOlderSessions, through
+// the real hook: the wiring matters as much as the selection function,
+// because the hook previously queried exactly `limit` rows, which left
+// selection nothing to select from.
+func TestFileContextInjectsAcrossSessionsNotJustTheLatest(t *testing.T) {
+	dir := t.TempDir()
+	project := filepath.Base(dir)
+	target := filepath.Join(dir, "auth.go")
+	if err := os.WriteFile(target, []byte("package auth\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	// Keep the file older than the observations so the staleness gate
+	// (a separate feature, tested above) does not suppress injection.
+	past := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(target, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "fc.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ins := func(sess, title string) {
+		if _, err := st.Insert(sess, project, "Read", store.ContentHash(sess, "Read", title, target),
+			store.Observation{Type: "change", Title: title, FilesRead: []string{target}}, 0); err != nil {
+			t.Fatalf("Insert %q: %v", title, err)
+		}
+	}
+	ins("sess-old", "auth.go: never log the raw token")
+	for i := 1; i <= 6; i++ {
+		ins("sess-today", "today step "+string(rune('0'+i))+": tweaked a helper")
+	}
+	st.Close()
+
+	out, logOut := runFileContext(t, dbPath, payloadFor(dir, target))
+
+	if !strings.Contains(out, "never log the raw token") {
+		t.Fatalf("the older session's durable fact was crowded out by today's repeated touches — "+
+			"which is exactly the cross-session memory this product exists to provide.\nstdout: %s\nlog: %s", out, logOut)
+	}
+	if strings.Count(out, "tweaked a helper") > 1 {
+		t.Fatalf("more than one observation from the same session was injected:\n%s", out)
+	}
+}

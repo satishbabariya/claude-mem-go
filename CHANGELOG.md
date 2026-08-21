@@ -7,6 +7,32 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **One session's repeated touches of a file crowded out every other
+  session's memory of it — defeating the point of cross-session memory.**
+  `PostToolUse` fires per tool call with `matcher: "*"`, so an ordinary
+  read/edit/re-read/fix loop on one file produces five-plus observations
+  about it, all recent. The hook asked for the top 5 by recency, so all
+  five injected slots went to the session whose contents Claude still has
+  in context anyway. Demonstrated on an entirely ordinary history — three
+  older sessions each holding one durable fact about `auth.go`, plus one
+  same-day session that touched it five times: every slot went to the
+  same-day session (one of them a sweeping change that touched **41
+  files** and said nothing specific about `auth.go`), and "tokens expire
+  after 15m by design", "the refresh path is NOT thread-safe" and "never
+  log the raw token" were all crowded out. Those are exactly the things
+  Claude cannot recover by reading the file. `store.SelectFileContext`
+  now applies the two rules real claude-mem's own
+  `deduplicateObservations` uses: at most one observation per session,
+  then prefer specific ones (+2 if the observation MODIFIED the target,
+  +2 if it touched ≤3 files, +1 if ≤8). Ties keep recency order, so
+  specificity breaks ties rather than replacing recency — pinned by its
+  own test. The hook also had to change: it previously queried exactly
+  `limit` rows, leaving selection nothing to select from, so it now
+  fetches up to 10× the display limit (capped at 100). After the fix, the
+  same history yields one representative slot for today plus all three
+  recovered cross-session facts. Three independent break/restores — the
+  dedup, the scoring, and the wiring each fail only their own test.
+
 - **The file-context hook injected memory that predated the file's
   current contents, asserting it as current.** The `PreToolUse` hook
   fires immediately before Claude reads a file and says "here's what we

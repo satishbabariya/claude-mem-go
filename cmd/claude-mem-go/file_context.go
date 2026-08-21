@@ -82,7 +82,10 @@ func cmdFileContext(args []string) int {
 	}
 	defer st.Close()
 
-	results, err := st.ObservationsForFile(project, toolInput.FilePath, *limit)
+	// Fetch well past *limit and let SelectFileContext choose. Querying
+	// exactly *limit rows would leave nothing to select from, which is
+	// how the query's ORDER BY ended up being the whole policy.
+	results, err := st.ObservationsForFile(project, toolInput.FilePath, store.FileContextCandidateLimit(*limit))
 	if err != nil {
 		l.Printf("FAILED ObservationsForFile(%s): %v", toolInput.FilePath, err)
 		fmt.Println("{}")
@@ -124,6 +127,13 @@ func cmdFileContext(args []string) int {
 			fmt.Println("{}")
 			return 0
 		}
+	}
+
+	candidates := len(results)
+	results = store.SelectFileContext(results, toolInput.FilePath, *limit)
+	if candidates > len(results) {
+		l.Printf("narrowed %d candidate observation(s) to %d for file=%s (one per session, most specific first)",
+			candidates, len(results), toolInput.FilePath)
 	}
 
 	ctx := formatFileContext(toolInput.FilePath, results)
