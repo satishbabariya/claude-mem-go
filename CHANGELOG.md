@@ -7,6 +7,34 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **A plugin installed from a git source captured nothing, silently, and
+  could not be diagnosed.** The binary is gitignored — a build artifact,
+  not source — so such an install ships the complete Go source and no
+  binary. Every hook failed with `No such file or directory`, Claude Code
+  swallowed it, and memory was dead forever with no visible symptom. The
+  trap compounds: `doctor` is a subcommand of the missing binary, so the
+  tool an operator would reach for could not run either. Reproduced by
+  unpacking `git archive HEAD` and running a real session against it.
+  Fixed in two layers, because one was demonstrably not enough. A
+  **`Setup` hook** (`scripts/ensure-binary.sh`) builds the binary when it
+  is absent or unrunnable — real claude-mem has a `Setup` hook for the
+  same class of reason (`bun install`) — running off the hot path with a
+  300s timeout, since a cold build measures ~33s here against
+  SessionStart's 10–15s. And a **hook wrapper** (`scripts/run-hook.sh`)
+  that every hook goes through, because `Setup` could not be relied on:
+  it was observed **not** firing for a genuinely installed plugin under
+  `claude -p`, nor during `claude plugin install`, so shipping only the
+  Setup hook would have meant shipping something unproven. The wrapper
+  `exec`s the binary on the healthy path; on a missing one, SessionStart's
+  `context` hook — the only place a hook can address the user — returns a
+  real `additionalContext` payload, and the others log to
+  `~/.claude-mem-go/missing-binary.log`. Verified end to end: a real
+  session against a binary-less install told the user exactly what to run,
+  and after healing, capture works through the wrapper with a real
+  observation landing in the store. Wrapper overhead on the healthy path
+  is one bash startup, on hooks that already open a database or spawn a
+  model call.
+
 - **New `stats` command, and `doctor` now reports what the store
   contains — not just that it answers.** Every check `doctor` ran was a
   reachability check, which left the more important question

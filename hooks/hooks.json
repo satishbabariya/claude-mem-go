@@ -1,6 +1,19 @@
 {
   "description": "claude-mem-go hooks",
   "hooks": {
+    "Setup": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/ensure-binary.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|clear|compact",
@@ -8,13 +21,13 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" start",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" start",
             "timeout": 15
           },
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" context",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" context",
             "timeout": 10
           }
         ]
@@ -26,7 +39,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" prompt-context",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" prompt-context",
             "timeout": 30
           }
         ]
@@ -39,7 +52,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" file-context",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" file-context",
             "timeout": 10
           }
         ]
@@ -52,7 +65,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" hook",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" hook",
             "async": true,
             "timeout": 120
           }
@@ -65,7 +78,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"$CLAUDE_PLUGIN_ROOT/claude-mem-go\" stop",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/scripts/run-hook.sh\" stop",
             "async": true,
             "timeout": 120
           }
