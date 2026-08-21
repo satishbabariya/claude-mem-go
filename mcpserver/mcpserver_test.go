@@ -86,8 +86,22 @@ func TestInitializeHandshake(t *testing.T) {
 	if result["protocolVersion"] != protocolVersion {
 		t.Errorf("protocolVersion = %v, want %v", result["protocolVersion"], protocolVersion)
 	}
-	if _, ok := result["serverInfo"]; !ok {
-		t.Error("initialize response missing serverInfo")
+	serverInfo, ok := result["serverInfo"].(map[string]any)
+	if !ok {
+		t.Fatal("initialize response missing serverInfo")
+	}
+	// Regression test for a real staleness bug: serverInfo.version was
+	// hardcoded to the literal "0.1.0" and never updated across several
+	// real version bumps since. serverVersion() now derives it from Go's
+	// own VCS build info instead, so this only asserts it's non-empty and
+	// not that specific stale literal — the exact value legitimately
+	// varies by build environment (a `go test` binary's vcs.revision
+	// reflects the actual working tree, not a fixed string).
+	if serverInfo["version"] == "" {
+		t.Error("serverInfo.version is empty")
+	}
+	if serverInfo["version"] == "0.1.0" {
+		t.Error("serverInfo.version is the old hardcoded literal \"0.1.0\" — it should be derived from the real build instead")
 	}
 }
 
@@ -147,6 +161,29 @@ func TestToolsListIncludesSearchTools(t *testing.T) {
 	}
 	if !found["timeline"] {
 		t.Errorf("tools/list missing timeline, got %v", names)
+	}
+	if !found["important_workflow"] {
+		t.Errorf("tools/list missing important_workflow, got %v", names)
+	}
+}
+
+// TestToolsCallImportantWorkflowReturnsTheStaticGuidance is the
+// regression test for important_workflow — matches real claude-mem's own
+// tool of the same name and shape: a zero-dependency, static-text tool
+// teaching the search -> timeline -> get_observations pattern, not
+// something that looks anything up. No store seeding needed (the whole
+// point is it never touches s.st), so this can assert the exact returned
+// text directly rather than just "no error."
+func TestToolsCallImportantWorkflowReturnsTheStaticGuidance(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"important_workflow","arguments":{}}}`,
+	})
+	got := toolCallText(t, resp[0])
+	for _, want := range []string{"search_observations", "timeline", "get_observations", "3-Layer Pattern"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("important_workflow output missing %q, got:\n%s", want, got)
+		}
 	}
 }
 

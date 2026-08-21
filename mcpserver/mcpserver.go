@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"strings"
 
 	"claude-mem-go/backend"
@@ -33,6 +34,37 @@ import (
 )
 
 const protocolVersion = "2025-11-25"
+
+// serverVersion reports the build's git commit, the same source of truth
+// `version`/`doctor` already use (see cmd/claude-mem-go/version.go's own
+// doc comment for why: Go's VCS stamping needs no separate version file
+// to keep in sync). A real, found-by-hand staleness bug this replaces:
+// the "initialize" response's serverInfo.version was hardcoded to "0.1.0"
+// and never updated across several real version bumps since — an MCP
+// client introspecting it got a number three releases stale, silently
+// wrong in exactly the way a hand-maintained version string always
+// eventually is. mcpserver can't import cmd/claude-mem-go's
+// buildVersionString directly (that package imports mcpserver for cmdMCP;
+// importing back would cycle, the same constraint formatObservationContext's
+// own doc comment explains), so this computes the short revision directly
+// rather than duplicating that function's full human-readable formatting
+// — a raw commit hash is enough for what serverInfo.version is for
+// (correlating a report against a build), not something a person reads.
+func serverVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" {
+			if len(s.Value) > 12 {
+				return s.Value[:12]
+			}
+			return s.Value
+		}
+	}
+	return "unknown"
+}
 
 // generateSessionID returns a short random hex string — see Server.
 // SessionID's doc comment for why one per MCP server process is the
@@ -86,6 +118,18 @@ type toolDef struct {
 
 func tools() []toolDef {
 	return []toolDef{
+		{
+			Name: "important_workflow",
+			Description: "3-LAYER WORKFLOW (ALWAYS FOLLOW):\n" +
+				"1. search_observations(query) -> get an index of IDs (~50-100 tokens/result)\n" +
+				"2. timeline(anchor=ID) -> get context around an interesting result\n" +
+				"3. get_observations([IDs]) -> fetch full details ONLY for filtered IDs\n" +
+				"NEVER fetch full details without filtering first. 10x token savings.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 		{
 			Name:        "search_observations",
 			Description: "Keyword (full-text) search over claude-mem-go's persisted observations.",
@@ -338,7 +382,7 @@ func (s *Server) handle(req rpcRequest) (resp *rpcResponse) {
 		return s.reply(req, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "claude-mem-go", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "claude-mem-go", "version": serverVersion()},
 		})
 	case "notifications/initialized":
 		return nil // notification: acknowledged by doing nothing
@@ -428,6 +472,8 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 
 	var result toolCallResult
 	switch params.Name {
+	case "important_workflow":
+		result = runImportantWorkflow()
 	case "search_observations":
 		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit)
 	case "semantic_search_observations":
@@ -452,6 +498,43 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		return s.errorReply(req, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
 	return s.reply(req, result)
+}
+
+// runImportantWorkflow is important_workflow — matches real claude-mem's
+// own tool of the same name and shape: a zero-dependency, static-text
+// tool that exists purely to teach an MCP client the intended usage
+// pattern between the OTHER tools, not to look anything up itself. Unlike
+// every other tool here, it never touches s.st — real claude-mem's
+// version has this same "no server/handler dependency at all" property,
+// unlike most of its other tools (which the tree-sitter/knowledge-graph
+// system backs and are genuinely out of scope for this port).
+//
+// The point this teaches is real, not decorative: get_observations
+// returns full narrative/facts/concepts/files for every ID it's given,
+// which costs real tokens per result — fetching that for every row a
+// broad search_observations/semantic_search_observations call returns,
+// instead of first narrowing to a few IDs worth a closer look, wastes
+// exactly the token budget this project's whole abbreviated-list-output
+// convention (title/subtitle only, see get_observations's own
+// description) exists to protect.
+func runImportantWorkflow() toolCallResult {
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: `# Memory Search Workflow
+
+**3-Layer Pattern (ALWAYS follow this):**
+
+1. **search_observations** (or semantic_search_observations) - Get an index of results with IDs
+   search_observations(query="...", limit=20)
+   Returns: Abbreviated list with IDs, titles, subtitles (~50-100 tokens/result)
+
+2. **timeline** - Get context around an interesting result
+   timeline(anchor=<ID>, depth_before=3, depth_after=3)
+   Returns: Chronological context showing what was happening around it
+
+3. **get_observations** - Get full details ONLY for the relevant IDs
+   get_observations(ids=[...])  # batch for 2+ items
+   Returns: Complete details — narrative, facts, concepts, files (~500-1000 tokens/result)
+
+**Why:** 10x token savings. Never fetch full details without filtering first.`}}}
 }
 
 func (s *Server) runSearch(project, query, obsType string, limit int) toolCallResult {

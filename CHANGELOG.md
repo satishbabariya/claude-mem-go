@@ -108,6 +108,26 @@ process (this project doesn't cut tagged releases on a schedule).
   deterministic rather than merely likely) — confirmed as a genuine
   regression test the same way, by briefly using a plain `SET` instead
   of `SET LOCAL` and watching the leak-check fail before restoring it.
+- **New MCP tool: `important_workflow`**, matching real claude-mem's own
+  zero-dependency, static-text tool of the same name and shape: it never
+  touches the store, existing purely to teach a client the intended
+  `search_observations` → `timeline` → `get_observations` pattern (narrow
+  to a few IDs before paying for full detail, not the reverse). MCP tool
+  count grows from 9 to 10. Registered first in the tool list, matching
+  real claude-mem's own ordering. Verified with a unit test asserting the
+  exact static text, confirmed as a genuine test by temporarily disabling
+  the tool's dispatch case and watching it fail with "unknown tool"
+  before restoring it, plus live end to end against the real Postgres
+  container through the compiled binary.
+- **Fixed a real, unrelated staleness bug found by hand while verifying
+  the above live**: the `initialize` response's `serverInfo.version` had
+  been hardcoded to the literal `"0.1.0"` since early in the project and
+  never updated across several real version bumps since — three releases
+  stale by the time this was noticed. Fixed by deriving it from Go's own
+  VCS build info instead (`runtime/debug.ReadBuildInfo`, the same source
+  `version`/`doctor` already use), so it can't go stale the same way
+  again. Confirmed live: the compiled binary's `initialize` response now
+  reports the real build commit, matching `git rev-parse HEAD` exactly.
 
 ## 0.2.0 — 2026-08-20
 

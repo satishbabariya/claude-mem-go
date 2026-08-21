@@ -363,7 +363,7 @@ docker compose up -d
   a dedicated test against the live container that applies `project` and
   `type` together (the exact combination the old scheme couldn't have
   handled safely if it silently drifted).
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing nine tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing ten tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` (now also takes `type` — see the CLI `search`
   entry above) and `semantic_search_observations` (keyword and
@@ -489,6 +489,26 @@ docker compose up -d
   through the compiled binary itself (`add_observation` then
   `observation_context` in the same real session), not just the SQLite
   path `mcpserver_test.go` exercises.
+  Also **`important_workflow`** — matches real claude-mem's own
+  zero-dependency, static-text tool of the same name and shape: it never
+  touches the store at all, existing purely to teach an MCP client the
+  intended `search_observations` → `timeline` → `get_observations`
+  pattern (narrow to a few IDs before ever paying for full detail, not
+  the other way around — real token cost this project's whole
+  abbreviated-list convention exists to protect). Registered first in the
+  tool list, same as real claude-mem's, so its terse description is the
+  first thing a client sees even before calling anything. Verified end to
+  end against the live Postgres container through the compiled binary,
+  not just the unit test.
+  Building this also caught a real, unrelated staleness bug found by hand
+  while checking the live `initialize` response: `serverInfo.version` had
+  been hardcoded to the literal `"0.1.0"` since early in the project and
+  never updated across several real version bumps since — three releases
+  stale by the time this was noticed. Fixed by deriving it from Go's own
+  VCS build info instead (the same source `version`/`doctor` already
+  use), so it can't go stale again the same way. Confirmed live: the
+  compiled binary's `initialize` response now reports the real build
+  commit, matching `git rev-parse HEAD` exactly.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate
