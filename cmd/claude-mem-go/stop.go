@@ -267,6 +267,31 @@ func cmdStop(args []string) int {
 		l.Printf("skip: subagent context detected (agent_id=%s agent_type=%s)", in.AgentID, in.AgentType)
 		return 0
 	}
+	// Claude Code asks for this one explicitly. When a Stop hook blocks a
+	// turn from ending, the turn is retried and every Stop hook fires
+	// again with stop_hook_active=true; on hitting the cap Claude Code
+	// prints "For Stop/SubagentStop hooks, check stop_hook_active in the
+	// input and return success while it's true." Real claude-mem's own
+	// summarize handler makes the same check first thing.
+	//
+	// This hook does not block, so it never causes the retry itself — but
+	// it is dragged along by any OTHER blocking Stop hook in the user's
+	// setup, and the cost of being dragged along was measured rather than
+	// assumed: a repeat Stop on an already-summarized session took **17.3
+	// seconds** and made a real, billed observer call before the
+	// deterministic content hash finally rejected the insert. At the
+	// default cap of 8 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP) that is roughly
+	// two and a half minutes of added latency and eight wasted model calls
+	// per turn, repeated for every turn of the session.
+	//
+	// Returning success is exactly what Claude Code asks for and loses
+	// nothing: the summary for this session either already exists (the
+	// retry case) or will be written when the turn genuinely ends.
+	if in.StopHookActive {
+		l.Printf("skip: stop_hook_active — this turn is being retried because a Stop hook blocked it; "+
+			"session %s will be summarized when the turn actually ends", in.SessionID)
+		return 0
+	}
 	// Real claude-mem's own PrivacyCheckValidator makes this same check
 	// before generating a Stop-time summary (SessionRoutes.ts), not just
 	// before a PostToolUse observation — a turn a user marked entirely
@@ -289,6 +314,32 @@ func cmdStop(args []string) int {
 		return 0
 	}
 	defer st.Close()
+
+	// Bail before the wait budget AND before the model call if this
+	// session already has its summary.
+	//
+	// The insert at the end is already idempotent — the content hash is
+	// derived from the session id alone, not from the model's output, so a
+	// second summary row is impossible. But that check happens LAST, after
+	// waiting for observations to settle and after paying for a real
+	// observer call whose result is then discarded. Measured on a repeat
+	// Stop: 17.3 seconds and one billed call, to produce nothing.
+	//
+	// stop_hook_active (above) catches the specific case Claude Code warns
+	// about. This catches every other way Stop runs twice for one session
+	// — a manually re-fired hook, a crash-and-retry, a session resumed
+	// after its summary was already written — without needing to enumerate
+	// them. It costs one extra query on the normal path, where it finds
+	// nothing and falls through.
+	if existing, err := st.BySessionID(in.SessionID, *limit); err == nil {
+		for _, o := range existing {
+			if o.Observation.Type == "summary" {
+				l.Printf("skip: session %s already summarized (observations.id=%d) — "+
+					"not re-running the observer for a result the content hash would reject", in.SessionID, o.ID)
+				return 0
+			}
+		}
+	}
 
 	inFlight := func(sessionID string) (int, bool) {
 		n, err := hook.QueryInFlight(*socketPath, sessionID)

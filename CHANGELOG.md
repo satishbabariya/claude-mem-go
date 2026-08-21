@@ -7,6 +7,36 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The Stop hook ignored `stop_hook_active`, so a blocked turn made it
+  redo its most expensive work up to eight times.** Claude Code sets this
+  flag on Stop and SubagentStop payloads when a turn is being retried
+  because some Stop hook blocked it from ending, and asks hook authors to
+  honor it in so many words — on hitting the cap it prints "For
+  Stop/SubagentStop hooks, check `stop_hook_active` in the input and
+  return success while it's true." This port could not see the field at
+  all: `claude-agent-sdk-go`'s `HookInput` never modeled it (added in
+  v0.1.3, verified against a payload captured from a live Stop hook and
+  committed as testdata). This hook does not block, so it never causes
+  the retry itself, but it is dragged along by any other Stop hook that
+  does, and the cap defaults to 8 (`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`).
+  Measured rather than assumed: a repeat Stop on an already-summarized
+  session took **17.3 seconds** and made a real billed observer call
+  before the deterministic content hash rejected the insert — roughly two
+  and a half minutes of latency and eight wasted model calls per turn, on
+  every turn of such a session. Worth stating plainly, since it bounds
+  the severity: no duplicate summary row was ever possible. The content
+  hash is derived from the session id alone, not the model's output, so
+  the existing insert was already idempotent — this was pure wasted work,
+  not corruption. Two guards now: `stop_hook_active` exits before the
+  store is even opened (0.71s), and a new already-summarized check exits
+  before both the wait budget and the model call (0.036s), covering every
+  other way Stop can run twice for one session without needing to
+  enumerate them. Verified end to end with the real binary, and the happy
+  path was checked just as carefully — a fresh session still summarizes
+  normally (17.6s, $0.0043, one summary row), because a guard that fired
+  unconditionally would have passed both regression tests while silently
+  disabling session summaries.
+
 - **`reembed` could run for four days in total silence, and the embedding
   server's address could not be changed at all.** Three gaps in one
   command, each measured rather than assumed. (1) The failure loop was

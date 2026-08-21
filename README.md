@@ -835,6 +835,35 @@ hook covers for its version-check) is a real, separate change that
 deserves its own verification pass rather than riding along with "does the
 release pipeline produce working binaries at all."
 
+### Hook coverage, audited against the shipped CLI
+
+Recorded so it doesn't get re-derived. Claude Code 2.1.238 defines **31**
+hook events (extracted from the shipped binary's own `hook_event_name`
+literals, not from docs): `ConfigChange`, `CwdChanged`, `DirectoryAdded`,
+`Elicitation`, `ElicitationResult`, `FileChanged`, `InstructionsLoaded`,
+`MessageDisplay`, `Notification`, `PermissionDenied`, `PermissionRequest`,
+`PostCompact`, `PostToolBatch`, `PostToolUse`, `PostToolUseFailure`,
+`PreCompact`, `PreToolUse`, `SessionEnd`, `SessionStart`, `Setup`, `Stop`,
+`StopFailure`, `SubagentStart`, `SubagentStop`, `TaskCompleted`,
+`TaskCreated`, `TeammateIdle`, `UserPromptExpansion`, `UserPromptSubmit`,
+`WorktreeCreate`, `WorktreeRemove`.
+
+Real claude-mem's own `plugin/hooks/hooks.json` wires **six**:
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
+and `Setup`. This port wires the same five capture hooks. The one
+difference, `Setup`, exists there to run `bun install` — the marketplace
+extracts files without installing dependencies, so the worker crashed
+with `Cannot find module 'zod/v3'` on the first hook invocation. A single
+static Go binary has no runtime dependencies to materialize, so that
+specific need does not transfer. (The separate, genuinely useful `Setup`
+idea for this port — fetching a release asset when the binary is missing
+— is described above and is still open.)
+
+`PreCompact` looks like the natural hook for a memory system and is
+deliberately not wired: `stop` builds its summary from observations
+already persisted per tool call, not from the live context, so compaction
+does not destroy anything it needs.
+
 ### Why the worker/hook split
 
 An earlier version had the `PostToolUse` hook call the observer directly.
