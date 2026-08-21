@@ -135,6 +135,24 @@ Precedence is `-db` > `$CLAUDE_MEM_DB` > `~/.claude-mem-go/observations.db`,
 and `doctor` now names which of the three won, because the symptom of
 getting it wrong looks exactly like data loss.
 
+`CLAUDE_MEM_LOG_LEVEL` sets how much the hooks and the worker daemon
+say: `DEBUG`, `INFO` (the default), `WARN`, `ERROR`, or `SILENT` — the
+same names and the same variable real claude-mem reads, so one setting
+configures either implementation. Three levels are worth knowing:
+
+- `ERROR` shows only things that failed.
+- `WARN` adds degradations — an observation stored but not embedded, a
+  best-effort call to the daemon that did not land. These are not errors:
+  the memory is there, some secondary capability is not.
+- `DEBUG` adds the per-tool-call chatter, including each hook's
+  "forwarded N bytes to worker" line. That line is the one to turn on
+  when an observation seems to have gone missing, because at the default
+  level a *successful* forward says nothing at all.
+
+An unrecognized value falls back to `INFO` rather than silencing the
+logs: a typo in this variable must not hide its own evidence, and for
+fire-and-forget hooks these files are the only diagnosis there is.
+
 `CLAUDE_MEM_OLLAMA_BASE_URL` is the same idea for the embedding server.
 The address was hardcoded to `http://localhost:11434` at all ten
 `embed.NewClient` call sites, so Ollama on a shared GPU box, a container

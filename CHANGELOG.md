@@ -7,6 +7,23 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **`CLAUDE_MEM_LOG_LEVEL` worked but was undiscoverable.** It was added,
+  wired through every hook and the daemon, and recorded only in this
+  changelog — so the README, the document an operator actually reads,
+  never mentioned the one variable they need when an observation seems to
+  have gone missing. An environment variable nobody can find is one
+  nobody can use. Now documented with the part that matters
+  operationally: at the default level a *successful* forward logs nothing
+  at all, so `DEBUG` is what reveals whether a hook forwarded, and an
+  unrecognized value falls back to `INFO` rather than silencing the logs.
+  A guard now fails if any `CLAUDE_MEM*` variable the source reads is
+  absent from the README. Deliberately one-directional (code → README):
+  the reverse was checked by hand first and produced a false positive —
+  `CLAUDE_MEM_EXCLUDED_PROJECTS` appears there legitimately, as *real
+  claude-mem's* variable, in the section explaining the gap this port
+  closed with a flag. Verifying that before acting is what kept a correct
+  passage from being "fixed".
+
 - **Nothing checked that `hooks.json` invokes subcommands that exist —
   the highest-stakes wiring in the project.** Every capture hook is wired
   by *name* through the wrapper. Rename or remove a subcommand and the Go
