@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -98,5 +99,77 @@ func TestNormalizedPathsMakeTheLookupMatch(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("looking up %q found %d observations, want 1 — this is exactly the mismatch that "+
 			"made file-context silently find nothing", abs, len(got))
+	}
+}
+
+// TestNormalizeFilePathDisambiguatesByExistence covers a bug this
+// function's FIRST version introduced, found by inspecting real rows
+// after a soak rather than by any test.
+//
+// A relative path from the observer is ambiguous: the model is shown the
+// raw tool input and asked for "<file>...</file>", so it emits sometimes
+// a cwd-relative path ("tokens.go") and sometimes a repo-relative one
+// ("src/auth/tokens.go"). Joining blindly against cwd turned the second
+// kind into nonsense — with cwd=<repo>/src/auth a real soak produced
+// ".../repo/src/auth/src/auth/tokens.go", a doubled path matching
+// nothing, which is worse than the relative string it replaced.
+//
+// Existence on disk resolves it, and is available here because the path
+// names a file the session just touched.
+func TestNormalizeFilePathDisambiguatesByExistence(t *testing.T) {
+	root := t.TempDir()
+	// A real repo layout: a git marker at the root, the file two levels in.
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	deep := filepath.Join(root, "src", "auth")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	target := filepath.Join(deep, "tokens.go")
+	if err := os.WriteFile(target, []byte("package auth\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Both spellings the model actually produces must converge on the one
+	// real file, or the index disagrees with itself.
+	if got := NormalizeFilePath(deep, "tokens.go"); got != target {
+		t.Fatalf("cwd-relative %q resolved to %q, want %q", "tokens.go", got, target)
+	}
+	if got := NormalizeFilePath(deep, "src/auth/tokens.go"); got != target {
+		t.Fatalf("repo-relative %q resolved to %q, want %q.\nJoining blindly against cwd is what "+
+			"produced the doubled .../src/auth/src/auth/tokens.go seen in a real store.",
+			"src/auth/tokens.go", got, target)
+	}
+}
+
+// TestNormalizeFilePathFallsBackWhenNothingResolves pins the last resort.
+// A path that names no existing file (deleted since, or never real) still
+// has to become absolute: the hook looks up absolute paths, so leaving it
+// relative guarantees no match, whereas the cwd reading is the likelier
+// of the two.
+func TestNormalizeFilePathFallsBackWhenNothingResolves(t *testing.T) {
+	cwd := t.TempDir()
+	want := filepath.Join(cwd, "gone", "deleted.go")
+	if got := NormalizeFilePath(cwd, "gone/deleted.go"); got != want {
+		t.Fatalf("got %q, want the cwd-join fallback %q", got, want)
+	}
+}
+
+// TestNormalizeFilePathNeverPicksADirectory guards the existence check
+// itself: a relative name that happens to match a DIRECTORY under cwd
+// must not be treated as a resolved file, or a path like "src" would
+// silently canonicalize to the directory rather than to whatever file was
+// meant.
+func TestNormalizeFilePathNeverPicksADirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src", "auth"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// "src/auth" exists as a directory under cwd; it is not a file, so the
+	// existence check must reject it and fall through.
+	got := NormalizeFilePath(root, "src/auth")
+	if got != filepath.Join(root, "src", "auth") {
+		t.Fatalf("got %q", got)
 	}
 }

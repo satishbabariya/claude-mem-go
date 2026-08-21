@@ -7,6 +7,39 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **Corrects the path normalization shipped one commit earlier, which
+  produced doubled paths.** A relative path from the observer is
+  ambiguous: the model is shown the raw tool input and asked for
+  `<file>...</file>`, so it emits sometimes a cwd-relative path
+  (`tokens.go`) and sometimes a repo-relative one (`src/auth/tokens.go`).
+  Joining blindly against cwd turned the second kind into nonsense — with
+  `cwd=<repo>/src/auth`, a real soak produced
+  `.../repo/src/auth/**src/auth**/tokens.go`, a doubled path matching
+  nothing and strictly worse than the relative string it replaced. Found
+  by inspecting actual stored rows during an export/import round trip,
+  not by any test. Existence on disk disambiguates it, and is available
+  because the path names a file the session just touched: try cwd, then
+  the git root, and take whichever resolves — falling back to the cwd
+  join when neither does, since the hook looks up absolute paths and a
+  relative row is guaranteed not to match. The existence check rejects
+  directories, so a name like `src` cannot silently canonicalize to a
+  folder. Both spellings the model actually produces now converge on the
+  same real file, verified with real files on disk and re-confirmed by a
+  live session.
+
+- **Verified the documented SQLite↔Postgres migration end to end for the
+  first time.** `export` from a real Postgres store and `import` into a
+  fresh SQLite one preserved every observation and every embedding, and —
+  the part worth checking — the `observation_files` index added in
+  migration 6 was rebuilt correctly, because it is maintained by a
+  trigger that `ImportRow`'s insert also fires. A file-context lookup on
+  the migrated store returns the right observation, and re-importing is
+  genuinely idempotent (0 imported, 2 skipped, index unchanged). Had the
+  trigger not covered that write path, a migrated store would have looked
+  complete while file-context silently found nothing for every file —
+  exactly the failure that took a full-stack soak to notice the first
+  time, which is why it now has its own test.
+
 - **The PreToolUse file-context feature worked only by luck — file paths
   were stored non-canonically.** The hook looks up the path Claude Code
   puts in the tool payload, which is absolute. The worker stored whatever

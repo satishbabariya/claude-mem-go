@@ -1,6 +1,9 @@
 package store
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+)
 
 // NormalizeFilePath makes an observation's file path canonical: absolute
 // and cleaned, resolved against the working directory it was observed in.
@@ -40,7 +43,39 @@ func NormalizeFilePath(cwd, path string) string {
 	if cwd == "" {
 		return path
 	}
+
+	// A relative path from the observer is AMBIGUOUS, and the first
+	// version of this function guessed wrong. The model is shown the raw
+	// tool input and asked for "<file>...</file>", so it emits sometimes
+	// a cwd-relative path ("tokens.go") and sometimes a repo-relative one
+	// ("src/auth/tokens.go"). Joining blindly against cwd turned the
+	// second kind into nonsense: with cwd=<repo>/src/auth, a real soak
+	// produced ".../repo/src/auth/src/auth/tokens.go" — a doubled path
+	// that matches nothing and is worse than the relative string it
+	// replaced.
+	//
+	// Existence on disk is the disambiguator, and it is available: this
+	// path names a file the session just touched. Try each plausible base
+	// and take the one that actually resolves.
+	if p := filepath.Join(cwd, path); fileExists(p) {
+		return p
+	}
+	if root, _, ok := findGitRoot(cwd); ok {
+		if p := filepath.Join(root, path); fileExists(p) {
+			return p
+		}
+	}
+	// Neither resolved — the file may have been deleted since, or this is
+	// not a real path at all. Fall back to the cwd join rather than
+	// leaving it relative: the hook looks up absolute paths, so a
+	// relative row is guaranteed not to match, whereas a cwd-relative
+	// guess is the likelier of the two readings.
 	return filepath.Join(cwd, path)
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && !fi.IsDir()
 }
 
 // NormalizeFilePaths applies NormalizeFilePath to a whole list, returning

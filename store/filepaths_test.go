@@ -186,3 +186,56 @@ func TestObservationFilesBackfillIsIdempotent(t *testing.T) {
 	_ = path
 	var _ *sql.DB = st.db
 }
+
+// TestImportRebuildsTheFilePathIndex covers the documented SQLite<->Postgres
+// migration path against the file index added in migration 6.
+//
+// The index is populated by a trigger on INSERT rather than from Go, and
+// ImportRow goes through that same insert — so this is really asking
+// whether the trigger holds for a write path nobody wrote it for. If it
+// did not, a migrated store would look complete (observations and
+// embeddings all present) while the PreToolUse file-context lookup
+// silently found nothing on every file, which is precisely the failure
+// mode that took a full-stack soak to notice the first time.
+func TestImportRebuildsTheFilePathIndex(t *testing.T) {
+	src, srcPath := openTempStore(t)
+	target := "/repo/src/auth/tokens.go"
+	if _, err := src.Insert("s1", "repo", "Read", ContentHash("s1", "Read", "a", "1"),
+		Observation{Type: "discovery", Title: "read tokens", FilesRead: []string{target}}, 0); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	rows, err := src.ExportAll(0, 100)
+	if err != nil {
+		t.Fatalf("ExportAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("exported %d rows, want 1", len(rows))
+	}
+	_ = srcPath
+
+	dst, _ := openTempStore(t)
+	if _, err := dst.ImportRow(rows[0]); err != nil {
+		t.Fatalf("ImportRow: %v", err)
+	}
+
+	if got := countPaths(t, dst); got != 1 {
+		t.Fatalf("the migrated store has %d indexed paths, want 1 — the trigger did not fire on "+
+			"the import path, so file-context would find nothing for every file", got)
+	}
+	found, err := dst.ObservationsForFile("repo", target, 10)
+	if err != nil {
+		t.Fatalf("ObservationsForFile: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("looking up %q on the migrated store found %d, want 1", target, len(found))
+	}
+
+	// Re-importing is documented as safe; it must not duplicate index rows
+	// either, which a trigger firing on a no-op insert could have caused.
+	if _, err := dst.ImportRow(rows[0]); err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+	if got := countPaths(t, dst); got != 1 {
+		t.Fatalf("re-import inflated the index to %d rows, want 1", got)
+	}
+}
