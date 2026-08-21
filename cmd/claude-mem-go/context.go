@@ -12,6 +12,7 @@ import (
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"claude-mem-go/backend"
+	"claude-mem-go/excludeproject"
 	"claude-mem-go/store"
 )
 
@@ -30,6 +31,9 @@ func cmdContext(args []string) int {
 	fs := flag.NewFlagSet("context", flag.ExitOnError)
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 5, "how many recent observations to inject")
+	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
+		"a matching project gets no automatic context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
+		"empty (the default) excludes nothing")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -38,6 +42,11 @@ func cmdContext(args []string) int {
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
 		l.Printf("FAILED parsing hook payload: %v", err)
+		fmt.Println("{}")
+		return 0
+	}
+	if excludeproject.IsExcluded(in.Cwd, *excludedProjects) {
+		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		fmt.Println("{}")
 		return 0
 	}

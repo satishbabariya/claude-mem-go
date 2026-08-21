@@ -22,6 +22,8 @@ func cmdStart(args []string) int {
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	metricsAddr := fs.String("metrics-addr", "", "if set, the spawned worker serves Prometheus metrics at http://<addr>/metrics")
+	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns forwarded to the spawned worker's "+
+		"-excluded-projects (see `worker`'s own flag help); empty (the default) excludes nothing")
 	fs.Parse(args)
 
 	l := openLog("start.log")
@@ -62,6 +64,9 @@ func cmdStart(args []string) int {
 	}
 	if *metricsAddr != "" {
 		workerArgs = append(workerArgs, "-metrics-addr", *metricsAddr)
+	}
+	if *excludedProjects != "" {
+		workerArgs = append(workerArgs, "-excluded-projects", *excludedProjects)
 	}
 	if err := worker.SpawnDetached(self, workerArgs); err != nil {
 		l.Printf("FAILED to spawn worker: %v", err)

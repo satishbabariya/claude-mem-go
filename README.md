@@ -1076,6 +1076,59 @@ confirmed the identical raw `INSERT` now fails with a real Postgres
 constraint-violation error — the actual schema-level guarantee, not just
 the application-level one.
 
+### Excluding a project from automatic capture — a real feature gap this port had until now
+
+Real claude-mem lets a user opt specific projects out of automatic
+tracking entirely (`CLAUDE_MEM_EXCLUDED_PROJECTS`, a comma-separated
+glob-pattern list checked at the top of every automatic hook handler —
+`shouldTrackProject`/`isProjectExcluded` in
+`src/shared/should-track-project.ts`/`src/utils/project-filter.ts`).
+claude-mem-go had no equivalent anywhere: `worker.Daemon.process`
+(automatic capture) and the `context`/`file-context`/`prompt-context`/
+`stop` hooks (automatic recall/summary) all tracked unconditionally.
+The only way to keep a sensitive, client-confidential, or scratch
+project out of a shared memory database was to not install the plugin
+at all — all-or-nothing, unlike real claude-mem's per-project opt-out.
+
+Closed with a new `excludeproject` package and a `-excluded-projects`
+flag on `worker` (forwarded from `start`, the same way `-model`/
+`-embed-model`/`-max-concurrent` already are) and on each of `context`/
+`file-context`/`prompt-context`/`stop` individually — matching real
+claude-mem's own design of checking this at the top of every automatic
+handler independently, not one central gate. A comma-separated list of
+glob patterns (`*`, `**`, `?`, and a leading `~` for the home directory)
+matched against both the full path and the directory's basename — a
+project whose path or name matches is skipped entirely, logged as
+`skip: project excluded (cwd=...)`, before any real work happens (for
+`worker`, deliberately before ever spawning or reusing an observer
+subprocess, so an excluded project never pays for an LLM call it's about
+to throw away).
+
+Deliberately ported to match real claude-mem's *exact* glob semantics
+rather than inventing a new dialect — a user migrating an existing
+`CLAUDE_MEM_EXCLUDED_PROJECTS` value should get identical matching
+behavior here. Verified directly against the real TypeScript source, not
+just re-derived from reading it: ran real claude-mem's own
+`isProjectExcluded`/`globToRegex` functions through Node against the
+exact same 19 test cases this port's own unit tests use, confirming
+byte-for-byte identical results on every one — including the one
+initially-surprising case (an empty path against a bare `*` pattern)
+that turned out to be `shouldTrackProject`'s own separate `!cwd` guard
+short-circuiting before `isProjectExcluded` is ever consulted, not a
+divergence in the glob logic itself; this port's `IsExcluded` correctly
+folds that same guard in, since it's the one function standing in for
+both real claude-mem functions combined.
+
+Verified live end to end, not just unit-tested: two throwaway projects
+sharing one real running worker daemon, one with a directory name
+matching an exclusion pattern and one without, each driven by a real
+`claude` CLI session performing an identical `Read` tool call. The
+matching project's `PostToolUse` event was skipped before any observer
+call — confirmed via the worker's own log and, more directly, by
+querying the real resulting database afterward: exactly one observation
+existed, from the unmatched project, with the excluded project's
+directory producing zero rows.
+
 ## Quick start
 
 ```sh

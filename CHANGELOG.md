@@ -275,6 +275,27 @@ process (this project doesn't cut tagged releases on a schedule).
   hand, confirmed a raw SQL `INSERT` with a bad `type` succeeded, then
   restored it and confirmed the identical raw `INSERT` now fails with a
   real constraint-violation error.
+- **New: per-project exclusion, a real feature gap this port had until
+  now.** Real claude-mem lets a user opt specific projects out of
+  automatic tracking entirely (`CLAUDE_MEM_EXCLUDED_PROJECTS`, checked
+  at the top of every automatic hook handler); claude-mem-go had no
+  equivalent anywhere, making it all-or-nothing (uninstall the plugin
+  entirely, or track every project). Closed with a new `excludeproject`
+  package and a `-excluded-projects` flag (comma-separated glob
+  patterns, matched against both full path and basename) on `worker`
+  (forwarded from `start`) and on `context`/`file-context`/
+  `prompt-context`/`stop` individually — matching real claude-mem's own
+  per-handler design rather than one central gate. Deliberately ported
+  to match real claude-mem's *exact* glob semantics: verified directly
+  against the real TypeScript source (not just re-derived from reading
+  it) by running its own `isProjectExcluded`/`globToRegex` through Node
+  against the same 19 test cases this port's unit tests use, confirming
+  byte-for-byte identical results on every one. Verified live end to
+  end: two throwaway projects sharing one real running worker daemon,
+  each driven by a real `claude` CLI session — the matching project's
+  event was skipped before any observer call, confirmed by querying the
+  real resulting database afterward (exactly one observation, from the
+  unmatched project; zero from the excluded one).
 
 ## 0.2.0 — 2026-08-20
 

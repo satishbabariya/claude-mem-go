@@ -31,6 +31,7 @@ import (
 	"claude-mem-go/backend"
 	"claude-mem-go/classify"
 	"claude-mem-go/embed"
+	"claude-mem-go/excludeproject"
 	"claude-mem-go/hook"
 	"claude-mem-go/observer"
 	"claude-mem-go/pool"
@@ -67,6 +68,12 @@ type Daemon struct {
 	// daemon that listens on more than a Unix socket, so it's opt-in, not
 	// on by default.
 	MetricsAddr string
+	// ExcludedProjects is a comma-separated list of glob patterns (see
+	// excludeproject) — a project matching one is never observed
+	// automatically, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS
+	// feature this port previously had no equivalent of at all. Empty
+	// (the default) excludes nothing, identical to today's behavior.
+	ExcludedProjects string
 
 	sessions *sessionCache
 	counters statsCounters
@@ -287,6 +294,16 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	}
 	if in.ToolName == "" {
 		d.Log.Printf("skip: no tool_name (hook_event_name=%s)", in.Event)
+		return
+	}
+	// Checked before anything else genuinely happens — deliberately
+	// before ever spawning/reusing an observer subprocess, not just
+	// before the store Insert — so an excluded project never pays for a
+	// real LLM call it's about to throw away. Real claude-mem's
+	// equivalent (shouldTrackProject) is checked at the very top of
+	// every automatic hook handler for the identical reason.
+	if excludeproject.IsExcluded(in.Cwd, d.ExcludedProjects) {
+		d.Log.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		return
 	}
 	// Stats are written once after every genuine work attempt below — not

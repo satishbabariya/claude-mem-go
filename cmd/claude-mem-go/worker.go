@@ -19,17 +19,21 @@ func cmdWorker(args []string) int {
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket to listen on")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	metricsAddr := fs.String("metrics-addr", "", "if set, serve Prometheus metrics at http://<addr>/metrics (e.g. 127.0.0.1:9090); empty disables it")
+	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
+		"a project whose path or directory name matches one is never observed automatically, the real claude-mem "+
+		"CLAUDE_MEM_EXCLUDED_PROJECTS feature; empty (the default) excludes nothing")
 	fs.Parse(args)
 
 	d := &worker.Daemon{
-		Model:         *model,
-		EmbedModel:    *embedModel,
-		DBPath:        *dbPath,
-		SocketPath:    *socketPath,
-		MaxConcurrent: *maxConcurrent,
-		Log:           openLog("worker.log"),
-		StatsPath:     worker.DefaultStatsPath(),
-		MetricsAddr:   *metricsAddr,
+		Model:            *model,
+		EmbedModel:       *embedModel,
+		DBPath:           *dbPath,
+		SocketPath:       *socketPath,
+		MaxConcurrent:    *maxConcurrent,
+		Log:              openLog("worker.log"),
+		StatsPath:        worker.DefaultStatsPath(),
+		MetricsAddr:      *metricsAddr,
+		ExcludedProjects: *excludedProjects,
 	}
 
 	// Graceful shutdown: SIGTERM/SIGINT cancel the context Run() watches,

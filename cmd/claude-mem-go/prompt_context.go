@@ -13,6 +13,7 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
+	"claude-mem-go/excludeproject"
 	"claude-mem-go/store"
 )
 
@@ -47,6 +48,9 @@ func cmdPromptContext(args []string) int {
 	minPromptLen := fs.Int("min-prompt-len", 20, "prompts shorter than this are skipped, not embedded")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
 		"query-time recall/speed tradeoff, valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
+	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
+		"a matching project gets no automatic prompt-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
+		"empty (the default) excludes nothing")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -55,6 +59,11 @@ func cmdPromptContext(args []string) int {
 	in, err := claudeagent.ParseHookInput(os.Stdin)
 	if err != nil {
 		l.Printf("FAILED parsing hook payload: %v", err)
+		fmt.Println("{}")
+		return 0
+	}
+	if excludeproject.IsExcluded(in.Cwd, *excludedProjects) {
+		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		fmt.Println("{}")
 		return 0
 	}

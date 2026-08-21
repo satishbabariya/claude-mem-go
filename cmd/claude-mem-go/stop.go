@@ -11,6 +11,7 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
+	"claude-mem-go/excludeproject"
 	"claude-mem-go/hook"
 	"claude-mem-go/observer"
 	"claude-mem-go/store"
@@ -241,6 +242,9 @@ func cmdStop(args []string) int {
 	limit := fs.Int("limit", 50, "max observations from this session to include in the summary")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
 		"(empty to skip embedding — the summary is still persisted, just not semantically searchable)")
+	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
+		"a matching project gets no automatic session summary, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
+		"empty (the default) excludes nothing")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 50, 100)
 
@@ -253,6 +257,10 @@ func cmdStop(args []string) int {
 	}
 	if in.SessionID == "" {
 		l.Printf("no session_id in Stop payload, skipping")
+		return 0
+	}
+	if excludeproject.IsExcluded(in.Cwd, *excludedProjects) {
+		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		return 0
 	}
 
