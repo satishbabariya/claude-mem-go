@@ -7,6 +7,23 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **A routine liveness probe was logged as an ERROR on every
+  SessionStart.** `worker.IsRunning` dials the daemon's socket and closes
+  it immediately — that is how `start` decides whether to spawn and how
+  `doctor` reports reachability — so a zero-byte connection arrives by
+  design on every session. The daemon treated it as an unparseable
+  payload and logged `FAILED parsing payload: EOF (0 bytes)`. Always
+  wrong, and actively misleading once log levels existed, because ERROR
+  is precisely what an operator greps for: a completely clean
+  three-session soak produced three of them, in a run where nothing had
+  failed. Now recognized and logged at DEBUG. Zero bytes with an
+  immediate EOF is the probe's exact signature, so the check keys on
+  that rather than on "unparseable" — a client that dies mid-send leaves
+  a PARTIAL payload, which is a real failure and keeps its error
+  severity, with its own test. Verified against a real daemon: three
+  `doctor` probes now produce zero ERROR lines, and the probe is still
+  visible when `CLAUDE_MEM_LOG_LEVEL=DEBUG` asks for it.
+
 - **Corrects the path normalization shipped one commit earlier, which
   produced doubled paths.** A relative path from the observer is
   ambiguous: the model is shown the raw tool input and asked for

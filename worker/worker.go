@@ -398,6 +398,22 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		}
 	}()
 
+	// An empty payload is a liveness probe, not a failure. worker.IsRunning
+	// dials the socket and closes it immediately, which is how `start`
+	// decides whether to spawn and how `doctor` reports reachability — so
+	// on a perfectly healthy system this arrives on every SessionStart.
+	//
+	// It was logged as an error, and after severities were introduced that
+	// became actively misleading: ERROR is exactly what an operator greps
+	// for, and a clean three-session soak produced three of them. Zero
+	// bytes with an immediate EOF is precisely the probe's signature — a
+	// client that died mid-send leaves a partial payload, which still
+	// takes the error path below.
+	if len(raw) == 0 {
+		d.Log.Debugf("liveness probe (empty payload), nothing to process")
+		return
+	}
+
 	in, err := claudeagent.ParseHookInput(bytes.NewReader(raw))
 	if err != nil {
 		d.Log.Errorf("FAILED parsing payload: %v (%d bytes)", err, len(raw))
