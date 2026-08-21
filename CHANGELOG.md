@@ -52,6 +52,32 @@ process (this project doesn't cut tagged releases on a schedule).
   verified live end to end with the compiled binary: a real worker
   daemon, a real two-tool-call `claude` session, and `Stop`'s own log
   correctly reporting "from 2 observations" via the new query path.
+- **New MCP tool: `observation_context`**, matching real claude-mem's own
+  tool of the same name — the on-demand form of `prompt_context.go`'s
+  `UserPromptSubmit` hook (semantic recall against the actual submitted
+  prompt), the last read capability in this project that had no
+  on-demand MCP equivalent; every other hook-only read — including
+  `context.go`'s own `SessionStart` dump, via `RecentByProject` — already
+  got a tool earlier this session
+  (`recent_observations`/`session_observations`/`file_observations`).
+  Unlike `semantic_search_observations` (closest in shape — same
+  embed-the-query-then-`SemanticSearch` pipeline), this returns the exact
+  same pre-formatted, ready-to-inject text block the hook produces
+  automatically, not a list of results for a caller to interpret. The
+  formatter is a deliberate duplicate of `prompt_context.go`'s
+  `formatPromptContext`, not a shared import — `mcpserver` can't import
+  `cmd/claude-mem-go`, which itself imports `mcpserver` for the `mcp`
+  command, so importing it back would be a cycle. MCP tool count grows
+  from 8 to 9. Verified with a real Ollama-backed test asserting the tool
+  call's output matches the hook's exact format byte-for-byte for an
+  observation found purely by meaning (no keyword overlap with the
+  query) — confirmed as a genuine test, not a tautology, by briefly
+  breaking the formatter's header text and watching it fail before
+  restoring it — plus dedicated tests for the missing-query and
+  no-embed-model-configured error cases. Also confirmed end to end
+  against the live Postgres container through the compiled binary
+  (`add_observation` then `observation_context` in one real session),
+  not just the SQLite path the unit tests exercise.
 
 ## 0.2.0 — 2026-08-20
 

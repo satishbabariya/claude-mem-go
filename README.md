@@ -333,7 +333,7 @@ docker compose up -d
   a dedicated test against the live container that applies `project` and
   `type` together (the exact combination the old scheme couldn't have
   handled safely if it silently drifted).
-- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing eight tools any MCP
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing nine tools any MCP
   client — including Claude Code itself — can call directly:
   `search_observations` (now also takes `type` — see the CLI `search`
   entry above) and `semantic_search_observations` (keyword and
@@ -439,6 +439,26 @@ docker compose up -d
   as a public API — any future caller that skips that substitution and
   passes a negative depth straight through would otherwise hit this.
   Verified against both real backends with a dedicated regression test.
+  Also **`observation_context`** — the on-demand form of `prompt_context.go`'s
+  `UserPromptSubmit` hook, matching real claude-mem's own tool of the same
+  name. That hook's semantic recall against the actual submitted prompt
+  was, before this, the last read capability in this project with no
+  on-demand MCP equivalent — every other hook-only read (including
+  `context.go`'s own `SessionStart` dump, via `RecentByProject`) already
+  got a tool this session (`recent_observations`/`session_observations`/
+  `file_observations`). Unlike `semantic_search_observations`, which is
+  closest in shape (same
+  embed-the-query-then-`SemanticSearch` pipeline) but returns a list of
+  results for a caller to interpret, this returns the exact same
+  pre-formatted, ready-to-inject text block the hook produces
+  automatically — a duplicated formatter, not a shared import (`mcpserver`
+  can't import `cmd/claude-mem-go`, which itself imports `mcpserver` for
+  the `mcp` command; importing it back would be a cycle), verified
+  byte-for-byte against a real embedded observation found purely by
+  meaning. Also confirmed end to end against the live Postgres container
+  through the compiled binary itself (`add_observation` then
+  `observation_context` in the same real session), not just the SQLite
+  path `mcpserver_test.go` exercises.
 - **skills/mem-search** — a real Claude Code skill (`/mem-search`) teaching
   Claude when to reach for `search_observations` vs.
   `semantic_search_observations`. Validated with `claude plugin validate

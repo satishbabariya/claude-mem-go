@@ -114,6 +114,23 @@ func tools() []toolDef {
 			},
 		},
 		{
+			Name: "observation_context",
+			Description: "Get a ready-to-inject memory context block for a query — the on-demand form of " +
+				"the UserPromptSubmit hook's automatic semantic recall, for explicitly asking \"what does " +
+				"memory know relevant to X?\" mid-session. Unlike semantic_search_observations, which returns " +
+				"a list of results for a caller to interpret, this returns pre-formatted text meant to be " +
+				"read or dropped directly into a prompt.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":        map[string]any{"type": "string", "description": "A natural-language question or description"},
+					"limit":        map[string]any{"type": "integer", "description": "Max observations to include (default 10)"},
+					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name: "recent_observations",
 			Description: "The most recent observations for the current project, newest first — " +
 				"what happened lately, without a search query. Same read path SessionStart's automatic " +
@@ -409,6 +426,8 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 		result = s.runSearch(project, params.Arguments.Query, params.Arguments.ObsType, limit)
 	case "semantic_search_observations":
 		result = s.runSemanticSearch(project, params.Arguments.Query, limit)
+	case "observation_context":
+		result = s.runObservationContext(project, params.Arguments.Query, limit)
 	case "recent_observations":
 		result = s.runRecent(scopedProject, limit)
 	case "session_observations":
@@ -628,6 +647,41 @@ func (s *Server) runSemanticSearch(project, query string, limit int) toolCallRes
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatVectorMatches(matches)}}}
 }
 
+// runObservationContext is observation_context — the on-demand form of
+// cmd/claude-mem-go's prompt_context.go, the UserPromptSubmit hook that
+// fires automatically against the actual text a user submits. This lets
+// a caller (or Claude itself, mid-session) explicitly ask "what does
+// memory know relevant to X?" and get back the SAME joined,
+// ready-to-inject text that hook produces, not a raw list like
+// runSemanticSearch just above — closest in shape (same embed +
+// SemanticSearch pipeline) but meant as data for a caller to interpret,
+// not text meant to be dropped directly into a prompt. Matches real
+// claude-mem's own observation_context tool: one of the few read
+// capabilities this server's hooks already had that had no on-demand MCP
+// equivalent, unlike RecentByProject/BySessionID/ObservationsForFile
+// (recent_observations/session_observations/file_observations).
+func (s *Server) runObservationContext(project, query string, limit int) toolCallResult {
+	if s.EmbedModel == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
+			Text: "observation_context is disabled on this server (no embed model configured)"}}}
+	}
+	if query == "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "observation_context requires a \"query\" argument"}}}
+	}
+	vec, err := embed.NewClient(s.EmbedModel).Embed(query)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "embedding the query failed: " + err.Error()}}}
+	}
+	matches, err := s.st.SemanticSearch(project, vec, limit)
+	if err != nil {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "observation_context failed: " + err.Error()}}}
+	}
+	if len(matches) == 0 {
+		return toolCallResult{Content: []toolContent{{Type: "text", Text: "No embedded observations relevant to that query."}}}
+	}
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatObservationContext(matches)}}}
+}
+
 func formatSearchResults(results []store.SearchResult) string {
 	if len(results) == 0 {
 		return "No matching observations."
@@ -697,6 +751,26 @@ func formatFullObservations(results []store.SearchResult) string {
 		if len(r.Observation.FilesModified) > 0 {
 			fmt.Fprintf(&b, "Files modified: %s\n", strings.Join(r.Observation.FilesModified, ", "))
 		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatObservationContext mirrors cmd/claude-mem-go/prompt_context.go's
+// formatPromptContext exactly, byte for byte — duplicated rather than
+// imported, since mcpserver can't import package main (which itself
+// imports mcpserver for cmdMCP; importing it back would be a cycle). The
+// whole point of this tool is returning the identical ready-to-inject
+// shape that hook already produces automatically, not a fresh format
+// only coincidentally similar to it.
+func formatObservationContext(matches []store.VectorMatch) string {
+	var b strings.Builder
+	b.WriteString("Memory relevant to what you just asked:\n\n")
+	for _, m := range matches {
+		fmt.Fprintf(&b, "- %s", m.Observation.Title)
+		if m.Observation.Subtitle != "" {
+			fmt.Fprintf(&b, " — %s", m.Observation.Subtitle)
+		}
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

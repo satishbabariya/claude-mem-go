@@ -776,3 +776,82 @@ func TestMalformedLineIsSkippedNotFatal(t *testing.T) {
 		t.Fatalf("got %d responses after a malformed line, want 1 (the valid request should still be answered)", len(resp))
 	}
 }
+
+// TestToolsCallObservationContextReturnsThePromptContextHookFormat is the
+// direct regression test for the whole point of this tool: it must return
+// the SAME ready-to-inject text cmd/claude-mem-go/prompt_context.go's
+// UserPromptSubmit hook produces automatically for the same query — not a
+// list of results like semantic_search_observations returns for a caller
+// to interpret. Seeds a real embedded observation (a real Ollama call, not
+// mocked), queries by meaning rather than keyword overlap the same way
+// TestToolsCallAddObservationIsSemanticallySearchable does, and checks the
+// response against the exact header and "- Title — Subtitle" line shape
+// formatPromptContext produces, so a future divergence between the two
+// formatters (this one is a duplicate, not a shared import — see
+// formatObservationContext's own doc comment for why) would be caught here
+// rather than silently drifting.
+func TestToolsCallObservationContextReturnsThePromptContextHookFormat(t *testing.T) {
+	model := testEmbedModel(t)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	o := store.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
+	res, err := st.Insert("s1", "proj", "manual", store.ContentHash("s1", "manual", "a", "b"), o, 0)
+	if err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	text := embed.ObservationText(o.Title, o.Subtitle, o.Narrative, o.Facts)
+	vec, err := embed.NewClient(model).Embed(text)
+	if err != nil {
+		t.Fatalf("seed Embed: %v", err)
+	}
+	if err := st.SaveEmbedding(res.ID, vec); err != nil {
+		t.Fatalf("seed SaveEmbedding: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", EmbedModel: model, Log: log.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"observation_context","arguments":{"query":"why did we move off of sqlite"}}}`,
+	})
+	got := toolCallText(t, resp[0])
+
+	want := "Memory relevant to what you just asked:\n\n" +
+		"- switched the database to Postgres for production scale — local SQLite could not keep up with concurrent writes"
+	if got != want {
+		t.Fatalf("observation_context =\n%q\nwant exactly (matching formatPromptContext's own shape):\n%q", got, want)
+	}
+}
+
+// TestToolsCallObservationContextRequiresAQuery matches every other
+// required-argument check in this file (e.g.
+// TestToolsCallAddObservationRequiresTitle) — no live Ollama call needed
+// since this must fail before ever reaching the embedding step.
+func TestToolsCallObservationContextRequiresAQuery(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.EmbedModel = "nomic-embed-text"
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"observation_context","arguments":{}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("observation_context with no query: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallObservationContextDisabledWithoutEmbedModel confirms this
+// tool degrades the same explicit way semantic_search_observations does
+// when the server has no embed model configured, rather than a nil-Ollama
+// panic or a confusing unrelated error — newTestServer's Server leaves
+// EmbedModel at its zero value.
+func TestToolsCallObservationContextDisabledWithoutEmbedModel(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"observation_context","arguments":{"query":"anything"}}}`,
+	})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("observation_context with no embed model configured: want isError=true, got %v", resp[0])
+	}
+}
