@@ -1205,6 +1205,78 @@ subagent-`Read` scenario: without the guard the exact same call fell
 through to the normal "no prior observations" lookup path instead of
 being skipped, before the guard was restored and re-verified.
 
+### No `<private>` tag redaction anywhere — this port's biggest privacy gap
+
+Real claude-mem trains users on a specific convention, stated directly in
+its own `UserPromptSubmit` banner: wrap anything in
+`<private>...</private>` to keep it out of memory. `src/utils/
+tag-stripping.ts`'s `stripMemoryTags` strips six tag names — `private`,
+`claude-mem-context`, `system_instruction`, `system-instruction`,
+`persisted-output`, `system-reminder` — and real claude-mem applies it at
+both of its actual capture boundaries: the `PostToolUse` ingestion path
+(`tool_input`/`tool_response`, stripped in `shared.ts` before an
+observation is even queued) and prompt handling (`SessionRoutes.ts`
+skips session-init/injection entirely — `reason: 'private'` — when a
+prompt is wholly wrapped in a tag; `summarize.ts` strips the Stop hook's
+summarized text the same way).
+
+This port had none of it. `grep -rn "private" --include=*.go` (excluding
+tests) across the whole repository returned zero matches — a
+`<private>` block in a tool's output would be captured, sent to the
+observer LLM prompt verbatim, summarized, embedded, and persisted
+exactly like any other content, then surfaced through
+`search_observations`/`semantic_search_observations` to any MCP caller.
+
+Fixed with a new `privacy` package (`StripTags`/`StripMemoryTags`)
+porting the exact tag set. It can't be tag-stripping.ts's single combined
+regex with a `\1` backreference tying each open tag to its matching
+close tag by name — Go's `regexp` package (RE2) has no backreference
+support at all — so it's one compiled literal pattern per tag name
+instead. Verified this produces identical results to the TS version for
+same-tag nesting (the case tag-stripping.ts's own tests exercise:
+`<private>a<private>b</private>c</private>` strips down to the same
+dangling-`c</private>`-remains-as-literal-text result either way); the
+two approaches can differ only in which tag's internal counter gets
+credited when two *different* tag types are nested inside each other,
+which this package doesn't expose a per-tag breakdown for, so it isn't
+observable.
+
+Wired in at the two places that matter for this port's architecture:
+`worker.go`'s `PostToolUse` capture strips `tool_input`/`tool_response`
+*before* `transcript.Truncate`, not after — a `<private>` block that
+happened to straddle the 1500-byte truncation cutoff would otherwise be
+left with a dangling, unclosed tag this package's regex could never
+match, defeating the whole point — and `prompt-context`'s
+`UserPromptSubmit` handling skips the embedding call entirely for a
+wholly-private prompt, matching real claude-mem's `reason: 'private'`
+skip. `stop.go` needed no separate change: its session summary is built
+purely from already-persisted (by then already-redacted) observations,
+never from re-reading the raw transcript.
+
+Every unit test case was ported directly from real claude-mem's own
+`tests/utils/tag-stripping.test.ts` — read and ported from the actual
+test file, not re-derived from prose — covering basic single/multiple/
+interleaved tag removal, multiline tag content, ReDoS-volume timing (150
+tags and a 10,000-character single tag, both under a 1-second budget),
+tags embedded inside JSON strings, both `system_instruction` spellings,
+and `system-reminder` including the realistic case real claude-mem's own
+test exists for: a tool result carrying an injected CLAUDE.md dump that
+itself contains a nested `claude-mem-context` block.
+
+Verified live past the unit tests too, on both call sites, each confirmed
+as a genuine fix (not a tautological check) by temporarily removing the
+strip call, rebuilding, and rerunning the identical scenario before
+restoring it: a real `worker.process()` call with a `<private>` block in
+`tool_response` confirmed the transcript.ToolCall actually handed to the
+observer contains neither the tag markup nor the secret text inside it
+(the disabled version leaked both straight through); and the real,
+compiled `prompt-context` binary against a real Ollama model confirmed a
+wholly-private prompt is skipped before any embedding call is ever made,
+while a partially-private prompt still gets its non-private remainder
+embedded and searched normally (the disabled version sent the literal
+`<private>...</private>` markup and the secret inside it straight to a
+real embedding call).
+
 ## Quick start
 
 ```sh

@@ -338,6 +338,46 @@ process (this project doesn't cut tagged releases on a schedule).
   the exact same subagent scenario, and watching the skip disappear (the
   subagent's `Read` fell through to the normal lookup path instead) before
   restoring it.
+- **Added: `<private>`/`<system-reminder>`/etc. tag redaction — this port
+  had zero privacy-tag stripping anywhere, so content a user explicitly
+  marked private got captured, embedded, and persisted exactly like
+  anything else.** Real claude-mem trains users on a specific convention,
+  stated directly in its own `UserPromptSubmit` banner: wrap anything in
+  `<private>...</private>` to keep it out of memory. `src/utils/
+  tag-stripping.ts`'s `stripMemoryTags` (six tag names: `private`,
+  `claude-mem-context`, `system_instruction`, `system-instruction`,
+  `persisted-output`, `system-reminder`) is applied at both of real
+  claude-mem's actual capture boundaries — the `PostToolUse` ingestion
+  path (`tool_input`/`tool_response`, `shared.ts`) and prompt handling
+  (`SessionRoutes.ts`, `summarize.ts`) — and a wholly-private prompt skips
+  session-init/injection entirely (`reason: 'private'`). This port had
+  none of it: `grep -rn "private" --include=*.go` (excluding tests)
+  returned zero matches anywhere in the capture/embed pipeline. A new
+  `privacy` package (`StripTags`/`StripMemoryTags`) ports the exact tag
+  set — one compiled pattern per tag name rather than TS's single regex
+  with a `\1` backreference, since Go's RE2 engine has no backreference
+  support at all; verified this produces identical results for same-tag
+  nesting (the case tag-stripping.ts's own tests exercise), differing only
+  in an unobserved internal detail for nested-different-tag edge cases.
+  Wired into `worker.go`'s `PostToolUse` capture (stripped *before*
+  truncation, so a tag straddling the byte cutoff can't end up dangling
+  and unmatchable) and `prompt-context`'s `UserPromptSubmit` handling
+  (wholly-private prompt skips the embedding call entirely, matching real
+  claude-mem's skip). Every test case ported directly from real
+  claude-mem's own `tests/utils/tag-stripping.test.ts` (basic removal,
+  multiple/interleaved tags, multiline content, ReDoS-volume timing,
+  tags inside JSON strings, both `system_instruction` spellings,
+  `system-reminder` including a realistic nested-CLAUDE.md case) — read
+  and ported from the real test file, not re-derived. Verified live end
+  to end past the unit tests too: a real worker `process()` call with a
+  `<private>` block in `tool_response` confirmed the raw handle passed to
+  the observer contains neither the tag nor the secret text inside it, and
+  the real `prompt-context` binary against a real Ollama model confirmed
+  a wholly-private prompt is skipped before any embedding call while a
+  partially-private one still gets the non-private remainder embedded
+  normally — both confirmed as genuine fixes by temporarily removing the
+  strip call, rebuilding, watching the raw secret reach the observer/embed
+  call in each case, then restoring it.
 
 ## 0.2.0 — 2026-08-20
 

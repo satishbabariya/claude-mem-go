@@ -35,6 +35,7 @@ import (
 	"claude-mem-go/hook"
 	"claude-mem-go/observer"
 	"claude-mem-go/pool"
+	"claude-mem-go/privacy"
 	"claude-mem-go/store"
 	"claude-mem-go/transcript"
 )
@@ -340,10 +341,18 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	d.Log.Printf("observing tool=%s session=%s cwd=%s (queued %s, cached_sessions=%d)",
 		in.ToolName, in.SessionID, in.Cwd, queued.Round(time.Millisecond), d.sessions.size())
 
+	// Privacy tags are stripped BEFORE truncation, not after: a <private>
+	// block that happens to straddle Truncate's own cutoff would otherwise
+	// leave a dangling, unclosed tag that this package's regex can never
+	// match — stripping first guarantees any tag present is still whole.
+	// Privacy tags are stripped BEFORE truncation, not after: a <private>
+	// block that happens to straddle Truncate's own cutoff would otherwise
+	// leave a dangling, unclosed tag that this package's regex can never
+	// match — stripping first guarantees any tag present is still whole.
 	tc := transcript.ToolCall{
 		ToolName:   in.ToolName,
-		ToolInput:  transcript.Truncate(string(in.ToolInput)),
-		ToolOutput: transcript.Truncate(string(in.ToolResponse)),
+		ToolInput:  transcript.Truncate(privacy.StripMemoryTags(string(in.ToolInput))),
+		ToolOutput: transcript.Truncate(privacy.StripMemoryTags(string(in.ToolResponse))),
 	}
 
 	turn, turnErr := entry.handle.Observe(tc)

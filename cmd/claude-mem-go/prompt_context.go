@@ -14,6 +14,7 @@ import (
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
 	"claude-mem-go/excludeproject"
+	"claude-mem-go/privacy"
 	"claude-mem-go/store"
 )
 
@@ -73,7 +74,19 @@ func cmdPromptContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
-	prompt := strings.TrimSpace(in.Prompt)
+	prompt := privacy.StripMemoryTags(in.Prompt)
+	if prompt == "" && in.Prompt != "" {
+		// Real claude-mem's own session-init route (SessionRoutes.ts) skips
+		// entirely — no embedding call, no injection — when a prompt is
+		// wholly wrapped in a privacy tag, its own documented convention
+		// (real claude-mem's UserPromptSubmit banner tells users exactly
+		// this: wrap a message in <private>...</private> to keep it out of
+		// memory). This hook only ever embeds prompt, never persists it, but
+		// the same guarantee applies here for the same reason.
+		l.Printf("skip: prompt entirely private after tag-stripping")
+		fmt.Println("{}")
+		return 0
+	}
 	if len(prompt) < *minPromptLen {
 		l.Printf("skip: prompt too short to embed meaningfully (%d chars, want >= %d)", len(prompt), *minPromptLen)
 		fmt.Println("{}")
