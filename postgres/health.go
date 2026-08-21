@@ -63,6 +63,17 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 	// SQLite (confirmed directly: saving a wrong-dimension vector here
 	// returns a real Postgres error, "expected N dimensions, not M").
 	// vector_dims() is pgvector's own accessor.
+	// The embedding COLUMN's width, distinct from the histogram of
+	// dimensions actually stored below. Fixed when the store is created
+	// and unchangeable afterwards, so it's the number that decides
+	// whether a given embedding model can write here at all — the single
+	// most useful fact when semantic search stops working after someone
+	// switches models. An empty histogram plus a known column width is a
+	// perfectly diagnosable state; the column width alone was previously
+	// invisible.
+	if s.embedDims > 0 {
+		details["embedding_column_dims"] = strconv.Itoa(s.embedDims)
+	}
 	rows, err := s.db.Query(`SELECT vector_dims(embedding), COUNT(*) FROM observations WHERE embedding IS NOT NULL GROUP BY vector_dims(embedding) ORDER BY 1`)
 	if err != nil {
 		return nil, fmt.Errorf("query embedding dims histogram: %w", err)

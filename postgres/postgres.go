@@ -84,6 +84,11 @@ type Store struct {
 	// hand, and consistent with the cold-vs-warm connection quirk this
 	// package already documents for hnsw.ef_search.
 	iterativeScan bool
+	// embedDims is the observations.embedding column's ACTUAL width,
+	// read back from the catalog at Open rather than assumed — see
+	// columnEmbedDims for why the configured value and the real one can
+	// legitimately differ.
+	embedDims int
 }
 
 var _ store.Backend = (*Store)(nil)
@@ -339,7 +344,7 @@ func withStatementTimeout(dsn string) string {
 // comment for why this can't be left for Postgres to reject at query time.
 func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store, error) {
 	if embedDims <= 0 {
-		embedDims = DefaultEmbedDims
+		embedDims = configuredEmbedDims(DefaultEmbedDims)
 	}
 	if hnswEfSearch != 0 && (hnswEfSearch < hnswEfSearchMin || hnswEfSearch > hnswEfSearchMax) {
 		return nil, fmt.Errorf("hnsw.ef_search must be between %d and %d (or 0 to use pgvector's default), got %d",
@@ -470,7 +475,16 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	return &Store{db: db, hnswEfSearch: hnswEfSearch, iterativeScan: supportsIterativeScan(ctx, db)}, nil
+	// The column's real width, not the requested one: on an existing
+	// store they differ whenever the store predates the current
+	// configuration, and every dimension check downstream must be
+	// against what the column will actually accept.
+	actualDims := columnEmbedDims(ctx, db)
+	if actualDims == 0 {
+		actualDims = embedDims
+	}
+	return &Store{db: db, hnswEfSearch: hnswEfSearch,
+		iterativeScan: supportsIterativeScan(ctx, db), embedDims: actualDims}, nil
 }
 
 func jsonEncode(items []string) []byte {
@@ -548,12 +562,78 @@ func (s *Store) Close() error { return s.db.Close() }
 // the column's fixed dimensionality (see Open's embedDims), or Postgres
 // rejects the write outright rather than silently truncating/padding.
 func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
-	_, err := s.db.Exec(`UPDATE observations SET embedding = $1 WHERE id = $2`,
+	// Checked here, with both numbers and the remedy named, rather than
+	// left to pgvector's bare "expected 768 dimensions, not 384" — which
+	// says nothing about WHY they differ or what to do. The store's width
+	// is fixed at creation, so this is a configuration mismatch (an embed
+	// model whose output size doesn't match the store), not a transient
+	// failure worth retrying.
+	if s.embedDims > 0 && len(vec) != s.embedDims {
+		return fmt.Errorf("save embedding for observation %d: this store's embedding column is vector(%d) but the model produced %d dimensions — "+
+			"the column's width is fixed when the store is created, so either use an embedding model that emits %d dimensions or create a new store with %s=%d and re-embed",
+			observationID, s.embedDims, len(vec), s.embedDims, defaultEmbedDimsEnvVar, len(vec))
+	}
+	res, err := s.db.Exec(`UPDATE observations SET embedding = $1 WHERE id = $2`,
 		pgvector.NewVector(vec), observationID)
 	if err != nil {
 		return fmt.Errorf("save embedding for observation %d: %w", observationID, err)
 	}
+	// An UPDATE matching no rows is not success. The SQLite backend
+	// stores embeddings in a separate table with a foreign key, so the
+	// same call there fails loudly with a constraint violation; this one
+	// returned nil, telling the caller an embedding was saved when
+	// nothing was written at all. Measured divergence, not theoretical.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("save embedding for observation %d: no such observation", observationID)
+	}
 	return nil
+}
+
+// defaultEmbedDimsEnvVar lets an operator create a NEW Postgres store
+// sized for an embedding model other than the default nomic-embed-text
+// (768) — all-minilm is 384, mxbai-embed-large is 1024. An env var
+// rather than a flag deliberately: this is a storage-layer knob in the
+// same family as the pool settings above, every one of which is
+// configured this way, and threading a new flag through all nine
+// commands that expose -embed-model would put the setting in nine places
+// instead of one.
+//
+// It only applies when the table is being CREATED. An existing store's
+// column width is whatever it already is (see columnEmbedDims): a
+// pgvector column's dimensionality is fixed at creation, so re-sizing an
+// existing store means rewriting every vector, which is a deliberate
+// migration rather than something a startup flag should do silently.
+const defaultEmbedDimsEnvVar = "CLAUDE_MEM_POSTGRES_EMBED_DIMS"
+
+func configuredEmbedDims(fallback int) int {
+	if v := os.Getenv(defaultEmbedDimsEnvVar); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+// columnEmbedDims reads the real width of observations.embedding from
+// the catalog. Returns 0 when the table or column doesn't exist yet
+// (a fresh database, before migrations run).
+//
+// This is read rather than assumed because the configured value and the
+// stored one genuinely diverge in practice: the column is created once
+// by migration v1 and CREATE TABLE IF NOT EXISTS can never widen it
+// afterwards, so a store created at 768 stays 768 no matter what any
+// later configuration says. Knowing the real number is what lets
+// SaveEmbedding fail with an actionable message instead of pgvector's
+// bare "expected 768 dimensions, not 384".
+func columnEmbedDims(ctx context.Context, db *sql.DB) int {
+	var typmod int
+	err := db.QueryRowContext(ctx, `
+		SELECT atttypmod FROM pg_attribute
+		WHERE attrelid = to_regclass('observations') AND attname = 'embedding'`).Scan(&typmod)
+	if err != nil || typmod <= 0 {
+		return 0
+	}
+	return typmod
 }
 
 // supportsIterativeScan reports whether this server's pgvector is new

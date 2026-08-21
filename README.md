@@ -2161,6 +2161,77 @@ it fail. A separate test exercises the CTE fallback directly, since the
 container under test supports iterative scan and would otherwise never run
 that path.
 
+### The Postgres backend was hard-wired to 768-dimension embeddings, and said so in a comment that was wrong
+
+`postgres.Open` takes an `embedDims` parameter, but **no caller ever
+passes a nonzero value** — all 14 call sites pass `0`, which maps to
+`DefaultEmbedDims = 768`. Meanwhile `-embed-model` is a documented flag on
+nine commands. So any model that isn't 768-dimensional (`all-minilm` is
+384, `mxbai-embed-large` is 1024) simply could not be used with the
+Postgres backend, with no override anywhere.
+
+Worse, the failure was quiet in the place it mattered most. On the
+migration path, `import` aborts on the first bad row and leaves a
+**partially populated** database. On the worker path the same error is only
+logged and counted, so ingestion proceeds forever with zero embeddings —
+semantic search dead, nothing visible outside a log line.
+
+And `postgres/reembed.go` asserted that "a genuine dimension mismatch
+can't actually occur here." That was measured false: calling
+`ObservationsNeedingEmbedding` with a mismatched `expectedDims` returns
+*every* embedded row as needing work, and `SaveEmbedding` then rejects each
+one — so `reembed`, the designated remediation path, is a dead end
+precisely when it's needed. The column being fixed-width is what *causes*
+that, not what prevents it. Comment corrected rather than left to mislead
+the next reader.
+
+Three changes:
+
+- **`CLAUDE_MEM_POSTGRES_EMBED_DIMS`** sizes the column when a store is
+  *created*. An env var rather than a flag, deliberately: this is a
+  storage-layer knob in the same family as the four pool settings already
+  ported, every one configured this way, and threading a new flag through
+  all nine `-embed-model` commands would put the setting in nine places
+  instead of one. It deliberately does **not** apply to an existing store —
+  a pgvector column's width is fixed at creation, so re-sizing means
+  rewriting every vector, which is a deliberate migration, not something a
+  startup flag should do silently.
+- **`Open` reads the column's real width from the catalog** rather than
+  assuming the requested one. They genuinely diverge whenever a store
+  predates the current configuration, and every check downstream has to be
+  against what the column will actually accept.
+- **`SaveEmbedding` fails honestly.** It now names both numbers and the
+  remedy instead of surfacing pgvector's bare `expected 768 dimensions, not
+  384`, which says nothing about why they differ or what to do.
+
+A separate cross-backend divergence fixed alongside it: `SaveEmbedding` for
+a **nonexistent observation** returned `nil` on Postgres — an `UPDATE`
+matching zero rows — while SQLite raised a foreign-key violation. The
+caller was told an embedding had been saved when nothing was written.
+Measured, then fixed with a `RowsAffected` check so both backends agree.
+
+`doctor` now also reports `embedding_column_dims`, distinct from the
+histogram of dimensions actually stored. It's the number that decides
+whether a given model can write to the store at all — the single most
+useful fact when semantic search stops working after someone switches
+models — and it was previously invisible.
+
+Verified against a real container throughout: a scratch store created with
+`CLAUDE_MEM_POSTGRES_EMBED_DIMS=384` really has a `vector(384)` column,
+accepts a 384-dim embedding, and rejects a 768-dim one with the actionable
+message; `doctor` reports `embedding_column_dims=384` for it and `768` for
+the real dev store. Both guards confirmed genuine by break/restore — with
+them removed, the dimension test fails showing exactly the bare pgvector
+error this replaces.
+
+Also recorded, since it bounds the search: a systematic cross-backend diff
+of `Timeline`, `ByIDs`, `ObservationsForFile`, `CountByProject`,
+`RecentByProject`, `BySessionID` and `Prune` measured **identical**
+behavior on both backends — ordering and tiebreakers, cross-project anchor
+rejection, missing-anchor errors, depth and limit clamping at `0`/`-1`/
+`-5`/`1000`, prune's `<` cutoff, and no orphaned vector rows on either.
+That part of the vein is dry.
+
 ## Quick start
 
 ```sh

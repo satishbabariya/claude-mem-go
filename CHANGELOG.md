@@ -869,6 +869,34 @@ process (this project doesn't cut tagged releases on a schedule).
   at test scale passes whether or not the guard exists, which is exactly
   how this survived.
 
+- **Fixed: the Postgres backend was hard-wired to 768-dimension
+  embeddings.** `postgres.Open` takes an `embedDims` parameter but no
+  caller ever passed a nonzero value — all 14 call sites pass `0` → 768 —
+  while `-embed-model` is a documented flag on nine commands, so any
+  non-768 model (`all-minilm` 384, `mxbai-embed-large` 1024) simply could
+  not be used, with no override anywhere. The failure was quiet where it
+  mattered: `import` aborts on the first bad row leaving a partially
+  populated database, and the worker only logs it, so ingestion proceeds
+  forever with zero embeddings and semantic search silently dead. Added
+  `CLAUDE_MEM_POSTGRES_EMBED_DIMS` to size the column at creation (an env
+  var, matching the four pool knobs already ported, rather than a tenth
+  flag in nine places); `Open` now reads the column's REAL width from the
+  catalog instead of assuming the requested one; and `SaveEmbedding`
+  fails with both numbers and the remedy instead of pgvector's bare
+  "expected 768 dimensions, not 384". Also corrected a comment in
+  `reembed.go` claiming a dimension mismatch "can't actually occur here"
+  — measured false, and it makes `reembed` a dead end exactly when it's
+  needed. Separately fixed a cross-backend divergence found alongside it:
+  `SaveEmbedding` for a nonexistent observation returned `nil` on
+  Postgres (an `UPDATE` matching zero rows) while SQLite raised a foreign
+  key violation — the caller was told an embedding was saved when nothing
+  was written. `doctor` now reports `embedding_column_dims`. Verified
+  against a real container end to end; both guards confirmed genuine by
+  break/restore. A systematic diff of `Timeline`, `ByIDs`,
+  `ObservationsForFile`, `CountByProject`, `RecentByProject`,
+  `BySessionID` and `Prune` measured identical on both backends, bounding
+  the remaining search.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and

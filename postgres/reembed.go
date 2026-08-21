@@ -7,12 +7,18 @@ import (
 )
 
 // ObservationsNeedingEmbedding mirrors store.Store's method of the same
-// name — the remediation read path for the reembed CLI command. Unlike
-// the SQLite backend, a genuine dimension mismatch can't actually occur
-// here (the embedding column is a fixed vector(N) type — see
-// HealthDetails' doc comment), but a NULL embedding (never embedded at
-// all) is exactly as real a case here as there, so this still needs to
-// exist and behave identically for callers.
+// name — the remediation read path for the reembed CLI command.
+//
+// An earlier version of this comment claimed a genuine dimension
+// mismatch "can't actually occur here" because the column is a fixed
+// vector(N). That was wrong, and measured wrong: calling this with an
+// expectedDims that differs from the column's width returns EVERY
+// embedded row as needing re-embedding, and SaveEmbedding then rejects
+// each one — so reembed, the designated remediation path, is a dead end
+// on this backend whenever the configured model's output size doesn't
+// match the store. The column being fixed-width is exactly what causes
+// that, not what prevents it. SaveEmbedding now says so explicitly
+// instead of surfacing pgvector's bare dimension error.
 func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	scope := ""

@@ -999,3 +999,91 @@ func TestSemanticSearchPlanNeverLeavesAScopedSearchUnguarded(t *testing.T) {
 		}
 	}
 }
+
+// TestPostgresSaveEmbeddingRejectsAnUnknownObservation is a cross-backend
+// parity fix: an UPDATE matching no rows is not success. The SQLite
+// backend stores embeddings in a separate table with a foreign key, so
+// the same call there fails loudly with a constraint violation; this one
+// returned nil, telling the caller an embedding was saved when nothing
+// was written. Measured divergence, not theoretical.
+func TestPostgresSaveEmbeddingRejectsAnUnknownObservation(t *testing.T) {
+	st := openTestStore(t)
+	vec := make([]float32, st.embedDims)
+	err := st.SaveEmbedding(999999999, vec)
+	if err == nil {
+		t.Fatal("SaveEmbedding for a nonexistent observation returned nil — the caller would believe an embedding was stored when the UPDATE matched no rows")
+	}
+	if !strings.Contains(err.Error(), "no such observation") {
+		t.Fatalf("error = %v, want it to name the missing observation", err)
+	}
+}
+
+// TestPostgresSaveEmbeddingRejectsWrongDimensionsActionably locks in the
+// message, not just the failure. pgvector's own error ("expected 768
+// dimensions, not 384") says nothing about WHY the two differ or what to
+// do, and the difference is always a configuration mismatch: the column's
+// width is fixed when the store is created and can never be widened
+// afterwards.
+func TestPostgresSaveEmbeddingRejectsWrongDimensionsActionably(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+	res, err := st.Insert("s1", project, "Bash",
+		store.ContentHash("s1", "Bash", project, "dims"),
+		store.Observation{Type: "discovery", Title: "row"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	wrong := make([]float32, st.embedDims+1)
+	err = st.SaveEmbedding(res.ID, wrong)
+	if err == nil {
+		t.Fatal("SaveEmbedding with the wrong dimension count: want an error, got nil")
+	}
+	for _, want := range []string{"fixed", defaultEmbedDimsEnvVar} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want it to mention %q so the operator knows this is a configuration mismatch and how to resolve it", err, want)
+		}
+	}
+}
+
+// TestConfiguredEmbedDims covers the env-var override that makes a
+// non-default embedding model usable on a NEW store. Every caller passes
+// 0 for embedDims (14 call sites, none plumbing it), so before this the
+// Postgres backend was hard-wired to 768 with no override anywhere —
+// all-minilm (384) and mxbai-embed-large (1024) simply could not be used.
+func TestConfiguredEmbedDims(t *testing.T) {
+	if got := configuredEmbedDims(DefaultEmbedDims); got != DefaultEmbedDims {
+		t.Fatalf("configuredEmbedDims with no env var = %d, want the %d default", got, DefaultEmbedDims)
+	}
+	t.Setenv(defaultEmbedDimsEnvVar, "384")
+	if got := configuredEmbedDims(DefaultEmbedDims); got != 384 {
+		t.Fatalf("configuredEmbedDims with %s=384 = %d, want 384", defaultEmbedDimsEnvVar, got)
+	}
+	// Anything unusable falls back rather than creating a broken column.
+	for _, bad := range []string{"not-a-number", "0", "-5"} {
+		t.Setenv(defaultEmbedDimsEnvVar, bad)
+		if got := configuredEmbedDims(DefaultEmbedDims); got != DefaultEmbedDims {
+			t.Fatalf("configuredEmbedDims with %s=%q = %d, want the %d default", defaultEmbedDimsEnvVar, bad, got, DefaultEmbedDims)
+		}
+	}
+}
+
+// TestColumnEmbedDimsReadsTheRealWidth confirms Open adopts the column's
+// ACTUAL width rather than the requested one. They diverge whenever a
+// store predates the current configuration — the column is created once
+// by migration v1 and CREATE TABLE IF NOT EXISTS can never widen it — and
+// every dimension check must be against what the column will really
+// accept.
+func TestColumnEmbedDimsReadsTheRealWidth(t *testing.T) {
+	st := openTestStore(t)
+	if st.embedDims <= 0 {
+		t.Fatalf("Store.embedDims = %d, want the real column width", st.embedDims)
+	}
+	var typmod int
+	if err := st.db.QueryRow(`SELECT atttypmod FROM pg_attribute WHERE attrelid='observations'::regclass AND attname='embedding'`).Scan(&typmod); err != nil {
+		t.Fatalf("read column width: %v", err)
+	}
+	if st.embedDims != typmod {
+		t.Fatalf("Store.embedDims = %d but the column is vector(%d)", st.embedDims, typmod)
+	}
+}
