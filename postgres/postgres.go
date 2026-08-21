@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -73,6 +74,16 @@ type Store struct {
 	// rather than a plain SET against a pooled connection. 0 (Open's
 	// default) leaves pgvector's built-in default in place untouched.
 	hnswEfSearch int
+	// iterativeScan records whether this server's pgvector supports
+	// hnsw.iterative_scan (0.8.0+). Detected once at Open rather than
+	// probed per call: an unsupported hnsw.* GUC does not fail
+	// harmlessly — on a connection that has already touched a vector
+	// operation it errors outright ("invalid configuration parameter
+	// name", "hnsw is a reserved prefix"), which would take
+	// SemanticSearch down entirely on an older pgvector. Confirmed by
+	// hand, and consistent with the cold-vs-warm connection quirk this
+	// package already documents for hnsw.ef_search.
+	iterativeScan bool
 }
 
 var _ store.Backend = (*Store)(nil)
@@ -459,7 +470,7 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	return &Store{db: db, hnswEfSearch: hnswEfSearch}, nil
+	return &Store{db: db, hnswEfSearch: hnswEfSearch, iterativeScan: supportsIterativeScan(ctx, db)}, nil
 }
 
 func jsonEncode(items []string) []byte {
@@ -545,6 +556,57 @@ func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
 	return nil
 }
 
+// supportsIterativeScan reports whether this server's pgvector is new
+// enough for hnsw.iterative_scan (0.8.0+), which SemanticSearch needs to
+// filter by project without silently losing results. Any uncertainty —
+// unreadable version, unparseable version — is reported as false so the
+// caller takes the slower but always-correct path; guessing "supported"
+// and being wrong would break SemanticSearch outright rather than merely
+// slow it down.
+func supportsIterativeScan(ctx context.Context, db *sql.DB) bool {
+	var version string
+	if err := db.QueryRowContext(ctx,
+		`SELECT extversion FROM pg_extension WHERE extname = 'vector'`).Scan(&version); err != nil {
+		return false
+	}
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return false
+	}
+	return major > 0 || minor >= 8
+}
+
+// semanticSearchPlan decides how a SemanticSearch call must be executed
+// so that a project filter can never starve the candidate set — see
+// SemanticSearch's own comment for the measured bug this guards.
+//
+// Split out as its own method purely so the routing is testable without
+// the tens of thousands of rows it takes to make Postgres's planner
+// actually choose the HNSW plan. That threshold is why the bug survived
+// this long: at small row counts the planner picks a plain btree
+// pre-filter and returns correct results, so no small-scale test could
+// have caught it.
+//
+// An unscoped search (project == "") needs neither treatment: with no
+// filter there is nothing for the post-filter to discard.
+func (s *Store) semanticSearchPlan(project string) (useCTE, useIterative bool) {
+	if project == "" {
+		return false, false
+	}
+	if s.iterativeScan {
+		return false, true
+	}
+	return true, false
+}
+
 // SemanticSearch orders by pgvector's cosine-distance operator (<=>),
 // backed by the HNSW index from Open's schema — real ANN search, not a
 // linear scan. Score is 1-distance so it matches the SQLite backend's
@@ -560,15 +622,42 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 		scope = "AND project = $3"
 		args = append(args, project)
 	}
+	const cols = `id, project, tool_name, type, title, subtitle, facts, narrative,
+		       concepts, files_read, files_modified`
 	query := `
-		SELECT id, project, tool_name, type, title, subtitle, facts, narrative,
-		       concepts, files_read, files_modified, 1 - (embedding <=> $1) AS score
+		SELECT ` + cols + `, 1 - (embedding <=> $1) AS score
 		FROM observations
 		WHERE embedding IS NOT NULL ` + scope + `
 		ORDER BY embedding <=> $1
 		LIMIT $2`
 
-	if s.hnswEfSearch <= 0 {
+	// The project filter above is a POST-filter on the HNSW scan, and
+	// that is a real, measured bug, not a theoretical one: pgvector walks
+	// hnsw.ef_search (default 40) globally-nearest candidates and only
+	// then drops the ones whose project doesn't match, so when a
+	// project's rows aren't among the global nearest, every candidate is
+	// discarded and the result is EMPTY — no error, no warning.
+	// Reproduced through this exact Go API against a real container with
+	// the real schema and every index in place: 60,000 embedded rows in
+	// the queried project returned 0 matches, with EXPLAIN showing
+	// "Index Scan using idx_observations_embedding_hnsw ... Rows Removed
+	// by Filter: 40". That turns this backend's whole reason for existing
+	// — one shared Postgres serving many projects — into silence, and it
+	// feeds the UserPromptSubmit hook and the semantic MCP tools, so
+	// memory simply stops answering.
+	//
+	// pgvector 0.8's hnsw.iterative_scan is the purpose-built fix: the
+	// scan keeps going until enough rows survive the filter. Measured on
+	// the same 60k-row reproduction, it returns the correct 10 rows in
+	// ~26ms. strict_order rather than relaxed_order because callers
+	// present these as ranked results and relaxed_order explicitly gives
+	// up ordering guarantees. A materialized CTE would also fix it and be
+	// exact, but measured 2.7s on that same data versus ~26ms — it throws
+	// away the ANN property this backend exists to provide, so it's the
+	// fallback for older pgvector only, not the default.
+	useCTE, useIterative := s.semanticSearchPlan(project)
+	scoped := project != ""
+	if !scoped && s.hnswEfSearch <= 0 {
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("semantic search: %w", err)
@@ -576,28 +665,55 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 		defer rows.Close()
 		return scanVectorMatches(rows)
 	}
+	if useCTE {
+		// Older pgvector: no iterative scan available, so pre-filter in a
+		// MATERIALIZED CTE. Exact and always correct, but O(rows in
+		// project) — slow-and-right beats fast-and-silently-empty.
+		query = `
+		WITH scoped AS MATERIALIZED (
+			SELECT ` + cols + `, embedding
+			FROM observations
+			WHERE embedding IS NOT NULL ` + scope + `
+		)
+		SELECT ` + cols + `, 1 - (embedding <=> $1) AS score
+		FROM scoped
+		ORDER BY embedding <=> $1
+		LIMIT $2`
+		if s.hnswEfSearch <= 0 {
+			rows, err := s.db.Query(query, args...)
+			if err != nil {
+				return nil, fmt.Errorf("semantic search: %w", err)
+			}
+			defer rows.Close()
+			return scanVectorMatches(rows)
+		}
+	}
 
-	// hnsw.ef_search controls the ANN index's query-time recall/speed
-	// tradeoff — pgvector's own built-in default (40) is a reasonable
-	// starting point but doesn't necessarily hold as `observations` grows
-	// well past the row counts that default was tuned against; the
-	// mandate's own "real ANN vector search... at scale" has no teeth
-	// without a way to actually turn this knob. SET LOCAL, not a plain
-	// SET: s.db is a pooled *sql.DB, and database/sql gives no control
-	// over which physical connection any one call gets — a plain SET
-	// would apply to whatever connection happens to serve THIS call and
-	// then silently persist for whatever UNRELATED query the pool hands
-	// that same connection next. SET LOCAL confines the override to this
-	// one transaction, gone the instant it ends, so a caller with a
-	// tuned ef_search can never leak it into a caller without one (or
-	// with a different value) sharing the same pool.
+	// SET LOCAL, not a plain SET: s.db is a pooled *sql.DB, and
+	// database/sql gives no control over which physical connection any
+	// one call gets — a plain SET would apply to whatever connection
+	// happens to serve THIS call and then silently persist for whatever
+	// UNRELATED query the pool hands that same connection next. SET LOCAL
+	// confines every override below to this one transaction, gone the
+	// instant it ends.
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin semantic search tx: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
-		return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
+	if s.hnswEfSearch > 0 {
+		// hnsw.ef_search controls the ANN index's query-time
+		// recall/speed tradeoff — pgvector's built-in default (40)
+		// doesn't necessarily hold as `observations` grows well past the
+		// row counts it was tuned against.
+		if _, err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
+			return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
+		}
+	}
+	if useIterative {
+		if _, err := tx.Exec("SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
+			return nil, fmt.Errorf("set hnsw.iterative_scan: %w", err)
+		}
 	}
 	rows, err := tx.Query(query, args...)
 	if err != nil {

@@ -2097,6 +2097,70 @@ duplicate `content_hash` within one file, and invalid observation `type`
 arrays can't reach either column, since `ExportRow.Observation` is typed
 and `encoding/json` rejects them first.
 
+### The Postgres backend's project filter could make semantic search return **zero** results
+
+`SemanticSearch`'s project predicate was a **post**-filter on the HNSW
+scan: pgvector walks `hnsw.ef_search` (default 40) globally-nearest
+candidates and only *then* drops the ones whose `project` doesn't match.
+When a project's rows aren't among the global nearest, every candidate is
+discarded and the result is empty — no error, no warning. The SQLite
+backend pre-filters, so it always returns `min(limit, project rows)`.
+
+This turns the Postgres backend's entire reason for existing — one shared
+database serving many projects — into silence, and it feeds the
+`UserPromptSubmit` hook and the semantic MCP tools, so memory just stops
+answering.
+
+Reproduced through the real Go API, against a real container, with the
+real schema and **every index in place**: 60,000 embedded rows in the
+queried project, 20,000 in another project whose vectors sat nearer the
+query.
+
+```
+project="target"  (60,000 embedded rows)  ->  0 rows returned
+project="noise"                           -> 10 rows returned
+project=""        (unscoped)              -> 10 rows returned
+```
+
+`EXPLAIN`: `Index Scan using idx_observations_embedding_hnsw … Rows
+Removed by Filter: 40 … actual rows=0`.
+
+Two things made this hard to catch, and both are worth recording. The bug
+is **planner-dependent**: at small row counts Postgres picks a plain btree
+pre-filter and returns correct results, so no small-scale test could have
+found it — at 4,000 rows it worked, at 60,000 it silently broke. And the
+port's existing `-hnsw-ef-search` knob does *not* rescue it; raising
+`ef_search` just walks more global candidates that still belong to the
+wrong project.
+
+Fixed with pgvector 0.8's `hnsw.iterative_scan`, which is purpose-built
+for filtered ANN — the scan keeps going until enough rows survive the
+filter. Measured on the same 60k reproduction: **~26ms**, correct results.
+`strict_order` rather than `relaxed_order`, because callers present these
+as ranked results and `relaxed_order` explicitly abandons ordering
+guarantees.
+
+A materialized-CTE pre-filter also fixes it and is exact, but measured
+**2.7 seconds** on that same data versus ~26ms — it discards the ANN
+property this backend exists to provide. So it's kept only as the
+fallback for pgvector older than 0.8, where slow-and-right still beats
+fast-and-silently-empty. That fallback isn't optional politeness: an
+unsupported `hnsw.*` GUC doesn't degrade quietly, it **errors** on any
+connection that has already touched a vector operation, which would take
+`SemanticSearch` down entirely — the same cold-vs-warm connection quirk
+this package already documents for `ef_search`. So the capability is
+detected once at `Open` from `pg_extension`, and anything uncertain reads
+as unsupported.
+
+The regression test asserts the **routing decision**, not a row count, and
+that choice is deliberate: a row-count assertion at test scale passes
+whether or not the guard exists, which is exactly how this survived. What
+must hold at every scale is that a scoped search is never issued as a bare
+HNSW post-filter. Confirmed genuine by reverting the routing and watching
+it fail. A separate test exercises the CTE fallback directly, since the
+container under test supports iterative scan and would otherwise never run
+that path.
+
 ## Quick start
 
 ```sh

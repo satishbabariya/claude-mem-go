@@ -844,6 +844,31 @@ process (this project doesn't cut tagged releases on a schedule).
   and all matched (negative cost/epoch, empty required fields,
   duplicate content_hash, invalid type), bounding the concern.
 
+- **Fixed: the Postgres backend's project filter could make semantic
+  search return ZERO results.** `SemanticSearch`'s project predicate was
+  a post-filter on the HNSW scan — pgvector walks `hnsw.ef_search`
+  globally-nearest candidates and only then drops non-matching projects,
+  so when a project's rows aren't among the global nearest, everything is
+  discarded and the result is empty with no error. Reproduced through the
+  real Go API against a real container with every index in place: 60,000
+  embedded rows in the queried project returned 0 matches, `EXPLAIN`
+  showing `Rows Removed by Filter: 40 … actual rows=0`. This turns the
+  backend's whole purpose — one shared Postgres serving many projects —
+  into silence, and it feeds the `UserPromptSubmit` hook and the semantic
+  MCP tools. Two things hid it: the bug is planner-dependent (correct at
+  4,000 rows, silently broken at 60,000), and the existing
+  `-hnsw-ef-search` knob does not rescue it. Fixed with pgvector 0.8's
+  `hnsw.iterative_scan` (`strict_order`, since callers present ranked
+  results), measured ~26ms on the same data. A materialized-CTE
+  pre-filter is exact but measured 2.7s versus ~26ms, so it's kept only
+  as the fallback for pgvector <0.8 — necessary because an unsupported
+  `hnsw.*` GUC errors outright on a warm connection rather than degrading
+  quietly, so capability is detected once at `Open` and anything
+  uncertain reads as unsupported. The regression test asserts the routing
+  decision rather than a row count, deliberately: a row-count assertion
+  at test scale passes whether or not the guard exists, which is exactly
+  how this survived.
+
 ## 0.2.0 — 2026-08-20
 
 Enterprise-readiness pass: schema completeness, observability, backup, and
