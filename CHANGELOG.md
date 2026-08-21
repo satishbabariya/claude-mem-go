@@ -7,6 +7,34 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The PreToolUse file-context feature worked only by luck — file paths
+  were stored non-canonically.** The hook looks up the path Claude Code
+  puts in the tool payload, which is absolute. The worker stored whatever
+  the observer model emitted, verbatim, and the prompt says only
+  `<file>...</file>` — so the model sometimes shortened an absolute input
+  to a repo-relative one. Those never match, and the lookup silently
+  returns nothing. Measured in this project's own development store: **8
+  absolute and 7 relative** paths recorded, and across the entire history
+  of `file-context.log` only **2 successful injections against 9 "no
+  prior observations"**. A real two-session Postgres soak reproduced it
+  exactly: session one recorded `src/auth/tokens.go`, session two looked
+  up `/private/.../repo/src/auth/tokens.go` and found nothing, with the
+  observation sitting right there. Worth stating precisely, because the
+  first framing was wrong: this was never "the feature has never worked"
+  — it worked whenever the model happened to emit an absolute path, which
+  is exactly what made it hard to notice. `store.NormalizeFilePath` now
+  canonicalizes on the **write** path, so there is one form in the column
+  and every reader agrees — including the SQLite `observation_files`
+  trigger and Postgres's GIN indexes, which both derive from it. The read
+  path normalizes too, for symmetry. An empty cwd leaves the path alone
+  rather than guessing, since resolving against the wrong directory would
+  manufacture a confidently incorrect path. Verified end to end on
+  Postgres: after the fix, session one stored the absolute path and
+  session two logged `injected 1 observations` — the first successful
+  file-context injection in any soak. Existing rows keep their recorded
+  form; a backfill is not possible in general because a row records its
+  project, not the cwd it was observed in.
+
 - **No headless session ever produced a session summary.** The Stop hook
   ran, but never finished. Verified with a probe plugin whose Stop hook
   merely slept and then wrote a file: after `claude -p` exited it

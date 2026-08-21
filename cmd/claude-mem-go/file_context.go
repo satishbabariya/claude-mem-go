@@ -85,14 +85,20 @@ func cmdFileContext(args []string) int {
 	// Fetch well past *limit and let SelectFileContext choose. Querying
 	// exactly *limit rows would leave nothing to select from, which is
 	// how the query's ORDER BY ended up being the whole policy.
-	results, err := st.ObservationsForFile(project, toolInput.FilePath, store.FileContextCandidateLimit(*limit))
+	// Normalized the same way the write path is, so the two agree even if
+	// a payload ever carries a relative path. Claude Code sends absolute
+	// today, which is exactly why relative rows written by the observer
+	// never matched.
+	targetPath := store.NormalizeFilePath(in.Cwd, toolInput.FilePath)
+
+	results, err := st.ObservationsForFile(project, targetPath, store.FileContextCandidateLimit(*limit))
 	if err != nil {
-		l.Errorf("FAILED ObservationsForFile(%s): %v", toolInput.FilePath, err)
+		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
 		return 0
 	}
 	if len(results) == 0 {
-		l.Printf("no prior observations for file=%s project=%s", toolInput.FilePath, project)
+		l.Printf("no prior observations for file=%s project=%s", targetPath, project)
 		fmt.Println("{}")
 		return 0
 	}
@@ -113,7 +119,7 @@ func cmdFileContext(args []string) int {
 	// comparison (buildFileContextTimeline: "File modified since last
 	// observation, skipping context injection"). This port had no way to
 	// even ask — SearchResult carried no timestamp until now.
-	if mtimeMs, ok := fileMtimeMs(in.Cwd, toolInput.FilePath); ok {
+	if mtimeMs, ok := fileMtimeMs(in.Cwd, targetPath); ok {
 		newest := int64(0)
 		for _, r := range results {
 			if r.CreatedAtEpoch > newest {
@@ -123,20 +129,20 @@ func cmdFileContext(args []string) int {
 		if newest > 0 && mtimeMs >= newest {
 			l.Printf("skip: file=%s modified at %d, after the newest of %d observation(s) (%d) — "+
 				"what we remember describes an older version of this file",
-				toolInput.FilePath, mtimeMs, len(results), newest)
+				targetPath, mtimeMs, len(results), newest)
 			fmt.Println("{}")
 			return 0
 		}
 	}
 
 	candidates := len(results)
-	results = store.SelectFileContext(results, toolInput.FilePath, *limit)
+	results = store.SelectFileContext(results, targetPath, *limit)
 	if candidates > len(results) {
 		l.Printf("narrowed %d candidate observation(s) to %d for file=%s (one per session, most specific first)",
-			candidates, len(results), toolInput.FilePath)
+			candidates, len(results), targetPath)
 	}
 
-	ctx := formatFileContext(toolInput.FilePath, results)
+	ctx := formatFileContext(targetPath, results)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",
 		AdditionalContext: ctx,
@@ -147,7 +153,7 @@ func cmdFileContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
-	l.Printf("injected %d observations for file=%s project=%s", len(results), toolInput.FilePath, project)
+	l.Printf("injected %d observations for file=%s project=%s", len(results), targetPath, project)
 	fmt.Println(string(enc))
 	return 0
 }

@@ -512,6 +512,23 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 	hash := store.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
+	// Canonicalize the observer's file paths before they are stored.
+	//
+	// The model is told only "<file>...</file>", so it sometimes shortens
+	// an absolute tool input to a repo-relative path. The PreToolUse
+	// file-context hook looks up the absolute path Claude Code puts in
+	// the payload, so a relative row never matches and the lookup
+	// silently finds nothing. Measured in this project's own store: 8
+	// absolute vs 7 relative paths recorded, and only 2 successful
+	// injections in the entire history of file-context.log.
+	//
+	// Done here, on the write path, so there is exactly one canonical
+	// form in the column — which the SQLite observation_files trigger and
+	// Postgres's GIN indexes both derive from, so they stay consistent
+	// for free.
+	turn.Observation.FilesRead = store.NormalizeFilePaths(in.Cwd, turn.Observation.FilesRead)
+	turn.Observation.FilesModified = store.NormalizeFilePaths(in.Cwd, turn.Observation.FilesModified)
+
 	res, err := d.st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
 		d.Log.Errorf("FAILED sqlite insert: %v", err)
