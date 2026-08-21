@@ -7,6 +7,33 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The worker daemon could be writing to a different store than
+  everything else read, invisibly.** The daemon opens its store once at
+  start and never re-reads `$CLAUDE_MEM_DB` — correctly, since switching
+  databases underneath in-flight work would be worse. But a worker
+  started before that variable changed keeps writing to the OLD store
+  while every hook, every CLI command and `doctor` itself resolve the new
+  one, and nothing anywhere reported which store the daemon had.
+  Reproduced end to end: worker started on store A, `CLAUDE_MEM_DB` then
+  pointed at B, one PostToolUse event — the observation landed in **A**,
+  while `doctor -db B` reported "✔ worker daemon reachable", "✔ database
+  reachable (B)" and "the store is empty — nothing recorded yet". Every
+  check green, a reassuring message, and the memory in a different file.
+  The same split-brain class as the `CLAUDE_MEM_DB` fix earlier, but
+  worker-vs-everything-else. `Stats` now carries the daemon's store
+  (redacted via `RedactDSN`, since a Postgres DSN carries a password and
+  the stats file is world-readable), `doctor` compares it against its own
+  and fails **critically** on a mismatch with an actionable message, and
+  the Prometheus endpoint exposes it as `claude_mem_go_worker_info{store=…}`
+  so monitoring can see it too. Two supporting fixes fell out: the daemon
+  wrote its stats file only from the event path, so a freshly started
+  worker published nothing at all — meaning the window where a mismatch
+  was undetectable was exactly the window right after the variable
+  changed, when it is most likely; it now publishes at startup. And the
+  `worker` subcommand had `-socket` but no `-stats`, so two daemons on
+  different sockets would fight over one stats file and `doctor -stats`
+  had nothing to point at.
+
 - **A plugin installed from a git source captured nothing, silently, and
   could not be diagnosed.** The binary is gitignored — a build artifact,
   not source — so such an install ships the complete Go source and no

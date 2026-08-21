@@ -17,6 +17,12 @@ func cmdWorker(args []string) int {
 		"(empty to skip embedding — observations are still persisted, just not semantically searchable)")
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket to listen on")
+	// Symmetric with -socket, and needed for the same reason: a daemon
+	// can already be run on a non-default socket, but its stats file was
+	// hardcoded — so two daemons on different sockets would fight over
+	// one stats file, and `doctor -stats` (which can be pointed anywhere)
+	// had nothing to point AT.
+	statsPath := fs.String("stats", worker.DefaultStatsPath(), "file to write stats snapshots to")
 	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
 	metricsAddr := fs.String("metrics-addr", "", "if set, serve Prometheus metrics at http://<addr>/metrics (e.g. 127.0.0.1:9090); empty disables it")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
@@ -31,7 +37,7 @@ func cmdWorker(args []string) int {
 		SocketPath:       *socketPath,
 		MaxConcurrent:    *maxConcurrent,
 		Log:              openLog("worker.log"),
-		StatsPath:        worker.DefaultStatsPath(),
+		StatsPath:        *statsPath,
 		MetricsAddr:      *metricsAddr,
 		ExcludedProjects: *excludedProjects,
 	}

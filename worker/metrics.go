@@ -32,6 +32,24 @@ func WriteMetrics(w io.Writer, s Stats) error {
 		{"claude_mem_go_worker_pool_in_flight", "Pool slots currently held.", "gauge", float64(s.PoolInFlight)},
 		{"claude_mem_go_worker_pool_capacity", "Pool's maximum concurrent slots.", "gauge", float64(s.PoolCapacity)},
 	}
+	// Identity as a labelled _info gauge, the idiomatic Prometheus way to
+	// expose "which thing is this". The store matters specifically: the
+	// daemon opens it once at start and never re-reads $CLAUDE_MEM_DB, so
+	// a worker started before that variable changed keeps writing to the
+	// old store while everything else resolves the new one — reproduced
+	// end to end, with `doctor` reporting every check green and the
+	// observation landing in a different file. Already redacted upstream
+	// (see Daemon.Stats), because a Postgres DSN carries a password and
+	// this endpoint is plain HTTP.
+	if s.Store != "" {
+		if _, err := fmt.Fprintf(w,
+			"# HELP claude_mem_go_worker_info Daemon identity; the store label is the database it writes to.\n"+
+				"# TYPE claude_mem_go_worker_info gauge\n"+
+				"claude_mem_go_worker_info{store=%q} 1\n", s.Store); err != nil {
+			return err
+		}
+	}
+
 	for _, l := range lines {
 		if _, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s %g\n", l.name, l.help, l.name, l.typ, l.name, l.value); err != nil {
 			return err

@@ -29,6 +29,12 @@ func cmdDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
+	// Parallel to -socket, and for the same reason: a daemon can be run
+	// on a non-default socket and stats path (the worker subcommand has
+	// taken both since it existed), and doctor could point at the first
+	// but not the second — so it silently read a DIFFERENT daemon's
+	// stats file than the socket it was probing.
+	statsPath := fs.String("stats", worker.DefaultStatsPath(), "worker stats file to read (must match the daemon on -socket)")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model semantic search would use")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: the hnsw.ef_search override configured "+
 		"elsewhere (mcp/semantic-search/prompt-context), so its HealthDetails reflects the same value — "+
@@ -124,10 +130,12 @@ func cmdDoctor(args []string) int {
 		fmt.Printf("… worker daemon not running at %s (not necessarily a problem — `start` launches it lazily from SessionStart)\n", *socketPath)
 	}
 
+	redactedDBPath := store.RedactDSN(*dbPath)
+
 	// Informational only, never critical: a missing stats file just means
 	// the worker hasn't processed anything yet (or predates this feature),
 	// not that anything is broken.
-	if stats, err := worker.ReadStatsFile(worker.DefaultStatsPath()); err == nil {
+	if stats, err := worker.ReadStatsFile(*statsPath); err == nil {
 		fmt.Printf("… worker activity: processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d",
 			stats.Processed, stats.Duplicates, stats.ObserverErrors, stats.InsertErrors, stats.EmbedErrors,
 			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions)
@@ -135,9 +143,31 @@ func cmdDoctor(args []string) int {
 			fmt.Printf(" last_activity=%s", stats.LastActivityAt)
 		}
 		fmt.Println()
-	}
 
-	redactedDBPath := store.RedactDSN(*dbPath)
+		// The daemon opened its store once, at start, and nothing
+		// re-reads $CLAUDE_MEM_DB afterwards — correctly, since a daemon
+		// switching databases underneath in-flight work would be worse.
+		// But that means a worker started before the variable changed
+		// keeps writing to the OLD store while every hook, every CLI
+		// command and this very check resolve the new one.
+		//
+		// Reproduced end to end: worker started on store A,
+		// CLAUDE_MEM_DB then pointed at B, one PostToolUse event — the
+		// observation landed in A, while doctor reported "worker daemon
+		// reachable", "database reachable (B)" and "the store is empty —
+		// nothing recorded yet". Every check green, memory in another
+		// file. Critical, because every automatic capture path goes
+		// through the daemon: whatever this command reads is not where
+		// anything is being written.
+		if stats.Store != "" && stats.Store != redactedDBPath {
+			fmt.Printf("✘ the worker daemon is writing to a DIFFERENT store than this command reads:\n")
+			fmt.Printf("    worker:    %s\n", stats.Store)
+			fmt.Printf("    this cmd:  %s\n", redactedDBPath)
+			fmt.Printf("    Every captured observation goes to the worker's store. Restart the daemon to pick up\n")
+			fmt.Printf("    the current $%s (stop it and let SessionStart respawn it).\n", store.DBPathEnvVar)
+			critical = false
+		}
+	}
 
 	// Say WHICH source chose this store, not just which store won. The
 	// failure this exists for is a split brain that looks like data loss:

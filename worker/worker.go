@@ -111,7 +111,12 @@ func (d *Daemon) Stats() Stats {
 		poolInFlight = d.sessions.poolInFlight()
 		poolCapacity = d.sessions.poolCapacity()
 	}
-	return d.counters.snapshot(cachedSessions, poolInFlight, poolCapacity)
+	snap := d.counters.snapshot(cachedSessions, poolInFlight, poolCapacity)
+	// Redacted here rather than at the reader: this snapshot is written
+	// to a world-readable file in the user's home, and a Postgres DSN
+	// carries a password.
+	snap.Store = store.RedactDSN(d.DBPath)
+	return snap
 }
 
 func (d *Daemon) recordStats() {
@@ -216,6 +221,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// doesn't match what the pool is actually enforcing.
 	d.Log.Printf("worker daemon up, pid=%d, listening on %s, max_concurrent=%d",
 		os.Getpid(), d.SocketPath, p.Capacity())
+
+	// Publish the daemon's identity — crucially, which store it opened —
+	// as soon as it is listening, not only once it has processed
+	// something. recordStats was previously reached only from the event
+	// path, so a freshly started daemon wrote no stats file at all and
+	// `doctor` could not report anything about it.
+	//
+	// That is backwards for the mismatch this file now detects: a worker
+	// writing to a different store than everything else resolves is most
+	// likely immediately after $CLAUDE_MEM_DB changed, which is exactly
+	// before any work has happened. The window where the problem was
+	// undetectable was the window where it was most likely.
+	d.recordStats()
 
 	for {
 		conn, err := ln.Accept()

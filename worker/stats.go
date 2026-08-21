@@ -31,6 +31,26 @@ type Stats struct {
 	PoolCapacity   int    `json:"pool_capacity"`
 	LastActivityAt string `json:"last_activity_at,omitempty"` // RFC3339; empty if nothing processed yet
 	UpdatedAt      string `json:"updated_at"`
+	// Store is the database this daemon is actually writing to, already
+	// redacted (see store.RedactDSN) because a Postgres DSN carries a
+	// password and this file is world-readable in the user's home.
+	//
+	// The daemon is a long-lived process that opened its store once, at
+	// start. Nothing re-reads $CLAUDE_MEM_DB afterwards, and nothing
+	// should — a daemon silently switching databases underneath in-flight
+	// work would be worse. But that means a worker started before the
+	// variable changed keeps writing to the OLD store while every hook,
+	// every CLI command and `doctor` itself resolve the new one, and
+	// until this field existed nothing anywhere reported which store the
+	// daemon had.
+	//
+	// Reproduced end to end: a worker started on store A, CLAUDE_MEM_DB
+	// then pointed at B, one PostToolUse event — the observation landed
+	// in A, while `doctor -db B` reported "worker daemon reachable" and
+	// "database reachable (B)" and "the store is empty — nothing recorded
+	// yet". Two green checks and a reassuring message, with the memory in
+	// a different file.
+	Store string `json:"store,omitempty"`
 }
 
 // statsCounters is the daemon's live counters — atomic because process()
