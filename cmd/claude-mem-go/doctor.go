@@ -63,7 +63,7 @@ func cmdDoctor(args []string) int {
 
 	redactedDBPath := store.RedactDSN(*dbPath)
 	var st store.Backend
-	if opened, err := backend.Open(context.Background(), *dbPath, 0); err != nil {
+	if opened, err := backend.Open(context.Background(), *dbPath, 0, 0); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false
 	} else {

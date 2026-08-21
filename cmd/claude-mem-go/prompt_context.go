@@ -45,6 +45,8 @@ func cmdPromptContext(args []string) int {
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embedding the prompt (empty disables this hook)")
 	limit := fs.Int("limit", 5, "how many semantically relevant observations to inject")
 	minPromptLen := fs.Int("min-prompt-len", 20, "prompts shorter than this are skipped, not embedded")
+	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
+		"query-time recall/speed tradeoff, valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -83,7 +85,7 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")

@@ -39,7 +39,7 @@ func cmdPrune(args []string) int {
 	// (which were unit-agnostic and couldn't have caught this).
 	cutoff := time.Now().AddDate(0, 0, -*olderThanDays).UnixMilli()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1

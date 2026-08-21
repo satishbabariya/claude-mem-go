@@ -60,7 +60,7 @@ func cmdFileContext(args []string) int {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		fmt.Println("{}")

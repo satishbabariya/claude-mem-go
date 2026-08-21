@@ -93,6 +93,36 @@ docker compose up -d
   whatever comes after — verified against the exact malformed-DSN case
   that leaked, and against a real live-container auth failure.
 
+  `-hnsw-ef-search` (on `semantic-search`, `prompt-context`, and `mcp`)
+  overrides pgvector's own `hnsw.ef_search` query-time recall/speed
+  tradeoff — the mandate's own "real ANN vector search... at scale"
+  otherwise has no actual knob once `observations` grows well past the
+  row counts pgvector's built-in default (40) was tuned against. Building
+  it surfaced a genuinely surprising real behavior: pgvector's documented
+  1..1000 bound on this value is **not reliably enforced by Postgres
+  itself**. `hnsw.ef_search` is a custom GUC pgvector's extension
+  registers, and until something on a given backend connection has
+  already touched the vector extension, Postgres treats the name as an
+  unchecked placeholder — reproduced directly, identical Go code (`BEGIN`,
+  `SET LOCAL hnsw.ef_search = 1001`, `COMMIT`) correctly errored through a
+  connection a prior real `Insert`/`SaveEmbedding` call had already warmed
+  up, but silently accepted the exact same invalid value with no error at
+  all on an otherwise-idle fresh connection whose first-ever query was
+  that `SET LOCAL`. A caller with a typo'd or misconfigured value would
+  have no reliable way to notice, since whether Postgres rejects it
+  depends on incidental connection warm-up state, not the value itself.
+  Fixed by validating the range in Go at `Open` time instead of ever
+  trusting Postgres to catch it, so a bad value fails the same way every
+  time regardless of connection state. The override itself is applied via
+  a transaction-scoped `SET LOCAL`, not a plain `SET`, against the pooled
+  connection every backend call shares — `database/sql` gives no control
+  over which physical connection any one call gets, so a plain `SET`
+  would silently persist onto whatever unrelated query the pool next
+  hands that same connection. Verified against the real container: the
+  out-of-range rejection, and that a valid override doesn't leak past its
+  own call (checked on a pool forced to a single connection, so this is
+  deterministic rather than merely likely).
+
 - **Schema migrations** (`migrate/`) — a real, versioned schema-migration
   framework shared by both backends: a `schema_migrations` table records
   which numbered, idempotent migrations have run, so the next schema change

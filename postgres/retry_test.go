@@ -95,7 +95,7 @@ func waitUntilReachable(t *testing.T, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		st, err := Open(ctx, testDSN(), DefaultEmbedDims)
+		st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
 		cancel()
 		if err == nil {
 			st.Close()
@@ -150,7 +150,7 @@ func TestPostgresOpenRecoversFromContainerRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	start := time.Now()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims)
+	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
 	if err != nil {
 		t.Fatalf("Open did not recover once the container came back (waited %s): %v", time.Since(start), err)
 	}

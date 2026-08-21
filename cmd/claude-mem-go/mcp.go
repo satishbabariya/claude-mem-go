@@ -17,6 +17,9 @@ func cmdMCP(args []string) int {
 	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for "+
 		"semantic_search_observations (empty disables that tool)")
+	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
+		"query-time recall/speed tradeoff for semantic_search_observations/observation_context, "+
+		"valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
 	fs.Parse(args)
 
 	l := openLog("mcp.log")
@@ -27,7 +30,7 @@ func cmdMCP(args []string) int {
 			project = ""
 		}
 	}
-	srv := &mcpserver.Server{DBPath: *dbPath, EmbedModel: *embedModel, Project: project, Log: l}
+	srv := &mcpserver.Server{DBPath: *dbPath, EmbedModel: *embedModel, HNSWEfSearch: *hnswEfSearch, Project: project, Log: l}
 	if err := srv.Run(os.Stdin, os.Stdout); err != nil {
 		l.Printf("server exited: %v", err)
 		return 1

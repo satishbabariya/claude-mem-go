@@ -256,7 +256,7 @@ func cmdStop(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		l.Printf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
 		return 0

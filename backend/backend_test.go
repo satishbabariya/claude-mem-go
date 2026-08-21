@@ -11,7 +11,7 @@ import (
 
 func TestOpenDispatchesToSQLiteForAPlainPath(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	be, err := Open(context.Background(), dbPath, 0)
+	be, err := Open(context.Background(), dbPath, 0, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestOpenRecognizesBothPostgresSchemes(t *testing.T) {
 		"postgresql://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable",
 	} {
 		t.Run(dsn, func(t *testing.T) {
-			be, err := Open(context.Background(), dsn, 0)
+			be, err := Open(context.Background(), dsn, 0, 0)
 			if err != nil {
 				if !strings.Contains(err.Error(), "ping postgres") {
 					t.Fatalf("error = %q, want it to be postgres.Open's connection error (proves dispatch happened), not something else", err.Error())

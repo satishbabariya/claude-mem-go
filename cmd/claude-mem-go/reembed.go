@@ -47,7 +47,7 @@ func cmdReembed(args []string) int {
 	}
 	expectedDims := int64(len(probe))
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1

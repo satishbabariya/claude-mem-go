@@ -27,7 +27,7 @@ func cmdExport(args []string) int {
 	out := fs.String("out", "", "output file (JSON Lines, one observation per line); defaults to stdout")
 	fs.Parse(args)
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -96,7 +96,7 @@ func cmdImport(args []string) int {
 	}
 	defer f.Close()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1

@@ -120,7 +120,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Insert) each opening their own Postgres connection is exactly the
 	// kind of connection churn that can exhaust a shared server's
 	// max_connections under real load.
-	st, err := backend.Open(ctx, d.DBPath, 0)
+	st, err := backend.Open(ctx, d.DBPath, 0, 0)
 	if err != nil {
 		return fmt.Errorf("open store at %s: %w", d.DBPath, err)
 	}

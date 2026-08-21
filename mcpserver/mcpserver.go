@@ -257,7 +257,13 @@ type Server struct {
 	// free by virtue of being a different process. Empty until Run()
 	// generates one; tests that don't call Run() can set this directly.
 	SessionID string
-	Log       *log.Logger
+	// HNSWEfSearch overrides pgvector's own hnsw.ef_search query-time
+	// recall/speed tradeoff for semantic_search_observations and
+	// observation_context — see postgres.Store.SemanticSearch's own doc
+	// comment. Ignored entirely for a SQLite DBPath. 0 (the zero value)
+	// leaves pgvector's built-in default (40) in place.
+	HNSWEfSearch int
+	Log          *log.Logger
 
 	st store.Backend
 }
@@ -268,7 +274,7 @@ type Server struct {
 // pipes stay open for as long as the client keeps them (potentially a
 // whole Claude Code session).
 func (s *Server) Run(r io.Reader, w io.Writer) error {
-	st, err := backend.Open(context.Background(), s.DBPath, 0)
+	st, err := backend.Open(context.Background(), s.DBPath, 0, s.HNSWEfSearch)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

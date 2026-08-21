@@ -18,6 +18,8 @@ func cmdSemanticSearch(args []string) int {
 		"(must match the model used when ingesting, or scores will be meaningless)")
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
+	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
+		"query-time recall/speed tradeoff, valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 10, 100)
 
@@ -33,7 +35,7 @@ func cmdSemanticSearch(args []string) int {
 		return 1
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0)
+	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	st, err := Open(ctx, testDSN(), DefaultEmbedDims)
+	st, err := Open(ctx, testDSN(), DefaultEmbedDims, 0)
 	if err != nil {
 		t.Skipf("postgres not reachable at %s (start it with `docker compose up -d`): %v", testDSN(), err)
 	}
@@ -277,6 +278,107 @@ func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	}
 }
 
+// TestPostgresOpenRejectsOutOfRangeHNSWEfSearch is the regression test for
+// a real, surprising Postgres/pgvector behavior found by hand while
+// building this feature: pgvector's own documented 1..1000 bound on
+// hnsw.ef_search is NOT reliably enforced by Postgres itself at query
+// time. hnsw.ef_search is a custom GUC pgvector's extension registers,
+// and until something in a given backend connection has already touched
+// the vector extension, Postgres treats the name as an unchecked
+// placeholder — reproduced directly: identical Go code (BeginTx → SET
+// LOCAL 1001 → Commit) correctly errored through a connection a prior
+// real Insert/SaveEmbedding call had already warmed up, but SILENTLY
+// accepted the exact same invalid value on an otherwise-idle fresh
+// connection whose first-ever query was that SET LOCAL — no error at
+// all. A caller configuring this flag has no reliable way to detect a
+// typo/misconfiguration from Postgres's own behavior, since whether it
+// gets rejected depends on incidental connection warm-up state, not the
+// value itself. Fixed by validating the range in Go at Open time instead
+// of ever trusting Postgres to catch it — deterministic regardless of
+// connection state, confirmed here by using a value (1001) that this
+// exact quirk previously let through silently.
+func TestPostgresOpenRejectsOutOfRangeHNSWEfSearch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, v := range []int{1001, -5} {
+		_, err := Open(ctx, testDSN(), DefaultEmbedDims, v)
+		if err == nil {
+			t.Fatalf("Open with hnswEfSearch=%d (outside pgvector's 1..1000 range): want an error, got nil", v)
+		}
+		if !strings.Contains(err.Error(), "ef_search") {
+			t.Fatalf("Open error = %q, want it to reference hnsw.ef_search", err.Error())
+		}
+	}
+}
+
+// TestPostgresSemanticSearchHNSWEfSearchAppliesWithoutLeaking is the
+// real, live regression test that a valid hnsw.ef_search override is
+// exercised through a real SemanticSearch call without breaking normal
+// results, and — the part that matters for correctness — that
+// hnsw.ef_search is confirmed back at its pre-call value immediately
+// afterward on the SAME forced single connection (SetMaxOpenConns(1), so
+// this is deterministic rather than merely likely with a multi-connection
+// pool). See SemanticSearch's own doc comment for why this needs a
+// transaction-scoped SET LOCAL rather than a plain SET against a pooled
+// *sql.DB — a plain SET would still pass this test's normal-results check
+// but would fail the no-leak check below, since it would persist past its
+// own call onto whatever unrelated query the pool next hands that
+// connection.
+func TestPostgresSemanticSearchHNSWEfSearchAppliesWithoutLeaking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	vec := make([]float32, DefaultEmbedDims)
+	vec[0] = 1
+
+	tuned, err := Open(ctx, testDSN(), DefaultEmbedDims, 999)
+	if err != nil {
+		t.Skipf("postgres not reachable at %s: %v", testDSN(), err)
+	}
+	defer tuned.Close()
+	tuned.db.SetMaxOpenConns(1) // force the same physical connection for both SHOW checks below
+
+	// hnsw.ef_search is a pgvector-registered GUC that Postgres won't
+	// recognize for SHOW until something in this backend has actually
+	// touched pgvector — confirmed by hand against the real container:
+	// SHOW on an otherwise-idle fresh connection errors with "unrecognized
+	// configuration parameter", but succeeds immediately after any real
+	// vector operation. Warm it up first so the baseline read below
+	// reflects pgvector's real default rather than failing outright.
+	if _, err := tuned.db.ExecContext(ctx, "SELECT '[1]'::vector"); err != nil {
+		t.Fatalf("warm-up vector query: %v", err)
+	}
+	var baseline string
+	if err := tuned.db.QueryRowContext(ctx, "SHOW hnsw.ef_search").Scan(&baseline); err != nil {
+		t.Fatalf("SHOW hnsw.ef_search (baseline): %v", err)
+	}
+
+	project2 := uniqueProject(t)
+	o2, err := tuned.Insert("s1", project2, "Bash", store.ContentHash("s1", "Bash", "efsearch-valid", project2), store.Observation{Type: "discovery", Title: "y"}, 0)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := tuned.SaveEmbedding(o2.ID, vec); err != nil {
+		t.Fatalf("SaveEmbedding: %v", err)
+	}
+	matches, err := tuned.SemanticSearch(project2, vec, 10)
+	if err != nil {
+		t.Fatalf("SemanticSearch with a valid override (999): %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != o2.ID {
+		t.Fatalf("SemanticSearch with ef_search override returned %v, want exactly one match with id=%d — the override must not break normal search results", matches, o2.ID)
+	}
+
+	var after string
+	if err := tuned.db.QueryRowContext(ctx, "SHOW hnsw.ef_search").Scan(&after); err != nil {
+		t.Fatalf("SHOW hnsw.ef_search (after): %v", err)
+	}
+	if after != baseline {
+		t.Fatalf("hnsw.ef_search after SemanticSearch = %q, want it back at the pre-call value %q — SET LOCAL must not leak past its own transaction onto a pooled connection", after, baseline)
+	}
+}
+
 func TestPostgresRecentByProjectOrdersNewestFirst(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
@@ -423,7 +525,7 @@ func TestPostgresOpenRecordsMigrationAndReopenDoesNotReapply(t *testing.T) {
 	}
 	st.Close()
 
-	st2, err := Open(context.Background(), testDSN(), DefaultEmbedDims)
+	st2, err := Open(context.Background(), testDSN(), DefaultEmbedDims, 0)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}

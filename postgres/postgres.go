@@ -37,9 +37,39 @@ import (
 // mismatch fails loudly at insert time rather than silently corrupting data.
 const DefaultEmbedDims = 768
 
+// hnswEfSearchMin and hnswEfSearchMax are pgvector's own hard-coded bounds
+// on hnsw.ef_search, confirmed by hand against a real container (values
+// outside this range fail with "N is outside the valid range for
+// parameter \"hnsw.ef_search\" (1 .. 1000)"). Validated here at Open time
+// rather than left for Postgres to reject at query time, because Postgres
+// itself doesn't reject it reliably: hnsw.ef_search is a custom GUC
+// pgvector's extension registers, and a real, reproducible quirk found by
+// hand shows Postgres only enforces its bounds once something in that
+// specific backend connection has already touched the vector extension
+// (any real vector operation) — an otherwise-idle connection accepts an
+// out-of-range SET LOCAL silently, with no error at all, because Postgres
+// treats an as-yet-unregistered custom GUC name as an unchecked
+// placeholder. Reproduced directly: identical Go code (BeginTx → SET
+// LOCAL 1001 → Commit) errored correctly through a connection warmed by a
+// prior real Insert/SaveEmbedding call, but silently accepted the same
+// invalid value on an otherwise-idle fresh connection whose first-ever
+// query was that SET LOCAL — a real Postgres/pgvector connection-state
+// dependency, not a hypothetical edge case, and one a caller configuring
+// this flag would have no reliable way to detect without this check.
+const (
+	hnswEfSearchMin = 1
+	hnswEfSearchMax = 1000
+)
+
 // Store is the Postgres-backed store.Backend implementation.
 type Store struct {
 	db *sql.DB
+	// hnswEfSearch, when > 0, overrides pgvector's own hnsw.ef_search
+	// default (40) for every SemanticSearch call — see SemanticSearch's
+	// own doc comment for why this needs a transaction-scoped SET LOCAL
+	// rather than a plain SET against a pooled connection. 0 (Open's
+	// default) leaves pgvector's built-in default in place untouched.
+	hnswEfSearch int
 }
 
 var _ store.Backend = (*Store)(nil)
@@ -130,10 +160,20 @@ func pingWithRetry(ctx context.Context, db *sql.DB, backoff []time.Duration) err
 
 // Open connects to dsn (a postgres:// URL) and ensures the schema exists.
 // embedDims must match whatever embedding model the caller will use with
-// SaveEmbedding — pass 0 to use DefaultEmbedDims.
-func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
+// SaveEmbedding — pass 0 to use DefaultEmbedDims. hnswEfSearch overrides
+// pgvector's own hnsw.ef_search default for every SemanticSearch call
+// against the returned Store — pass 0 to leave pgvector's built-in
+// default (40) in place, same "0 means use the default" convention as
+// embedDims. A nonzero value outside pgvector's own 1..1000 range fails
+// immediately here, deterministically — see hnswEfSearchMin/Max's own doc
+// comment for why this can't be left for Postgres to reject at query time.
+func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store, error) {
 	if embedDims <= 0 {
 		embedDims = DefaultEmbedDims
+	}
+	if hnswEfSearch != 0 && (hnswEfSearch < hnswEfSearchMin || hnswEfSearch > hnswEfSearchMax) {
+		return nil, fmt.Errorf("hnsw.ef_search must be between %d and %d (or 0 to use pgvector's default), got %d",
+			hnswEfSearchMin, hnswEfSearchMax, hnswEfSearch)
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -176,7 +216,7 @@ func Open(ctx context.Context, dsn string, embedDims int) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, hnswEfSearch: hnswEfSearch}, nil
 }
 
 func jsonEncode(items []string) []byte {
@@ -274,18 +314,58 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 		scope = "AND project = $3"
 		args = append(args, project)
 	}
-	rows, err := s.db.Query(`
+	query := `
 		SELECT id, project, tool_name, type, title, subtitle, facts, narrative,
 		       concepts, files_read, files_modified, 1 - (embedding <=> $1) AS score
 		FROM observations
-		WHERE embedding IS NOT NULL `+scope+`
+		WHERE embedding IS NOT NULL ` + scope + `
 		ORDER BY embedding <=> $1
-		LIMIT $2`, args...)
+		LIMIT $2`
+
+	if s.hnswEfSearch <= 0 {
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("semantic search: %w", err)
+		}
+		defer rows.Close()
+		return scanVectorMatches(rows)
+	}
+
+	// hnsw.ef_search controls the ANN index's query-time recall/speed
+	// tradeoff — pgvector's own built-in default (40) is a reasonable
+	// starting point but doesn't necessarily hold as `observations` grows
+	// well past the row counts that default was tuned against; the
+	// mandate's own "real ANN vector search... at scale" has no teeth
+	// without a way to actually turn this knob. SET LOCAL, not a plain
+	// SET: s.db is a pooled *sql.DB, and database/sql gives no control
+	// over which physical connection any one call gets — a plain SET
+	// would apply to whatever connection happens to serve THIS call and
+	// then silently persist for whatever UNRELATED query the pool hands
+	// that same connection next. SET LOCAL confines the override to this
+	// one transaction, gone the instant it ends, so a caller with a
+	// tuned ef_search can never leak it into a caller without one (or
+	// with a different value) sharing the same pool.
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin semantic search tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
+		return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
+	}
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("semantic search: %w", err)
 	}
-	defer rows.Close()
+	out, err := scanVectorMatches(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit()
+}
 
+func scanVectorMatches(rows *sql.Rows) ([]store.VectorMatch, error) {
 	var out []store.VectorMatch
 	for rows.Next() {
 		var m store.VectorMatch

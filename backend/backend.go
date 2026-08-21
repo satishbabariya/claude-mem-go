@@ -19,9 +19,14 @@ import (
 // dsn as a file path. This is claude-mem-go's zero-dependency default
 // (SQLite) versus its scale-up path (Postgres), selected by one flag value
 // instead of a separate backend-kind flag.
-func Open(ctx context.Context, dsn string, embedDims int) (store.Backend, error) {
+//
+// hnswEfSearch is ignored entirely for a SQLite dsn — it only ever
+// affects postgres.Open's pgvector tuning — so every caller that doesn't
+// care can pass 0, the same "0 means use the default" convention embedDims
+// already established.
+func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (store.Backend, error) {
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		return postgres.Open(ctx, dsn, embedDims)
+		return postgres.Open(ctx, dsn, embedDims, hnswEfSearch)
 	}
 	return store.Open(dsn)
 }
