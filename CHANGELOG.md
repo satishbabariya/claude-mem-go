@@ -193,6 +193,13 @@ process (this project doesn't cut tagged releases on a schedule).
   both ways (configured and default), each confirmed as a genuine
   regression test by temporarily breaking the field assignment and
   watching the test fail before restoring it.
+- **`skills/mem-doctor/SKILL.md` was stale the same way `mem-search`'s
+  was** — never mentioned `doctor`'s `-hnsw-ef-search` flag or the
+  `hnsw_ef_search` health field, both added earlier the same session as
+  this skill's own last edit. Updated its "What it checks" list.
+  Verified live the same way: `--plugin-dir` loaded this plugin into a
+  real `claude -p` session and asked it to list every distinct thing the
+  skill says `doctor` checks — `hnsw_ef_search` came back among them.
 
 ## 0.2.0 — 2026-08-20
 

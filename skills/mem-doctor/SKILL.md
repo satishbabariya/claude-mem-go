@@ -33,10 +33,15 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   points at), plus backend-specific facts nothing else surfaces:
   SQLite's real `journal_mode`/`foreign_keys`/`busy_timeout_ms` PRAGMA
   settings, or for Postgres, real connection-pool utilization, the
-  installed `pgvector` extension version, and whether the HNSW index
-  semantic search actually depends on still exists — a missing HNSW
+  installed `pgvector` extension version, whether the HNSW index
+  semantic search actually depends on still exists (a missing HNSW
   index would otherwise silently degrade every semantic search to a full
-  table scan with nothing saying so
+  table scan with nothing saying so), and the configured
+  `hnsw_ef_search` value (`default (40)` unless `-hnsw-ef-search` was
+  passed to `doctor` — pass the identical value used on `mcp`/
+  `semantic-search`/`prompt-context` to confirm it's actually what you
+  think it is, not a live Postgres session setting, since the override
+  only ever applies per query via a transaction-scoped `SET LOCAL`)
 - `embedding_dims`/`embedding_dims_consistent` — whether every embedded
   observation shares the same vector dimension. If `false` (SQLite only;
   Postgres can't have this), the embedding model was changed at some

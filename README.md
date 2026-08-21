@@ -554,6 +554,13 @@ docker compose up -d
   check's own output back (worker/database/Ollama status), confirming
   `$CLAUDE_PLUGIN_ROOT` resolves correctly for a skill-invoked command, not
   just for hooks and the MCP server.
+  Went stale the same way `mem-search` did, caught in the same pass:
+  never mentioned `doctor`'s `-hnsw-ef-search` flag or the
+  `hnsw_ef_search` health field it reports, both added earlier the same
+  session as this skill's own last edit. Updated, and verified the same
+  live way: `--plugin-dir` loading this plugin into a real `claude -p`
+  session and asking it to list every distinct thing the skill says
+  `doctor` checks — `hnsw_ef_search` came back among them.
 - **skills/mem-prune, skills/mem-export, and skills/mem-reembed** —
   surface `prune`, `export`/`import`, and `reembed` as
   `/mem-prune`/`/mem-export`/`/mem-reembed` the same way `mem-doctor`
