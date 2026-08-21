@@ -164,6 +164,112 @@ func TestSessionCacheCloseAllClosesEverySession(t *testing.T) {
 	}
 }
 
+// TestSessionCacheCloseAllWaitsForInFlightTurn is the regression test
+// for the identical concurrency gap evictIdle had before its own fix,
+// found on the shutdown path: closeAll used to call the raw evict (no
+// entry.mu awareness at all) on every session regardless of whether a
+// turn was genuinely still in flight — the same use-after/during-close
+// hazard on the subprocess's pipes. Unlike evictIdle, closeAll can't
+// just skip an in-flight session (there's no "next sweep" at shutdown),
+// so the fix waits instead: simulates a turn that finishes comfortably
+// within the (shrunk, for this test) grace period, and confirms
+// closeAll doesn't close the handle until AFTER that turn's own
+// entry.mu.Unlock() — proving it genuinely waited rather than closing
+// out from under it.
+func TestSessionCacheCloseAllWaitsForInFlightTurn(t *testing.T) {
+	original := closeAllGracePeriod
+	closeAllGracePeriod = 2 * time.Second
+	t.Cleanup(func() { closeAllGracePeriod = original })
+
+	release := make(chan struct{})
+	handle := &blockingHandle{release: release}
+	factory := func(ctx context.Context) (observer.Handle, error) { return handle, nil }
+	c := newSessionCache(pool.New(1), factory)
+
+	entry, err := c.getOrCreate(context.Background(), "in-flight")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+
+	started := make(chan struct{})
+	go func() {
+		entry.mu.Lock()
+		close(started)
+		entry.handle.Observe(transcript.ToolCall{})
+		entry.mu.Unlock()
+	}()
+	<-started
+
+	closeAllDone := make(chan struct{})
+	go func() {
+		c.closeAll()
+		close(closeAllDone)
+	}()
+
+	// closeAll must not have closed the handle yet — the simulated turn
+	// is still genuinely in flight and well within its grace period.
+	time.Sleep(50 * time.Millisecond)
+	if handle.isClosed() {
+		t.Fatal("closeAll closed the handle while a turn was still genuinely in flight, well within its grace period")
+	}
+
+	close(release) // let the simulated turn finish naturally
+
+	select {
+	case <-closeAllDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closeAll did not return after the in-flight turn finished")
+	}
+	if !handle.isClosed() {
+		t.Fatal("closeAll did not close the handle after the turn finished")
+	}
+}
+
+// TestSessionCacheCloseAllForceClosesAfterGracePeriod confirms closeAll
+// doesn't wait forever for a runaway turn: once the (shrunk, for this
+// test) grace period elapses with the turn still in flight, it
+// force-closes anyway rather than blocking shutdown indefinitely.
+func TestSessionCacheCloseAllForceClosesAfterGracePeriod(t *testing.T) {
+	original := closeAllGracePeriod
+	closeAllGracePeriod = 50 * time.Millisecond
+	t.Cleanup(func() { closeAllGracePeriod = original })
+
+	release := make(chan struct{})
+	defer close(release) // let the background goroutine's Observe return eventually, so it doesn't leak past the test
+	handle := &blockingHandle{release: release}
+	factory := func(ctx context.Context) (observer.Handle, error) { return handle, nil }
+	c := newSessionCache(pool.New(1), factory)
+
+	entry, err := c.getOrCreate(context.Background(), "runaway")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+
+	started := make(chan struct{})
+	go func() {
+		entry.mu.Lock()
+		close(started)
+		entry.handle.Observe(transcript.ToolCall{}) // blocks until the test's own deferred close(release)
+		entry.mu.Unlock()
+	}()
+	<-started
+
+	closeAllDone := make(chan struct{})
+	go func() {
+		c.closeAll()
+		close(closeAllDone)
+	}()
+
+	select {
+	case <-closeAllDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closeAll did not return within a bounded time of a runaway turn — it should force-close after its grace period rather than block shutdown forever")
+	}
+	if !handle.isClosed() {
+		t.Fatal("closeAll did not force-close the handle after its grace period elapsed")
+	}
+}
+
 // TestSessionCacheConcurrentGetOrCreateForSameIDDedupes covers the real risk:
 // many PostToolUse events for the same session_id arriving close together.
 // The cache uses double-checked locking, which deliberately allows more

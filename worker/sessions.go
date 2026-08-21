@@ -189,17 +189,70 @@ func (c *sessionCache) evictIdle() {
 	}
 }
 
-// closeAll evicts every session — used on daemon shutdown.
+// closeAllGracePeriod bounds how long closeAll waits for an in-flight
+// turn to finish naturally before force-closing its handle anyway. A
+// var, not a const, so a test can shrink it.
+//
+// Unlike evictIdle's periodic sweep, shutdown has no "later" to defer
+// to: the daemon is exiting either way, so simply skipping a session
+// with a turn in flight (the way evictIdle safely can) would leak its
+// subprocess as an orphan with nothing left to ever clean it up.
+// Waiting — acquiring entry.mu the normal way, not a TryLock — is the
+// correct default here; force-closing after the grace period is the
+// one accepted exception to "never close while a turn might be in
+// flight," reserved for a runaway turn that would otherwise block
+// shutdown forever. Matches the same shape as this daemon's own metrics
+// HTTP server shutdown (Run's metricsSrv.Shutdown with a 5s
+// context.WithTimeout) — bounded grace period, then move on regardless.
+var closeAllGracePeriod = 5 * time.Second
+
+// closeAll closes every cached session — used on daemon shutdown. Found
+// by hand as the identical concurrency gap evictIdle had before its own
+// fix, on the shutdown path instead of the idle-timer path: the
+// original version called evict (no entry.mu awareness at all) on every
+// session regardless of whether a turn was still genuinely in flight —
+// the same use-after/during-close hazard on the subprocess's pipes.
+//
+// This does NOT fully solve every shutdown race by itself: a
+// handleConn/process goroutine already dispatched from Run's Accept
+// loop before shutdown began could still be racing getOrCreate for a
+// BRAND NEW session concurrently with this snapshot — a real, separate,
+// broader "drain in-flight requests before closing anything" concern
+// this fix doesn't attempt, scoped out deliberately rather than
+// overreaching beyond the specific mutex-safety gap found.
 func (c *sessionCache) closeAll() {
 	c.mu.Lock()
-	ids := make([]string, 0, len(c.byID))
-	for id := range c.byID {
-		ids = append(ids, id)
+	entries := make([]*sessionEntry, 0, len(c.byID))
+	for _, e := range c.byID {
+		entries = append(entries, e)
 	}
+	c.byID = make(map[string]*sessionEntry)
 	c.mu.Unlock()
-	for _, id := range ids {
-		c.evict(id)
+
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		wg.Add(1)
+		go func(e *sessionEntry) {
+			defer wg.Done()
+			acquired := make(chan struct{})
+			go func() {
+				e.mu.Lock()
+				close(acquired)
+			}()
+			select {
+			case <-acquired:
+			case <-time.After(closeAllGracePeriod):
+				// Grace period elapsed with the turn still running —
+				// force-close anyway rather than block shutdown forever.
+				// The lock-acquiring goroutine above will still
+				// eventually succeed once that turn's own process() call
+				// finishes and unlocks it, harmlessly discarded by then.
+			}
+			e.handle.Close()
+			c.pool.Release()
+		}(e)
 	}
+	wg.Wait()
 }
 
 func (c *sessionCache) size() int {

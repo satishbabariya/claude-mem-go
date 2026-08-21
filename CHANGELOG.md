@@ -229,6 +229,29 @@ process (this project doesn't cut tagged releases on a schedule).
   ~9-second real observation spanned several sweep cycles inside that
   window, and the daemon stayed alive with the observation correctly
   persisted, no panic, no crash.
+- **The same gap existed on the shutdown path too.** `closeAll` (daemon
+  shutdown) had the identical bug `evictIdle` just had: it called
+  `evict` — no `entry.mu` awareness — on every session regardless of
+  whether a turn was still genuinely in flight. The fix can't be
+  identical, though: shutdown has no "next sweep" to defer an in-flight
+  session to, so `closeAll` now *waits* (a real `Lock`, not a `TryLock`)
+  for each turn to finish naturally, up to a `closeAllGracePeriod` (5s,
+  matching this daemon's own metrics-server shutdown timeout), then
+  force-closes anyway rather than blocking shutdown forever for a
+  runaway turn. Every session's wait runs concurrently, so total
+  shutdown time stays bounded regardless of session count. Deliberately
+  scoped to just this mutex-safety gap, not a full graceful-shutdown
+  redesign — a `handleConn`/`process` goroutine already dispatched
+  before shutdown began could still race `getOrCreate` for a brand-new
+  session, a broader concern documented rather than attempted here.
+  Verified with dedicated concurrency tests under `go test -race` (one
+  confirms `closeAll` waits for an in-flight turn before closing it,
+  another confirms it force-closes after the grace period rather than
+  hanging), both confirmed genuine by reverting to the old unsafe logic
+  and watching them fail before restoring the fix. Also verified live: a
+  real detached worker daemon, a real forwarded hook payload, a real
+  `SIGTERM` sent while the observation was genuinely in flight, and a
+  clean shutdown with no panic, no hang, no orphaned process left behind.
 
 ## 0.2.0 — 2026-08-20
 

@@ -987,6 +987,52 @@ and the daemon stayed alive with the observation correctly persisted, no
 panic, no crash — the exact race this fix closes, exercised under real
 production-shaped timing rather than only a synthetic unit test.
 
+### The same gap existed on the shutdown path too
+
+`closeAll` (used on daemon shutdown, `defer d.sessions.closeAll()` in
+`Run`) had the identical bug `evictIdle` just had, found by hand on a
+fresh look at the surrounding code: it called `evict` — no `entry.mu`
+awareness at all — on every cached session regardless of whether a turn
+was still genuinely in flight. Same use-after/during-close hazard,
+different trigger (a real `systemd`/`launchd` restart or manual `kill`
+mid-observation, instead of an idle timer).
+
+The fix can't be identical, though: `evictIdle` can always defer an
+in-flight session to the *next* sweep, but shutdown has no next sweep —
+skipping it the same way would leak the subprocess as an orphan with
+nothing left to ever clean it up. `closeAll` now *waits* (a real
+`entry.mu.Lock()`, not a `TryLock`) for each in-flight turn to finish
+naturally, up to a `closeAllGracePeriod` (5s — the same shape as this
+daemon's own metrics HTTP server shutdown, `Run`'s
+`metricsSrv.Shutdown` with an identical bounded `context.WithTimeout`);
+if a turn hasn't finished within that window, it force-closes anyway
+rather than blocking shutdown forever for a runaway turn — the one
+accepted exception to "never close while a turn might be in flight,"
+since the daemon is exiting either way. Every session's wait runs
+concurrently, so total shutdown time stays bounded by the grace period
+regardless of how many sessions are cached, not multiplied by each one.
+
+Deliberately scoped to just this mutex-safety gap, not a full graceful-
+shutdown redesign: a `handleConn`/`process` goroutine already dispatched
+from `Run`'s `Accept` loop before shutdown began could still be racing
+`getOrCreate` for a brand-new session concurrently with `closeAll`'s own
+snapshot — a real, broader "drain in-flight requests before closing
+anything" concern this fix doesn't attempt, documented honestly rather
+than silently ignored or overclaimed as solved.
+
+Verified with dedicated concurrency tests under `go test -race`: one
+confirms `closeAll` doesn't close a handle until *after* a simulated
+in-flight turn's own `Unlock()`, proving it genuinely waited; another
+confirms a turn that outlives a (shrunk, for the test) grace period gets
+force-closed anyway rather than hanging shutdown indefinitely. Both
+confirmed as genuine regression tests by reverting to the old unsafe
+logic and watching them fail before restoring the fix. Also verified
+live against the real compiled binary: started a real detached worker,
+forwarded a real hook payload, sent it a real `SIGTERM` while the
+observation was genuinely in flight (confirmed via the worker's own log
+timestamps), and confirmed the daemon shut down cleanly — no panic, no
+hang, no orphaned process left behind afterward.
+
 ## Quick start
 
 ```sh
