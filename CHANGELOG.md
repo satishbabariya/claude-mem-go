@@ -677,6 +677,35 @@ process (this project doesn't cut tagged releases on a schedule).
   despite the env var before restoring the fix — plus unit tests
   locking in `idleTimeout()`'s corrected 30-second default and both
   helpers' env var override/fallback behavior.
+- **Fixed: worker shutdown could still race a brand-new session's own
+  goroutine — a gap `sessionCache.closeAll`'s own doc comment had
+  already flagged as unaddressed.** A `PostToolUse` event for a session
+  never seen before, whose connection was accepted a moment before
+  `SIGTERM`, calls `getOrCreate` *after* `closeAll` already took its
+  snapshot of the session map — `closeAll` returns without ever knowing
+  that goroutine exists, `st.Close()` runs right after, and that
+  goroutine's own later `Insert`/`SaveEmbedding` call hits an
+  already-closed store, silently dropped with no retry. Real claude-mem's
+  own `performGracefulShutdown` orders this correctly (stop accepting →
+  drain all sessions → close the database); this port had the deadline
+  concept (`closeAllGracePeriod`) but the drain set itself was a
+  snapshot taken too early to cover every dispatched goroutine. Fixed
+  with a `sync.WaitGroup` (`processWG`) tracking every `process()`
+  goroutine from the moment it's dispatched (`dispatchProcess`,
+  replacing the bare `go d.process(ctx, raw)`), waited on
+  (`waitForProcessDrain`, same grace-period shape as `closeAll`) *before*
+  `closeAll` runs, not after — defer LIFO ordering makes this happen
+  automatically once registered in the right order. Verified with a
+  real regression test (a live SIGTERM race is inherently too
+  timing-fragile to hit precisely on demand): a `process()` goroutine
+  dispatched for a session never registered in the cache at all, using
+  a fake handle that blocks until released, confirming the drain
+  doesn't return while it's genuinely in flight and that the
+  observation is actually persisted once it completes — confirmed
+  genuine by temporarily reverting to the original bare dispatch and
+  watching the same test fail (the wait returned before the turn even
+  finished) before restoring the fix. A live smoke test confirmed no
+  regression to overall shutdown behavior.
 
 ## 0.2.0 — 2026-08-20
 

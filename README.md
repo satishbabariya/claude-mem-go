@@ -1749,6 +1749,54 @@ restoring the fix — plus unit tests locking in `idleTimeout()`'s
 default now matching real claude-mem's 30-second value exactly (not the
 old 5-minute one) and both helpers' env var override/fallback behavior.
 
+### Worker shutdown could still race a brand-new session's own goroutine, a gap the code itself had already flagged as unaddressed
+
+`sessionCache.closeAll`'s own doc comment named a real gap it deliberately
+didn't attempt to close: "a handleConn/process goroutine already
+dispatched from Run's Accept loop before shutdown began could still be
+racing `getOrCreate` for a BRAND NEW session concurrently with this
+snapshot." Concretely — a `PostToolUse` event for a session never seen
+before, whose connection was accepted a moment before `SIGTERM`, calls
+`getOrCreate` *after* `closeAll` already took its snapshot of the
+session map. `closeAll` returns without ever knowing that goroutine
+exists, `st.Close()` runs right after, and that goroutine's own later
+`Insert`/`SaveEmbedding` call hits an already-closed store — logged as
+a failure and silently dropped, with no retry. Real claude-mem's own
+`performGracefulShutdown` orders this correctly (stop accepting → drain
+all sessions → close the database) — this port had the deadline
+concept (`closeAllGracePeriod`) but the *drain set itself* was a
+snapshot taken too early to cover every dispatched goroutine.
+
+Fixed with a `sync.WaitGroup` (`processWG`) tracking every `process()`
+goroutine from the moment it's dispatched (`dispatchProcess`, replacing
+the bare `go d.process(ctx, raw)` handleConn used before) rather than
+from whenever it happens to register itself in the session map. `Run`
+now waits on this WaitGroup (`waitForProcessDrain`, bounded by the same
+kind of grace period `closeAll` already uses) *before* `closeAll` runs,
+not after — Go's defer LIFO ordering means registering this wait
+immediately after `closeAll`'s own defer makes it execute first, so by
+the time `closeAll` runs, every dispatched turn (known session or brand
+new) has already either finished or been give up on together, not
+`closeAll`'s snapshot leaving some of them permanently invisible to it.
+
+Verified with a real regression test rather than a live SIGTERM race
+(inherently too timing-fragile to hit precisely on demand — the same
+reasoning this codebase's own prior concurrency fixes lean on
+deterministic synchronization primitives for their primary proof): a
+`process()` goroutine is dispatched directly for a session that was
+*never* registered in the session cache at all — the exact "brand new"
+shape this gap describes — using a fake observer handle that blocks
+until released. Confirms `waitForProcessDrain` does not return while
+that turn is still genuinely in flight, and that the observation is
+actually persisted in the store once it completes and the wait returns
+— confirmed as a genuine test, not a tautology, by temporarily reverting
+`dispatchProcess` to the original bare `go d.process(...)` and watching
+the same test fail (the wait returned immediately, before the turn even
+finished) before restoring the fix. A live smoke test (a real worker
+daemon, a real dispatched event, `SIGTERM` sent mid-turn) confirmed no
+regression to the daemon's overall shutdown behavior — clean exit, no
+hang, no panic.
+
 ## Quick start
 
 ```sh

@@ -86,6 +86,19 @@ type Daemon struct {
 	// this session" from watching row counts.
 	inflight     *inflightTracker
 	inflightOnce sync.Once
+
+	// processWG tracks every dispatched process() goroutine — see
+	// dispatchProcess and Run's own doc comment on why this exists:
+	// sessionCache.closeAll's own doc comment documents this exact gap it
+	// deliberately didn't attempt. A handleConn goroutine dispatched from
+	// Run's Accept loop a moment before shutdown began, for a session
+	// that's never been seen before, calls sessionCache.getOrCreate AFTER
+	// closeAll's snapshot of its map was already taken — closeAll returns
+	// without ever knowing that goroutine exists, and without this
+	// WaitGroup, st.Close() could run while its own Insert/SaveEmbedding
+	// call is still in flight against the now-closed store, silently
+	// dropping the observation.
+	processWG sync.WaitGroup
 }
 
 // Stats returns a snapshot of the daemon's current activity and
@@ -155,6 +168,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return observer.New(ctx, d.Model)
 	})
 	defer d.sessions.closeAll()
+	// Registered AFTER closeAll's defer, so it runs BEFORE closeAll (defers
+	// run LIFO): drains every dispatched process() goroutine — including
+	// one for a brand-new session that closeAll's own map snapshot could
+	// never have known about — before closeAll (and st.Close after it)
+	// ever run. See processWG's own doc comment for the exact gap this
+	// closes.
+	defer d.waitForProcessDrain()
 
 	go func() {
 		ticker := time.NewTicker(idleEvictInterval)
@@ -290,12 +310,55 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	go d.process(ctx, raw)
+	d.dispatchProcess(ctx, raw)
 }
 
+// dispatchProcess runs process in its own goroutine, tracked by
+// processWG — see processWG's own doc comment for the shutdown-drain
+// gap this closes. The Add happens synchronously, on the caller's own
+// goroutine, before the tracked goroutine is even started: a shutdown
+// racing this exact call must see the Add happen-before it can possibly
+// reach processWG.Wait (Run's defer ordering places that wait after
+// every handleConn dispatch from the Accept loop has already returned),
+// so there's no window where a real dispatch could be missed.
+func (d *Daemon) dispatchProcess(ctx context.Context, raw []byte) {
+	d.processWG.Add(1)
+	go func() {
+		defer d.processWG.Done()
+		d.process(ctx, raw)
+	}()
+}
+
+// waitForProcessDrain waits for every process() goroutine dispatchProcess
+// has ever started to finish, up to processDrainGracePeriod — matching
+// the same bounded-wait shape sessionCache.closeAll already uses
+// (ctx cancellation aborts an in-flight observer call promptly, see
+// process's own reliance on that during shutdown, so this is expected to
+// return well before the grace period in the overwhelming majority of
+// real shutdowns, not routinely hit it).
+func (d *Daemon) waitForProcessDrain() {
+	done := make(chan struct{})
+	go func() {
+		d.processWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(processDrainGracePeriod):
+		d.Log.Printf("shutdown: %s grace period elapsed waiting for in-flight events to finish — proceeding anyway", processDrainGracePeriod)
+	}
+}
+
+// processDrainGracePeriod bounds waitForProcessDrain the same way
+// closeAllGracePeriod (sessions.go) bounds closeAll's own per-session
+// wait — a separate constant, not a shared one, since the two guard
+// conceptually different things even though they currently agree on
+// the same duration.
+var processDrainGracePeriod = 5 * time.Second
+
 func (d *Daemon) process(ctx context.Context, raw []byte) {
-	// This runs in its own goroutine (see handleConn's `go d.process(...)`)
-	// — an unrecovered panic here doesn't just fail this one event, it
+	// This runs in its own goroutine (see dispatchProcess) — an
+	// unrecovered panic here doesn't just fail this one event, it
 	// crashes the ENTIRE daemon process, taking memory capture down for
 	// every project on the machine sharing this one daemon. Found not
 	// hypothetically: a real, reproducible panic existed in
