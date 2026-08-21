@@ -205,3 +205,27 @@ func TestExportSQLiteImportPostgresPreservesEmbedding(t *testing.T) {
 		t.Fatalf("SemanticSearch in Postgres after migrating from SQLite didn't find the row — the embedding didn't survive the migration: %+v", matches)
 	}
 }
+
+// TestPostgresImportRowRejectsAnUnrecognizedObservationType is this
+// backend's half of the regression test for a real schema-completeness
+// gap: nothing anywhere validated Observation.Type before this. insertRow
+// is shared between Insert and ImportRow here too — exactly the kind of
+// sharing a future refactor could accidentally break for just one of the
+// two callers, so both need their own coverage.
+func TestPostgresImportRowRejectsAnUnrecognizedObservationType(t *testing.T) {
+	pg := openTestStore(t)
+	project := uniqueProject(t)
+
+	_, err := pg.ImportRow(store.ExportRow{
+		SessionID:      "s1",
+		Project:        project,
+		ToolName:       "Bash",
+		ContentHash:    store.ContentHash("s1", "Bash", "bad-type", project),
+		Observation:    store.Observation{Type: "bugfix", Title: "x"},
+		CreatedAt:      "2020-01-01T00:00:00Z",
+		CreatedAtEpoch: 1577836800000,
+	})
+	if err == nil {
+		t.Fatal("ImportRow with an unrecognized type: want an error, got nil")
+	}
+}

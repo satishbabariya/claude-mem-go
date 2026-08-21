@@ -252,6 +252,29 @@ process (this project doesn't cut tagged releases on a schedule).
   real detached worker daemon, a real forwarded hook payload, a real
   `SIGTERM` sent while the observation was genuinely in flight, and a
   clean shutdown with no panic, no hang, no orphaned process left behind.
+- **`observations.type` had zero validation anywhere, in either
+  backend.** Nothing — not the schema, not the Go code — validated
+  `type` against this project's own small, fixed vocabulary (`discovery`/
+  `change`/`decision`/`summary`/`manual`). An LLM's `<type>` tag
+  drifting to an unrecognized value, or a corrupted/hand-edited import
+  file, would have silently persisted a row invisible to any `-type`/
+  `type` filter with no error anywhere. Confirmed as a real, worth-fixing
+  gap by checking actual production data first: queried the distinct
+  `type` values across 3000+ real rows accumulated in this project's
+  shared Postgres dev container, and every one already fell within the
+  vocabulary. Fixed at both real ingestion boundaries (`Insert` and
+  `ImportRow`, via their shared `insertRow`) with a new
+  `store.ValidateObservationType`, in both backends. Also added a real
+  Postgres `CHECK` constraint via a new migration — a schema-level
+  guarantee regardless of which code path ever writes a row, wrapped in
+  an idempotent `DO` block since Postgres has no
+  `ADD CONSTRAINT IF NOT EXISTS`. Verified with dedicated tests in both
+  backends (each confirmed genuine by temporarily disabling the
+  validation and watching the test fail), and the Postgres `CHECK`
+  constraint itself verified independently of the Go code: dropped it by
+  hand, confirmed a raw SQL `INSERT` with a bad `type` succeeded, then
+  restored it and confirmed the identical raw `INSERT` now fails with a
+  real constraint-violation error.
 
 ## 0.2.0 — 2026-08-20
 

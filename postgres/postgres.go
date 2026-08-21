@@ -211,6 +211,53 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 				return err
 			},
 		},
+		{
+			// A real schema-completeness gap, found by hand, not a
+			// demonstrated live bug: nothing anywhere validated `type`
+			// against this project's own small, fixed vocabulary
+			// (discovery/change/decision/summary/manual — see
+			// store.ValidObservationTypes) before this — not the schema,
+			// not the Go code. Go-side validation now exists at every
+			// real ingestion path (store.ValidateObservationType, called
+			// from insertRow in both backends), but a real CHECK
+			// constraint is the stronger, schema-level guarantee this
+			// production-scale backend's own "real ANN vector search...
+			// at scale" mandate implies — enforced regardless of which
+			// code path ever writes a row, not just the ones that
+			// happen to go through this Go package.
+			//
+			// Confirmed safe to add against a real, long-lived, shared
+			// database before writing this: queried the actual
+			// distinct `type` values across 3000+ real rows this
+			// project's own testing accumulated in its dev container,
+			// and every single one already fell within this vocabulary
+			// — zero drift, so this closes a real gap without failing
+			// to apply against data that already exists.
+			//
+			// Wrapped in a DO block with an existence check rather than
+			// a bare ALTER TABLE ADD CONSTRAINT: Postgres has no
+			// `ADD CONSTRAINT IF NOT EXISTS`, and migrate.Run's own
+			// idempotency contract (see migrate's package doc) requires
+			// Apply to tolerate being invoked again — a plain ALTER
+			// TABLE would fail with "constraint already exists" on any
+			// re-run.
+			Version: 2,
+			Name:    "CHECK constraint on observations.type",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx, `
+					DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint WHERE conname = 'observations_type_check'
+						) THEN
+							ALTER TABLE observations ADD CONSTRAINT observations_type_check
+								CHECK (type IN ('discovery', 'change', 'decision', 'summary', 'manual'));
+						END IF;
+					END $$;
+				`)
+				return err
+			},
+		},
 	}
 	if err := migrate.Run(ctx, db, migrate.PostgresPlaceholder, migrations); err != nil {
 		db.Close()
@@ -251,6 +298,9 @@ func (s *Store) Insert(sessionID, project, toolName, contentHash string, o store
 // Go); ImportRow (a restore) passes the original values through instead,
 // so a restore reflects when things actually happened.
 func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o store.Observation, costUSD float64, createdAt time.Time, createdAtEpoch int64) (store.InsertResult, error) {
+	if err := store.ValidateObservationType(o.Type); err != nil {
+		return store.InsertResult{}, err
+	}
 	var id int64
 	err := s.db.QueryRow(
 		`INSERT INTO observations

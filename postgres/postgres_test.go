@@ -81,6 +81,31 @@ func TestPostgresInsertIsIdempotentOnContentHash(t *testing.T) {
 	}
 }
 
+// TestPostgresInsertRejectsAnUnrecognizedObservationType is the
+// regression test, against the real live container, for a real
+// schema-completeness gap found by hand: nothing anywhere validated
+// Observation.Type before this — an LLM's <type> tag drifting to an
+// unrecognized value would have silently persisted, invisible to any
+// -type/type filter with no error anywhere.
+func TestPostgresInsertRejectsAnUnrecognizedObservationType(t *testing.T) {
+	st := openTestStore(t)
+	project := uniqueProject(t)
+
+	_, err := st.Insert("s1", project, "Bash", store.ContentHash("s1", "Bash", "bad-type", project),
+		store.Observation{Type: "bugfix", Title: "x"}, 0)
+	if err == nil {
+		t.Fatal("Insert with an unrecognized type: want an error, got nil")
+	}
+
+	count, cerr := st.CountByProject(project)
+	if cerr != nil {
+		t.Fatalf("CountByProject: %v", cerr)
+	}
+	if count != 0 {
+		t.Fatalf("CountByProject = %d, want 0 — the rejected row must not have been persisted", count)
+	}
+}
+
 func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)

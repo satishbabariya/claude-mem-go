@@ -1033,6 +1033,49 @@ observation was genuinely in flight (confirmed via the worker's own log
 timestamps), and confirmed the daemon shut down cleanly — no panic, no
 hang, no orphaned process left behind afterward.
 
+### `observations.type` had zero validation anywhere, in either backend
+
+Nothing — not the schema, not the Go code — validated `type` against
+this project's own small, fixed vocabulary (`discovery`/`change`/
+`decision` from the real observer prompt, `summary` from the Stop hook's
+session-summary prompt, `manual` hardcoded in `add_observation`). An
+LLM's `<type>` tag drifting to an unrecognized value, or a corrupted/
+hand-edited import file, would have silently persisted a row invisible
+to any `-type`/`type` filter, with no error anywhere. Found by hand as a
+real schema-completeness gap, not a demonstrated live bug — worth
+checking before assuming it's purely theoretical: queried the actual
+distinct `type` values across 3000+ real rows this project's own testing
+has accumulated in its shared Postgres dev container, and every single
+one already fell within the vocabulary. (While verifying the fix below —
+a real, if minor, reminder that "checked once" isn't "stays true": the
+break/restore verification step for the new tests briefly left two
+rows with an invalid `type` in that same shared container, caught and
+cleaned up immediately, not organic drift.)
+
+Fixed at both real ingestion boundaries — `Insert` and `ImportRow`,
+via their shared `insertRow` — with `store.ValidateObservationType`,
+returning a clear error before either backend's own driver ever sees an
+unrecognized value. For the Postgres backend specifically (the
+production-scale backend this project's "schema completeness" mandate is
+really about), also added a real `CHECK` constraint via a new migration
+— a schema-level guarantee that holds regardless of which code path
+ever writes a row, not just the ones that go through this Go package.
+Since Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, the migration wraps
+it in a `DO` block checking `pg_constraint` first, so it stays idempotent
+the way every migration here must be.
+
+Verified thoroughly: dedicated tests in both backends confirming
+`Insert`/`ImportRow` reject an unrecognized type and persist nothing,
+each confirmed as a genuine regression test by temporarily disabling the
+validation call and watching the test fail before restoring it. The
+Postgres `CHECK` constraint itself was verified independently of the Go
+code — dropped it by hand, confirmed a raw SQL `INSERT` with a bad
+`type` succeeded (proving the drop genuinely took effect and Go-side
+validation alone wasn't masking the test), then restored it and
+confirmed the identical raw `INSERT` now fails with a real Postgres
+constraint-violation error — the actual schema-level guarantee, not just
+the application-level one.
+
 ## Quick start
 
 ```sh
