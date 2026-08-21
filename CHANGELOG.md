@@ -316,6 +316,28 @@ process (this project doesn't cut tagged releases on a schedule).
   as a genuine regression test by temporarily removing the validation
   and watching it fail before restoring it, plus a non-regression test
   confirming normal-sized fields still succeed.
+- **Fixed: `PreToolUse`'s file-context injection and `Stop`'s session
+  summary leaked into subagent tool calls, a real behavioral divergence
+  from real claude-mem.** Claude Code's hook payloads carry `agent_id`/
+  `agent_type` only when a hook fires from inside a Task-tool subagent
+  invocation, not the main session — real claude-mem's `file-context.ts`
+  and `summarize.ts` handlers both check `input.agentId` and bail out
+  immediately when set (`src/cli/adapters/claude-code.ts` extracts the
+  same two fields from the same payload). `claude-agent-sdk-go`'s
+  `HookInput` never modeled either field, so `file-context` unconditionally
+  injected memory into every `Read`, including ones a subagent fired, and
+  `stop` had no equivalent guard either. Added `AgentID`/`AgentType` to
+  `HookInput` (`claude-agent-sdk-go` v0.1.2) and wired the same skip real
+  claude-mem uses into both `file-context` and `stop`, in the same order
+  real claude-mem checks them (project-exclusion, then subagent). Verified
+  live end to end, not just by reading the source: a real `claude` session
+  with `--plugin-dir`, one turn doing a direct `Read` (no `agent_id`,
+  proceeds normally) and a second dispatching a `Task` subagent to `Read`
+  the same file (`agent_id`/`agent_type=general-purpose` present, skipped)
+  — confirmed as a genuine fix by temporarily removing the guard, rerunning
+  the exact same subagent scenario, and watching the skip disappear (the
+  subagent's `Read` fell through to the normal lookup path instead) before
+  restoring it.
 
 ## 0.2.0 — 2026-08-20
 

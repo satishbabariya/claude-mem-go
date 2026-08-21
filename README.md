@@ -1171,6 +1171,40 @@ restoring the fix and confirming they pass again — plus a non-regression
 test confirming normal-sized fields still succeed, so this is a real
 bound and not an accidental block on legitimate calls.
 
+### File-context injection and session summaries leaked into subagent tool calls
+
+Claude Code's hook payloads carry `agent_id`/`agent_type` only when a
+hook fires from inside a Task-tool subagent invocation rather than the
+main session — absent otherwise. Real claude-mem's own adapter
+(`src/cli/adapters/claude-code.ts`'s `normalizeInput`) reads these same
+two fields off the same payload, and two of its handlers gate real
+behavior on them: `file-context.ts` skips injecting file memory
+entirely when `input.agentId` is set, and `summarize.ts` skips the
+end-of-session summary the same way — a subagent isn't the end user's
+actual session, so it shouldn't see automatically-injected memory or
+trigger a session-level summary of its own.
+
+`claude-agent-sdk-go`'s `HookInput` never modeled either field, so
+neither check was even possible here: `file-context` (this port's
+`PreToolUse`/`Read` hook) unconditionally injected whatever memory
+existed about a file, including into a subagent's own `Read` calls, and
+`stop` had no equivalent guard. Fixed by adding `AgentID`/`AgentType` to
+`HookInput` (`claude-agent-sdk-go` v0.1.2) and wiring the identical skip
+into both `file-context` and `stop`, in the same order real claude-mem
+checks them: project-exclusion first, then the subagent check.
+
+Verified live end to end rather than just by reading the TS source: a
+real `claude` session launched with `--plugin-dir`, one turn doing a
+direct `Read` of a seeded file (no `agent_id` present — `file-context`
+proceeds to its normal lookup) and a second turn dispatching a `Task`
+subagent to `Read` the same file (`agent_id` set, `agent_type` =
+`general-purpose` — `file-context.log` shows the new skip line).
+Confirmed as a genuine fix, not a tautological check, by temporarily
+removing the guard, rebuilding, and rerunning the identical
+subagent-`Read` scenario: without the guard the exact same call fell
+through to the normal "no prior observations" lookup path instead of
+being skipped, before the guard was restored and re-verified.
+
 ## Quick start
 
 ```sh

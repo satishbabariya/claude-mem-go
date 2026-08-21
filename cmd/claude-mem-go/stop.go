@@ -263,6 +263,10 @@ func cmdStop(args []string) int {
 		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		return 0
 	}
+	if in.AgentID != "" || in.AgentType != "" {
+		l.Printf("skip: subagent context detected (agent_id=%s agent_type=%s)", in.AgentID, in.AgentType)
+		return 0
+	}
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {

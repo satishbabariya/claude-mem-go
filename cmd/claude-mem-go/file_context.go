@@ -41,6 +41,11 @@ func cmdFileContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
+	if in.AgentID != "" || in.AgentType != "" {
+		l.Printf("skip: subagent context detected (agent_id=%s agent_type=%s)", in.AgentID, in.AgentType)
+		fmt.Println("{}")
+		return 0
+	}
 	if excludeproject.IsExcluded(in.Cwd, *excludedProjects) {
 		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
 		fmt.Println("{}")
