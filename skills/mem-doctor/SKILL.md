@@ -29,6 +29,16 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   `insert_errors`/`embed_errors`/pool utilization/`cached_sessions`) —
   informational, but the first place to look if observations seem to be
   silently going nowhere
+- **what the store actually contains** — observation/project/session
+  counts and how recent the newest one is. This is the only check that
+  answers "is anything being remembered", as opposed to "is every
+  component reachable". They come apart: `doctor` will happily report
+  "All critical checks passed" while capture has been dead for weeks,
+  because `PostToolUse` is fire-and-forget and a failing hook writes to a
+  log nobody reads. If the counts look wrong or the newest observation is
+  much older than the user's recent activity, say so — that is the
+  finding, even when every other line has a check mark. `claude-mem-go
+  stats` prints the same information in more detail.
 - the database reachable (SQLite file or Postgres DSN, whichever `-db`
   points at), plus backend-specific facts nothing else surfaces:
   SQLite's real `journal_mode`/`foreign_keys`/`busy_timeout_ms` PRAGMA

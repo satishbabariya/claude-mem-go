@@ -90,6 +90,19 @@ type Backend interface {
 	// extension version, and whether its HNSW index still exists), not
 	// what it stores.
 	HealthDetails() (map[string]string, error)
+	// Stats returns what the store actually CONTAINS, as opposed to
+	// HealthDetails' "is the machinery working".
+	//
+	// Those are different questions and only the second was answerable
+	// before this. Every check `doctor` ran was a reachability check, so
+	// it could report "All critical checks passed" while capture had been
+	// silently dead for weeks — which is this architecture's most likely
+	// failure, not its least: PostToolUse is fire-and-forget, so a hook
+	// that fails writes to a log nobody reads; a plugin binary can go
+	// stale; one typo in an excluded-projects glob silently excludes
+	// everything. In all of those cases every component is reachable and
+	// the store simply stops growing, which nothing measured.
+	Stats() (StoreStats, error)
 	Close() error
 }
 
@@ -98,3 +111,26 @@ type Backend interface {
 // build time instead of at the first call site that tries to pass a *Store
 // where a Backend is expected.
 var _ Backend = (*Store)(nil)
+
+// StoreStats is a factual description of a store's contents — the local
+// equivalent of the db_observation_count / db_session_count /
+// db_project_count / days_since_last_obs figures real claude-mem reports
+// through outbound telemetry. Reported to the operator here rather than
+// sent anywhere, which is the same stance this port takes on cloud sync.
+type StoreStats struct {
+	Observations int
+	Projects     int
+	Sessions     int
+	// ByType counts observations per type (discovery/change/decision/
+	// summary/manual) — a store with no `summary` rows means the Stop
+	// hook is not firing, which nothing else surfaces.
+	ByType map[string]int
+	// Embedded is how many observations have an embedding at all. The
+	// gap between this and Observations is what semantic search cannot
+	// see.
+	Embedded int
+	// OldestEpochMs and NewestEpochMs are 0 for an empty store. Newest is
+	// the one that answers "is capture still happening".
+	OldestEpochMs int64
+	NewestEpochMs int64
+}

@@ -64,7 +64,11 @@ func cmdDoctor(args []string) int {
 	// without it, and `--plugin-dir` runs the hooks for real without ever
 	// touching the installed-plugins manifest. Hard-failing would report a
 	// broken install for setups that are working exactly as intended.
-	if installed, installs := plugincheck.IsInstalled(plugincheck.DefaultManifestPath()); installed {
+	// Hoisted out of the if-statement's scope: the store-contents check
+	// further down needs to know whether the plugin is installed, because
+	// "empty store" is only a failure when capture is actually configured.
+	installed, installs := plugincheck.IsInstalled(plugincheck.DefaultManifestPath())
+	if installed {
 		fmt.Printf("✔ plugin %q installed", plugincheck.PluginName)
 		for i, in := range installs {
 			if i == 0 {
@@ -169,6 +173,43 @@ func cmdDoctor(args []string) int {
 		} else {
 			fmt.Printf("✔ database reachable (%s)\n", redactedDBPath)
 		}
+		// What the store CONTAINS, not just whether it answers. Every
+		// other check here is a reachability check, so doctor could
+		// report "All critical checks passed" while capture had been
+		// silently dead for weeks — the most likely failure this design
+		// has, since PostToolUse is fire-and-forget and a failing hook
+		// writes to a log nobody reads.
+		//
+		// Reported factually rather than judged against an invented
+		// staleness threshold: how long is "too long" between
+		// observations depends entirely on how much the operator is
+		// using Claude Code, and a wrong guess here would either cry wolf
+		// or reassure falsely. The one unambiguous case — a store that
+		// has never recorded anything while the plugin IS installed, so
+		// capture is configured and demonstrably not working — is called
+		// out as a real problem.
+		if st != nil {
+			if sst, serr := st.Stats(); serr == nil {
+				if sst.Observations == 0 {
+					if installed {
+						fmt.Println("✘ the store is EMPTY, but the plugin is installed — capture is configured and not working")
+						critical = false
+					} else {
+						fmt.Println("… the store is empty — nothing recorded yet (expected if the plugin isn't installed)")
+					}
+				} else {
+					fmt.Printf("… store: %d observations across %d project(s) and %d session(s); newest %s\n",
+						sst.Observations, sst.Projects, sst.Sessions, formatAge(sst.NewestEpochMs))
+					if missing := sst.Observations - sst.Embedded; missing > 0 {
+						fmt.Printf("  ↳ %d not embedded — invisible to semantic search until `reembed` runs\n", missing)
+					}
+					if sst.ByType["summary"] == 0 && sst.Sessions > 1 {
+						fmt.Printf("  ↳ no session summaries across %d sessions — the Stop hook may not be completing\n", sst.Sessions)
+					}
+				}
+			}
+		}
+
 		// Informational only, never critical on its own — a detail like
 		// hnsw_index_exists=false is a real problem worth surfacing, but
 		// it's a degraded-performance signal, not "nothing works."

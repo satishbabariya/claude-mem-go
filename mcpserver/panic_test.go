@@ -56,6 +56,8 @@ func (panickingBackend) ExportAll(int64, int) ([]store.ExportRow, error) {
 func (panickingBackend) ImportRow(store.ExportRow) (store.InsertResult, error) {
 	panic("panickingBackend: ImportRow")
 }
+func (panickingBackend) Stats() (store.StoreStats, error) { panic("boom") }
+
 func (panickingBackend) HealthDetails() (map[string]string, error) {
 	panic("panickingBackend: HealthDetails")
 }

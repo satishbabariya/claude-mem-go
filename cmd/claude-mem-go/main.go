@@ -60,6 +60,8 @@ func main() {
 		os.Exit(cmdStop(os.Args[2:]))
 	case "doctor":
 		os.Exit(cmdDoctor(os.Args[2:]))
+	case "stats":
+		os.Exit(cmdStats(os.Args[2:]))
 	case "file-context":
 		os.Exit(cmdFileContext(os.Args[2:]))
 	case "prune":

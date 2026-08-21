@@ -7,6 +7,38 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **New `stats` command, and `doctor` now reports what the store
+  contains — not just that it answers.** Every check `doctor` ran was a
+  reachability check, which left the more important question
+  unanswerable: is anything actually being remembered? Those come apart
+  in this design's most likely failure, because `PostToolUse` is
+  fire-and-forget — a hook that fails writes to a log nobody reads, every
+  component stays reachable, `doctor` reports "All critical checks
+  passed", and the store silently stops growing. A plugin binary going
+  stale, or one typo in an excluded-projects glob, produce exactly the
+  same silence. `store.Backend` gains `Stats()` (implemented on both
+  backends, with a cross-backend agreement test): observation, project
+  and session counts, a per-type breakdown, how many observations have an
+  embedding, and oldest/newest timestamps. `stats` prints it; `doctor`
+  reports a one-line summary plus two derived findings — how many
+  observations are invisible to semantic search, and whether a store with
+  many sessions has no session summaries at all, which means the Stop
+  hook is not completing and is visible nowhere else. Recency is reported
+  **factually rather than judged against an invented staleness
+  threshold**: how long is "too long" between observations depends
+  entirely on how much the operator uses Claude Code, and a wrong guess
+  would either cry wolf or reassure falsely. The one unambiguous case —
+  an empty store while the plugin IS installed, so capture is configured
+  and demonstrably not working — is a critical failure. This is the local
+  counterpart of real claude-mem's `db_observation_count` /
+  `db_session_count` / `db_project_count` / `days_since_last_obs`
+  telemetry, reported to the operator rather than sent anywhere, which is
+  the same stance this port takes on cloud sync. It earned its keep on
+  the first real run, surfacing a row in the development store whose
+  `created_at_epoch` (1970) disagreed with its `created_at` (2026) —
+  test debris from this session, not a code defect, but nothing else
+  displayed it.
+
 - **The same file-lookup problem existed on SQLite — the default backend
   — and needed a different fix.** Fixing Postgres with GIN indexes and
   not checking SQLite left the job half done, so it was measured: a real
