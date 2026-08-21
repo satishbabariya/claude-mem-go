@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,18 +34,25 @@ func TestParseInFlightQueryRoundTrips(t *testing.T) {
 }
 
 // blockingHandle is an observer.Handle whose Observe blocks until release
-// is closed — lets this test hold a session "in flight" for as long as it
-// needs to prove the daemon reports it as such, then release it on
-// command and confirm the daemon reports zero again.
+// is closed — lets a test hold a session "in flight" for as long as it
+// needs to. Shared by this file's in-flight-query test and
+// sessions_test.go's eviction-safety test; closed tracks whether Close
+// was ever called (atomically, since it's read/written from different
+// goroutines across those tests) for the latter's own assertions.
 type blockingHandle struct {
 	release chan struct{}
+	closed  int32
 }
 
 func (b *blockingHandle) Observe(tc transcript.ToolCall) (observer.Turn, error) {
 	<-b.release
 	return observer.Turn{Observation: store.Observation{Title: "done"}}, nil
 }
-func (b *blockingHandle) Close() error { return nil }
+func (b *blockingHandle) Close() error {
+	atomic.StoreInt32(&b.closed, 1)
+	return nil
+}
+func (b *blockingHandle) isClosed() bool { return atomic.LoadInt32(&b.closed) == 1 }
 
 // TestInFlightQueryReflectsARealInProgressEvent is the direct regression
 // test for the whole point of this package: the exact gap the Stop hook's

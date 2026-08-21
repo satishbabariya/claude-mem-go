@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,6 +12,7 @@ import (
 
 	"claude-mem-go/observer"
 	"claude-mem-go/pool"
+	"claude-mem-go/store"
 	"claude-mem-go/transcript"
 )
 
@@ -240,5 +244,167 @@ func TestSessionCacheEvictIdleOnlyRemovesStaleSessions(t *testing.T) {
 	}
 	if fresh.handle.(*fakeHandle).isClosed() {
 		t.Fatal("fresh session was incorrectly closed by evictIdle")
+	}
+}
+
+// TestSessionCacheTouchRefreshesLastUsed is the regression test for the
+// other half of the real gap evictIdle's fix depends on: lastUsed was
+// only ever refreshed when a turn STARTED (getOrCreate), never when one
+// finished — so a session's idle clock was measured from turn start, not
+// real last-activity time. touch (called by worker.Daemon.process after
+// a turn finishes) closes that gap. Confirms it actually updates the
+// cached entry, not a copy, and is a safe no-op for an unknown session
+// (already evicted by the time a caller gets around to touching it,
+// which is a real possible ordering, not just defensive padding).
+func TestSessionCacheTouchRefreshesLastUsed(t *testing.T) {
+	factory, _ := newFakeFactory()
+	c := newSessionCache(pool.New(2), factory)
+
+	entry, err := c.getOrCreate(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	c.mu.Lock()
+	entry.lastUsed = old
+	c.mu.Unlock()
+
+	c.touch("s1")
+
+	c.mu.Lock()
+	got := c.byID["s1"].lastUsed
+	c.mu.Unlock()
+	if !got.After(old) {
+		t.Fatalf("lastUsed after touch = %v, want a time after the back-dated %v", got, old)
+	}
+
+	c.touch("never-existed") // must not panic
+}
+
+// slowFakeHandle is an observer.Handle whose Observe takes a fixed,
+// artificial delay before returning — lets a test distinguish "lastUsed
+// was refreshed at the START of a turn" (getOrCreate's own, pre-existing
+// behavior) from "lastUsed was refreshed when the turn FINISHED" (touch,
+// this fix): only the latter could push lastUsed past the delay.
+type slowFakeHandle struct {
+	delay time.Duration
+}
+
+func (h *slowFakeHandle) Observe(tc transcript.ToolCall) (observer.Turn, error) {
+	time.Sleep(h.delay)
+	return observer.Turn{}, nil
+}
+func (h *slowFakeHandle) Close() error { return nil }
+
+// TestProcessTouchesSessionAfterSuccessfulTurn confirms Daemon.process
+// itself refreshes lastUsed when a turn FINISHES, not just relying on
+// getOrCreate's own pre-existing start-of-turn refresh — a real
+// regression would be forgetting to wire the touch call at process's one
+// real call site, or reverting to only the start-of-turn refresh, which
+// a unit test of touch alone (or a naive "did lastUsed advance at all"
+// check here) can't distinguish, since getOrCreate refreshes it before
+// Observe is ever called regardless. Uses a slowFakeHandle with an
+// artificial delay: only an end-of-turn refresh could push lastUsed past
+// that delay from the call's own start time.
+func TestProcessTouchesSessionAfterSuccessfulTurn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	const delay = 50 * time.Millisecond
+	entry := &sessionEntry{handle: &slowFakeHandle{delay: delay}}
+
+	d := &Daemon{Log: log.New(&bytes.Buffer{}, "", 0), st: st}
+	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
+
+	beforeCall := time.Now()
+	payload := []byte(`{"session_id":"s1","cwd":"/proj","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{}}`)
+	d.process(context.Background(), payload)
+
+	d.sessions.mu.Lock()
+	got := d.sessions.byID["s1"].lastUsed
+	d.sessions.mu.Unlock()
+	if got.Before(beforeCall.Add(delay)) {
+		t.Fatalf("lastUsed = %v, want at least %v after the call started (the observer's own %s artificial delay) — a start-of-turn-only refresh could not have advanced lastUsed this far, meaning the end-of-turn touch call doesn't appear to have fired", got, beforeCall.Add(delay), delay)
+	}
+}
+
+// TestSessionCacheEvictIdleSkipsSessionWithTurnInFlight is the direct
+// regression test for a real bug found by hand, not hypothetical: a
+// session's lastUsed is refreshed when a turn starts (and, since this
+// fix, when one finishes — see touch), but nothing bounds how long a
+// single turn itself can run. This project has measured a real single
+// observation taking 104 seconds under normal load — comfortably enough
+// to look "idle" by a stale lastUsed timestamp if the timeout window is
+// tight, and there's no guarantee a turn can never legitimately run even
+// longer. The original evictIdle evicted purely on that timestamp, with
+// no awareness of entry.mu — meaning a turn genuinely still in flight
+// could have its handle closed out from under it, a real
+// use-after/during-close hazard on the underlying subprocess's pipes,
+// not just a wasted turn.
+//
+// Simulates worker.Daemon.process's own critical section directly
+// (acquiring entry.mu and calling Observe, exactly as process does) with
+// a handle whose Observe blocks on command, back-dates lastUsed to look
+// idle while that simulated turn is still genuinely in flight, and
+// confirms evictIdle leaves it alone. Then releases the simulated turn,
+// re-stales lastUsed, and confirms a LATER sweep does evict it — proving
+// the fix defers eviction rather than leaking the session forever.
+func TestSessionCacheEvictIdleSkipsSessionWithTurnInFlight(t *testing.T) {
+	release := make(chan struct{})
+	handle := &blockingHandle{release: release}
+	factory := func(ctx context.Context) (observer.Handle, error) { return handle, nil }
+	c := newSessionCache(pool.New(1), factory)
+
+	entry, err := c.getOrCreate(context.Background(), "long-turn")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+	c.mu.Lock()
+	entry.lastUsed = time.Now().Add(-2 * sessionIdleTimeout)
+	c.mu.Unlock()
+
+	started := make(chan struct{})
+	turnDone := make(chan struct{})
+	go func() {
+		entry.mu.Lock()
+		close(started)
+		entry.handle.Observe(transcript.ToolCall{})
+		entry.mu.Unlock()
+		close(turnDone)
+	}()
+	<-started // entry.mu is now held, simulating a genuinely in-flight turn
+
+	c.evictIdle()
+
+	if handle.isClosed() {
+		t.Fatal("evictIdle closed a session with a turn genuinely still in flight — the real use-after/during-close hazard this fix exists to prevent")
+	}
+	if c.size() != 1 {
+		t.Fatalf("cache size after evictIdle = %d, want 1 (the in-flight session must not be removed from the cache either)", c.size())
+	}
+
+	close(release) // let the simulated turn finish
+	select {
+	case <-turnDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("simulated turn did not finish")
+	}
+
+	// Now that the turn has genuinely finished, a later sweep must still
+	// be able to evict it — the fix defers eviction, it doesn't disable
+	// it.
+	c.mu.Lock()
+	entry.lastUsed = time.Now().Add(-2 * sessionIdleTimeout)
+	c.mu.Unlock()
+	c.evictIdle()
+	if !handle.isClosed() {
+		t.Fatal("evictIdle did not close the session on a later sweep once its turn had genuinely finished")
+	}
+	if c.size() != 0 {
+		t.Fatalf("cache size after the second evictIdle = %d, want 0", c.size())
 	}
 }

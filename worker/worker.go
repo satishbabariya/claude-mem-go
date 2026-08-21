@@ -352,6 +352,11 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 			return
 		}
 	}
+	// Refresh lastUsed now that the turn actually finished, not just when
+	// it started (getOrCreate already covers that half) — see touch's own
+	// doc comment for why evictIdle's safety margin depends on this
+	// reflecting real last-activity time, not merely a turn's start.
+	d.sessions.touch(in.SessionID)
 
 	project := filepath.Base(in.Cwd)
 	if project == "" || project == "." {

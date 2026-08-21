@@ -935,6 +935,58 @@ Verified against a real running worker: started one with
 `-max-concurrent -1`, confirmed it stayed alive (rather than crashing)
 and its own startup log correctly reported `max_concurrent=1`.
 
+### The idle-session reaper could close a subprocess mid-turn
+
+`worker.sessionCache` reuses one `claude` subprocess per session across
+tool calls (cost and latency, see the package's own doc comment), torn
+down after `sessionIdleTimeout` (10 minutes) of disuse by a background
+sweep — a resource bound for a daemon meant to run for days. `lastUsed`
+was refreshed when a turn *started* (`getOrCreate`), but nothing bounded
+how long a single turn could *run*, and nothing refreshed `lastUsed` again
+until the *next* turn started. This project has measured a real single
+observation taking 104 seconds under normal load — comfortably enough
+margin, on a busy daemon or a slow model response, for a turn to still be
+genuinely in flight when the idle sweep looked at a now-stale timestamp
+and decided the session was safe to tear down. The original `evictIdle`
+had no awareness of `sessionEntry.mu` at all: it would call `Close()` on
+the handle regardless of whether `worker.Daemon.process` was still
+blocked inside `Observe`, reading that exact subprocess's stdout — a real
+use-after/during-close hazard on the underlying pipes, not just a wasted
+turn. Traced one level deeper into `claude-agent-sdk-go`'s own
+`Session.Close`/`Send`: no synchronization between them either, so this
+really would have raced two goroutines over one subprocess.
+
+Fixed with `entry.mu.TryLock()` (not a blocking `Lock`) before evicting:
+succeeding *proves* no turn is currently running, so it's genuinely safe
+to close; failing means a turn is active right now, and the sweep simply
+skips that session — safe to defer regardless of how long the turn takes,
+since a session with a turn actively in flight isn't meaningfully idle no
+matter what its timestamp claims. It's reconsidered on the next sweep a
+minute later. A second, related fix closes the timestamp's other gap:
+`lastUsed` is now also refreshed when a turn *finishes* (`touch`, called
+from `process` after a successful `Observe`), not just when one starts —
+without it, a session's idle clock was measured from turn-start, not
+real last-activity time, which is exactly what let a long-but-legitimate
+turn look artificially close to the idle window in the first place.
+
+Verified with dedicated concurrency tests, not just logical review: one
+drives `worker.Daemon.process`'s own critical section directly (acquiring
+`entry.mu` and calling a handle whose `Observe` blocks on command) while
+back-dating `lastUsed` to look idle, confirms `evictIdle` leaves the
+in-flight session alone and its handle unclosed, then releases the
+simulated turn and confirms a *later* sweep does evict it — proving the
+fix defers eviction rather than leaking the session forever. Each new
+test passes cleanly under `go test -race`, and each was confirmed as a
+genuine regression test by temporarily reverting to the old unsafe logic
+and watching it fail before restoring the fix. Also verified live against
+the real compiled binary: temporarily shrunk `sessionIdleTimeout` to 3
+seconds and the sweep interval to 1 second, then ran a real `claude`
+session with real Ollama/observer calls — a genuine ~9-second real
+observation spanned several sweep cycles inside the shrunk idle window,
+and the daemon stayed alive with the observation correctly persisted, no
+panic, no crash — the exact race this fix closes, exercised under real
+production-shaped timing rather than only a synthetic unit test.
+
 ## Quick start
 
 ```sh

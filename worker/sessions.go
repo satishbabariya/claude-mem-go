@@ -106,19 +106,86 @@ func (c *sessionCache) evict(sessionID string) {
 	}
 }
 
-// evictIdle closes every session idle longer than sessionIdleTimeout.
-// Meant to run periodically in the background.
+// touch refreshes sessionID's lastUsed to now, if it's still cached.
+// getOrCreate already refreshes it when a turn STARTS; this covers the
+// other end — called when a turn actually FINISHES (worker.go's
+// process, after a successful Observe). Without this, a session's idle
+// clock was measured from when its last turn started, not when it
+// actually finished being used: for a real long-running turn (this
+// project has measured a single real observation taking over a minute),
+// the session could look far closer to sessionIdleTimeout than it truly
+// was the instant that turn completed, and evictIdle's own safety margin
+// below depends on lastUsed meaning "last real activity," not "last
+// turn's start time."
+func (c *sessionCache) touch(sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.byID[sessionID]; ok {
+		e.lastUsed = time.Now()
+	}
+}
+
+// evictIdle closes every session idle longer than sessionIdleTimeout —
+// but only when no turn is currently in flight for it. Meant to run
+// periodically in the background.
+//
+// A real bug found by hand, not hypothetical: lastUsed is refreshed when
+// a turn starts (and now, via touch, when one finishes), but nothing
+// bounds how long a single turn itself can run — this project has
+// measured a real single observation taking 104 seconds under normal
+// load, comfortably longer than plenty of margin inside
+// sessionIdleTimeout's own window on a busy daemon, and there's no
+// guarantee one can never legitimately run even longer. The original
+// version of this function evicted purely on a stale lastUsed timestamp,
+// with no awareness of entry.mu — meaning a turn genuinely still in
+// flight past the idle window could have its handle closed out from
+// under it: closing the underlying subprocess's stdin while
+// worker.Daemon.process is still blocked reading its stdout inside
+// Observe is a real use-after/during-close hazard, not just a wasted
+// turn (traced one level deeper into claude-agent-sdk-go's own
+// Session.Close/Send: no synchronization between them either, so this
+// really would race two goroutines over one subprocess's pipes).
+//
+// entry.mu.TryLock (not a blocking Lock) is what makes this safe:
+// succeeding PROVES no turn is currently running — process() isn't
+// holding the lock — so it's genuinely safe to close. Failing means a
+// turn IS active right now, and this sweep simply skips that session;
+// it'll be reconsidered on the next sweep a minute later, which is
+// always safe regardless of how long the turn takes, since a session
+// with a turn actively in flight isn't meaningfully idle no matter what
+// its stale lastUsed claims. The map re-check after acquiring the lock
+// (cur == e) guards the (safe, already-handled-by-existing-retry-logic)
+// case where a concurrent getOrCreate grabbed this same entry between
+// the snapshot above and the lock being acquired here.
 func (c *sessionCache) evictIdle() {
 	c.mu.Lock()
-	var stale []string
+	var stale []*sessionEntry
+	staleID := make(map[*sessionEntry]string, len(c.byID))
 	for id, e := range c.byID {
 		if time.Since(e.lastUsed) > sessionIdleTimeout {
-			stale = append(stale, id)
+			stale = append(stale, e)
+			staleID[e] = id
 		}
 	}
 	c.mu.Unlock()
-	for _, id := range stale {
-		c.evict(id)
+
+	for _, e := range stale {
+		if !e.mu.TryLock() {
+			continue // a turn is actively in flight — leave it for the next sweep
+		}
+		id := staleID[e]
+		c.mu.Lock()
+		cur, ok := c.byID[id]
+		stillLive := ok && cur == e
+		if stillLive {
+			delete(c.byID, id)
+		}
+		c.mu.Unlock()
+		e.mu.Unlock()
+		if stillLive {
+			e.handle.Close()
+			c.pool.Release()
+		}
 	}
 }
 

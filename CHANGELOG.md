@@ -200,6 +200,35 @@ process (this project doesn't cut tagged releases on a schedule).
   Verified live the same way: `--plugin-dir` loaded this plugin into a
   real `claude -p` session and asked it to list every distinct thing the
   skill says `doctor` checks — `hnsw_ef_search` came back among them.
+- **A real concurrency bug: the idle-session reaper could close a
+  subprocess mid-turn.** `worker.sessionCache`'s `evictIdle` tore down a
+  cached session's `claude` subprocess purely on a stale `lastUsed`
+  timestamp, with no awareness of `sessionEntry.mu` — but nothing bounded
+  how long a single turn could run (a real single observation this
+  project has measured took 104 seconds), and `lastUsed` was only ever
+  refreshed when a turn *started*, never when one finished. A turn
+  genuinely still in flight past the idle window could have its handle
+  closed out from under it — a real use-after/during-close hazard on the
+  subprocess's stdin/stdout, not just a wasted turn (confirmed one level
+  deeper: `claude-agent-sdk-go`'s own `Session.Close`/`Send` have no
+  synchronization between them either). Fixed with `entry.mu.TryLock()`
+  before evicting — succeeding proves no turn is running and it's
+  genuinely safe to close; failing means a turn is active, and the sweep
+  simply defers to the next cycle a minute later. A second, related fix:
+  `lastUsed` is now also refreshed when a turn *finishes* (`touch`,
+  called from `process`), not just when one starts, so the idle clock
+  reflects real last-activity time instead of only a turn's start.
+  Verified with dedicated concurrency tests under `go test -race`
+  (a handle whose `Observe` blocks on command, driving `process`'s own
+  critical section directly, confirming eviction is skipped while
+  genuinely in flight and still happens once the turn finishes), each
+  confirmed genuine by reverting to the old unsafe logic and watching the
+  test fail before restoring the fix. Also verified live against the
+  compiled binary: temporarily shrunk the idle timeout to 3s and the
+  sweep interval to 1s, then ran a real `claude` session — a genuine
+  ~9-second real observation spanned several sweep cycles inside that
+  window, and the daemon stayed alive with the observation correctly
+  persisted, no panic, no crash.
 
 ## 0.2.0 — 2026-08-20
 
