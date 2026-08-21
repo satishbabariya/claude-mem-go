@@ -7,6 +7,57 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The file-context hook injected memory that predated the file's
+  current contents, asserting it as current.** The `PreToolUse` hook
+  fires immediately before Claude reads a file and says "here's what we
+  already know about it." If the file has been rewritten since the newest
+  of those observations, all of it describes a version that no longer
+  exists — presented confidently, at exactly the moment Claude forms its
+  impression. Real claude-mem's own handler makes the comparison
+  (`buildFileContextTimeline`: "File modified since last observation,
+  skipping context injection"); this port could not even ask, because
+  `store.SearchResult` carried **no timestamp at all**. Fixed at the
+  schema level first: `SearchResult` gains `CreatedAtEpoch`, populated by
+  every one of the 14 queries that builds one across both backends —
+  deliberately all of them, since a field only some paths fill is worse
+  than no field, as a zero reads as "1970" rather than "unknown", and a
+  dedicated test asserts every read path really populates it. The hook
+  then stats the file and suppresses injection when the mtime is at or
+  after the newest observation. Fails **open** on any stat error: an
+  unknown mtime is not evidence of staleness, and silently dropping
+  context would be far harder to notice than injecting slightly-old
+  context — the same reasoning the Stop hook's privacy check already
+  uses. Directories are excluded, since a directory's mtime changes
+  whenever anything inside it does and would suppress almost everything.
+  Counterweight tests pin that current memory is still injected and that
+  an unstattable file still gets context, because a gate that suppressed
+  everything would pass the regression test perfectly while disabling the
+  feature.
+
+- **Corrected a bug in the enumeration test shipped one commit earlier.**
+  Its `ContentHash` omitted the project, so against the persistent shared
+  Postgres instance the 150 seeded rows deduped against the *previous*
+  run's rows and stayed under that run's project name — the test then
+  enumerated its own, empty project and saw `0 + 0`. It passed on a fresh
+  database and failed on every re-run, which means CI would never have
+  caught it: CI starts a clean service container each time. Exactly the
+  pitfall `postgres_test.go` already documents. Every other `ContentHash`
+  call in that package was checked; this was the only one missing the
+  project.
+
+- **Fixed a latent CI flake in the Postgres test helper.** `uniqueProject`
+  was `t.Name()` + `time.Now().UnixNano()`, which is not unique: a
+  full-suite run failed with two supposedly-distinct projects carrying
+  the identical name, so all three of that test's rows landed in one
+  project and a single-result assertion saw two. Measured afterwards on
+  this machine: two adjacent `UnixNano()` reads are identical **92%** of
+  the time, and two adjacent `uniqueProject` calls collide **74%** of the
+  time. It passed in practice only because isolated `-run` invocations
+  spread the calls out — a loaded full-suite run is exactly when they do
+  not, which is the worst possible schedule for a flake. Now unique by
+  construction via an atomic counter; break/restore shows the old version
+  colliding after 2 calls.
+
 - **New skill `mem-timeline`** — the workflow the enumeration fix above
   exists to enable, and the port's answer to real claude-mem's
   `timeline-report` and `weekly-digests`. Covers both shapes: a

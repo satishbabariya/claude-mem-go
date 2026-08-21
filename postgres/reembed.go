@@ -29,7 +29,7 @@ func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64,
 	}
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE id > $1
 		  AND (embedding IS NULL OR vector_dims(embedding) != $2)
@@ -48,7 +48,7 @@ func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64,
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan observation needing embedding: %w", err)
 		}
 		nf.apply(&r.Observation)

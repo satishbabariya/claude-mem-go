@@ -214,7 +214,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 	offsetPlaceholder := fmt.Sprintf("$%d", len(args))
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE `+matchPredicate+` `+scope+`
 		`+searchOrderClause(orderBy, enumerate)+`
@@ -232,7 +232,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan search row: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -252,7 +252,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE project = $1
 		ORDER BY created_at_epoch DESC, id DESC
@@ -269,7 +269,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan recent observation: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -288,7 +288,7 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, 
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE session_id = $1
 		ORDER BY created_at_epoch ASC, id ASC
@@ -305,7 +305,7 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]store.SearchResult, 
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan session observation: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -341,7 +341,7 @@ func (s *Store) ByIDs(ids []int64) ([]store.SearchResult, error) {
 	}
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE id = ANY($1)`, ids)
 	if err != nil {
@@ -356,7 +356,7 @@ func (s *Store) ByIDs(ids []int64) ([]store.SearchResult, error) {
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan observation by id: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -379,7 +379,7 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]stor
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE project = $1
 		  AND (files_read ? $2 OR files_modified ? $2)
@@ -397,7 +397,7 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]stor
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan file-context observation: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -451,7 +451,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 
 	beforeRows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE id < $1 AND project = $2
 		ORDER BY id DESC
@@ -469,7 +469,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 
 	afterRows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified
+		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
 		WHERE id > $1 AND project = $2
 		ORDER BY id ASC
@@ -501,7 +501,7 @@ func scanTimelineRows(rows *sql.Rows) ([]store.SearchResult, error) {
 		var facts, concepts, filesRead, filesModified []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified); err != nil {
+			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan timeline row: %w", err)
 		}
 		nf.apply(&r.Observation)

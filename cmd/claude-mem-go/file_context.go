@@ -94,6 +94,38 @@ func cmdFileContext(args []string) int {
 		return 0
 	}
 
+	// Don't inject memory that predates the file's current contents.
+	//
+	// This hook fires immediately before Claude reads a file, and says
+	// "here's what we already know about it." If the file has been
+	// rewritten since the newest of those observations was recorded, then
+	// everything being injected describes a version that no longer
+	// exists — and it is being asserted as current, right at the moment
+	// Claude is about to form an impression of the file. Stale memory
+	// presented confidently is worse than no memory: Claude is about to
+	// read the real contents anyway, so suppressing this costs nothing
+	// and injecting it can actively mislead.
+	//
+	// Real claude-mem's own file-context handler makes exactly this
+	// comparison (buildFileContextTimeline: "File modified since last
+	// observation, skipping context injection"). This port had no way to
+	// even ask — SearchResult carried no timestamp until now.
+	if mtimeMs, ok := fileMtimeMs(in.Cwd, toolInput.FilePath); ok {
+		newest := int64(0)
+		for _, r := range results {
+			if r.CreatedAtEpoch > newest {
+				newest = r.CreatedAtEpoch
+			}
+		}
+		if newest > 0 && mtimeMs >= newest {
+			l.Printf("skip: file=%s modified at %d, after the newest of %d observation(s) (%d) — "+
+				"what we remember describes an older version of this file",
+				toolInput.FilePath, mtimeMs, len(results), newest)
+			fmt.Println("{}")
+			return 0
+		}
+	}
+
 	ctx := formatFileContext(toolInput.FilePath, results)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",
@@ -109,6 +141,7 @@ func cmdFileContext(args []string) int {
 	fmt.Println(string(enc))
 	return 0
 }
+
 func formatFileContext(filePath string, results []store.SearchResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Prior memory about %s:\n\n", filePath)
@@ -120,4 +153,35 @@ func formatFileContext(filePath string, results []store.SearchResult) string {
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// fileMtimeMs returns filePath's modification time in Unix epoch
+// milliseconds, resolving a relative path against cwd. The bool reports
+// whether the answer is usable.
+//
+// Every failure returns false, which means "inject anyway" — the caller
+// only suppresses on a definite answer. That direction is deliberate and
+// matches the reasoning the Stop hook's privacy check already uses: an
+// unknown signal must never be treated as a reason to withhold. A file
+// this hook cannot stat (permissions, a path shape it does not
+// understand, a race with a delete) is not evidence that the memory is
+// stale, and silently dropping context on it would be a much harder
+// failure to notice than injecting slightly-old context.
+func fileMtimeMs(cwd, filePath string) (int64, bool) {
+	path := filePath
+	if !filepath.IsAbs(path) && cwd != "" {
+		path = filepath.Join(cwd, path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	// A directory has an mtime, but comparing it against observations
+	// about a file is meaningless — and a directory's mtime changes
+	// whenever anything inside it does, so this would suppress context
+	// almost always.
+	if !fi.Mode().IsRegular() {
+		return 0, false
+	}
+	return fi.ModTime().UnixMilli(), true
 }

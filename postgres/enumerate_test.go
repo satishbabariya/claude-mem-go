@@ -24,8 +24,14 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 	const n = 150
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("step %d", i)
+		// The project must be part of the hash. Postgres here is a
+		// persistent, shared instance, so a hash built only from the
+		// title collides with the PREVIOUS run's row — Insert dedups,
+		// the rows stay under the old run's project name, and this test
+		// then enumerates its own (empty) project. Found exactly that
+		// way: it passed on a fresh database and failed on every re-run.
 		if _, err := st.Insert("s-enum", project, "Bash",
-			store.ContentHash("s-enum", "Bash", title, fmt.Sprint(i)),
+			store.ContentHash("s-enum", "Bash", title, project+fmt.Sprint(i)),
 			store.Observation{Type: "change", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
@@ -65,7 +71,7 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 	t.Run("project scope still applies", func(t *testing.T) {
 		other := uniqueProject(t)
 		if _, err := st.Insert("s-other", other, "Bash",
-			store.ContentHash("s-other", "Bash", "elsewhere", "x"),
+			store.ContentHash("s-other", "Bash", "elsewhere", other),
 			store.Observation{Type: "discovery", Title: "elsewhere"}, 0); err != nil {
 			t.Fatalf("Insert other: %v", err)
 		}

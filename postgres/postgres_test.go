@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,8 +77,23 @@ func openTestStore(t *testing.T) *Store {
 // uniqueProject avoids collisions between test runs against the same
 // long-lived database — this isn't a fresh temp file like the SQLite tests
 // get, it's a shared Postgres instance.
+// uniqueProjectSeq makes uniqueProject unique BY CONSTRUCTION rather than
+// by hoping the clock ticked between two calls.
+//
+// The clock alone was not enough, and this was not theoretical: a
+// full-suite run failed in TestPostgresSearchFiltersByObservationTypeWith
+// ProjectScope with both its "different" projects carrying the identical
+// name, so all three of its rows landed in one project and a
+// single-result assertion saw two. Measured on this machine afterwards:
+// two adjacent time.Now().UnixNano() reads are identical 92% of the time,
+// and two adjacent uniqueProject calls collide 74% of the time. Isolated
+// -run invocations happen to pass because the surrounding work spreads
+// the calls out; a loaded full-suite run is exactly when it does not,
+// which is the worst possible failure schedule for a CI flake.
+var uniqueProjectSeq atomic.Int64
+
 func uniqueProject(t *testing.T) string {
-	return fmt.Sprintf("test-%s-%d", t.Name(), time.Now().UnixNano())
+	return fmt.Sprintf("test-%s-%d-%d", t.Name(), time.Now().UnixNano(), uniqueProjectSeq.Add(1))
 }
 
 func TestPostgresInsertIsIdempotentOnContentHash(t *testing.T) {
