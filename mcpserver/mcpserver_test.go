@@ -851,6 +851,99 @@ func TestToolsCallAddObservationRequiresAProject(t *testing.T) {
 	}
 }
 
+// TestToolsCallAddObservationRejectsOversizedTitle is the regression test
+// for a real gap add_observation had until now: title/subtitle/narrative/
+// facts/concepts arrived from MCP tool-call arguments with no length check
+// at all, unlike every other external-input surface in this codebase
+// (hook.MaxPayloadBytes bounds the hook socket, store.MaxIDsPerLookup
+// bounds get_observations' id list). A caller sending a title far past
+// maxObservationTitleBytes must get a clean isError result naming the
+// limit, not a row silently accepted and stored forever.
+func TestToolsCallAddObservationRejectsOversizedTitle(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	oversized := strings.Repeat("a", maxObservationTitleBytes+1)
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"%s"}}}`, oversized)
+
+	resp := runLines(t, s, []string{req})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with a %d-byte title (limit %d): want isError=true, got %v", len(oversized), maxObservationTitleBytes, resp[0])
+	}
+	result := resp[0]["result"].(map[string]any)
+	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "exceeds") {
+		t.Errorf("error text = %q, want it to mention the limit being exceeded", text)
+	}
+}
+
+// TestToolsCallAddObservationRejectsOversizedNarrative confirms the same
+// bound applies to narrative, the field that also feeds
+// embed.ObservationText's embedding request — an unbounded narrative
+// wouldn't just bloat the stored row, it would ship arbitrarily large text
+// into a single Ollama call on every add_observation.
+func TestToolsCallAddObservationRejectsOversizedNarrative(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	oversized := strings.Repeat("b", maxObservationNarrativeBytes+1)
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"ok","narrative":"%s"}}}`, oversized)
+
+	resp := runLines(t, s, []string{req})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with a %d-byte narrative (limit %d): want isError=true, got %v", len(oversized), maxObservationNarrativeBytes, resp[0])
+	}
+}
+
+// TestToolsCallAddObservationRejectsTooManyFacts confirms the facts array
+// is bounded by count, not just by each item's own length — matching the
+// "no legitimate caller needs more than a page" reasoning store.
+// MaxIDsPerLookup already applies to get_observations' id list.
+func TestToolsCallAddObservationRejectsTooManyFacts(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	facts := make([]string, maxObservationFactsCount+1)
+	for i := range facts {
+		facts[i] = fmt.Sprintf("%q", fmt.Sprintf("fact %d", i))
+	}
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"ok","facts":[%s]}}}`, strings.Join(facts, ","))
+
+	resp := runLines(t, s, []string{req})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with %d facts (limit %d): want isError=true, got %v", len(facts), maxObservationFactsCount, resp[0])
+	}
+}
+
+// TestToolsCallAddObservationRejectsOversizedFactItem confirms each fact
+// is also bounded individually — a caller under the count limit could
+// otherwise still smuggle an arbitrarily large blob into a single "fact".
+func TestToolsCallAddObservationRejectsOversizedFactItem(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	oversized := strings.Repeat("c", maxObservationFactBytes+1)
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"ok","facts":["%s"]}}}`, oversized)
+
+	resp := runLines(t, s, []string{req})
+	if !toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with a %d-byte fact (limit %d): want isError=true, got %v", len(oversized), maxObservationFactBytes, resp[0])
+	}
+}
+
+// TestToolsCallAddObservationAcceptsFieldsWithinBounds is the
+// non-regression counterpart: normal-sized title/subtitle/narrative/
+// facts/concepts, well within every bound above, must still succeed —
+// proving this is a real bound, not an accidental block on legitimate
+// calls (the same shape TestToolsCallAddObservationPersistsAndIsFindable
+// already covers, asserted again here explicitly against the bounds).
+func TestToolsCallAddObservationAcceptsFieldsWithinBounds(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Project = "proj"
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_observation","arguments":{"title":"a normal title","subtitle":"a normal subtitle","narrative":"a normal, reasonably detailed narrative paragraph","facts":["fact one","fact two"],"concepts":["architecture"]}}}`
+
+	resp := runLines(t, s, []string{req})
+	if toolCallIsError(t, resp[0]) {
+		t.Fatalf("add_observation with normal-sized fields: want success, got error %v", resp[0])
+	}
+}
+
 func TestMalformedLineIsSkippedNotFatal(t *testing.T) {
 	s, _ := newTestServer(t)
 	// One garbage line between two valid requests must not kill the session

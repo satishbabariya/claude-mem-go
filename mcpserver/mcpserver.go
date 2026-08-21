@@ -676,6 +676,72 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatTimeline(results, anchor)}}}
 }
 
+// Size bounds for add_observation's free-text arguments — unlike every
+// other tool here, these come straight from whatever's calling the MCP
+// server (arguments are JSON strings/arrays with no schema-enforced
+// length) and land, unlike a hook payload, directly in a database row and
+// an Ollama embedding request rather than being read once and discarded.
+// Before this, an MCP client (accidentally or otherwise) could hand
+// add_observation a multi-megabyte "title" and it would be accepted
+// exactly like a real one: stored forever, printed in full by every list
+// tool's formatSearchResults/formatFullObservations output (unlike
+// PostToolUse's captured fields, which transcript.FieldCap already bounds
+// before an observation is ever built), and shipped whole to
+// embed.ObservationText's embedding request.
+//
+// The per-field caps mirror what observer.go's own prompt already asks a
+// well-behaved caller for — title a "short title", subtitle a "one-line
+// detail", narrative "one paragraph" — sized several times larger than any
+// real value ever needs so genuine content is never truncated, the same
+// generous-but-real-bound approach transcript.FieldCap takes for hook
+// payload fields. The facts/concepts count and per-item caps match the
+// "no legitimate caller needs more than a page" reasoning already
+// governing store.MaxIDsPerLookup and store.MaxTimelineDepth: facts and
+// concepts are meant to be a handful of discrete, short items (a fact is
+// a sentence, a concept is a tag), not an unbounded list.
+const (
+	maxObservationTitleBytes     = 500
+	maxObservationSubtitleBytes  = 1000
+	maxObservationNarrativeBytes = 10000
+	maxObservationFactsCount     = 50
+	maxObservationFactBytes      = 1000
+	maxObservationConceptsCount  = 50
+	maxObservationConceptBytes   = 200
+)
+
+// validateAddObservationSize checks add_observation's free-text arguments
+// against the bounds above, returning a non-empty message identifying the
+// first violation found (checked in the same order the fields are
+// declared in toolCallParams) or "" if everything is within bounds.
+func validateAddObservationSize(title, subtitle, narrative string, facts, concepts []string) string {
+	if len(title) > maxObservationTitleBytes {
+		return fmt.Sprintf("add_observation: \"title\" is %d bytes, which exceeds the %d-byte limit", len(title), maxObservationTitleBytes)
+	}
+	if len(subtitle) > maxObservationSubtitleBytes {
+		return fmt.Sprintf("add_observation: \"subtitle\" is %d bytes, which exceeds the %d-byte limit", len(subtitle), maxObservationSubtitleBytes)
+	}
+	if len(narrative) > maxObservationNarrativeBytes {
+		return fmt.Sprintf("add_observation: \"narrative\" is %d bytes, which exceeds the %d-byte limit", len(narrative), maxObservationNarrativeBytes)
+	}
+	if len(facts) > maxObservationFactsCount {
+		return fmt.Sprintf("add_observation: %d \"facts\" exceeds the %d-item limit", len(facts), maxObservationFactsCount)
+	}
+	for _, f := range facts {
+		if len(f) > maxObservationFactBytes {
+			return fmt.Sprintf("add_observation: a \"facts\" item is %d bytes, which exceeds the %d-byte limit", len(f), maxObservationFactBytes)
+		}
+	}
+	if len(concepts) > maxObservationConceptsCount {
+		return fmt.Sprintf("add_observation: %d \"concepts\" exceeds the %d-item limit", len(concepts), maxObservationConceptsCount)
+	}
+	for _, c := range concepts {
+		if len(c) > maxObservationConceptBytes {
+			return fmt.Sprintf("add_observation: a \"concepts\" item is %d bytes, which exceeds the %d-byte limit", len(c), maxObservationConceptBytes)
+		}
+	}
+	return ""
+}
+
 // runAddObservation is the write side of this server's otherwise
 // read-only surface: every other tool reads what PostToolUse already
 // captured automatically. This lets Claude explicitly persist something
@@ -692,6 +758,9 @@ func (s *Server) runAddObservation(project, title, subtitle, narrative string, f
 	if project == "" {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
 			Text: "no project to add to — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+	}
+	if msg := validateAddObservationSize(title, subtitle, narrative, facts, concepts); msg != "" {
+		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: msg}}}
 	}
 
 	o := store.Observation{Type: "manual", Title: title, Subtitle: subtitle, Narrative: narrative, Facts: facts, Concepts: concepts}

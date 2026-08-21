@@ -1129,6 +1129,48 @@ querying the real resulting database afterward: exactly one observation
 existed, from the unmatched project, with the excluded project's
 directory producing zero rows.
 
+### `add_observation` had no size bound on any of its inputs
+
+Every other external-input surface in this codebase is bounded somewhere:
+`hook.MaxPayloadBytes` caps the hook socket, `store.MaxIDsPerLookup` caps
+`get_observations`' id list, `maxLimit` caps every list tool's `limit`
+argument. `add_observation`'s title/subtitle/narrative/facts/concepts
+were the one exception — they arrive straight from an MCP tool call's
+JSON arguments with no length check at all, and unlike `PostToolUse`'s
+captured fields (already bounded by `transcript.FieldCap` before an
+observation is even built), a manually-added observation's fields went
+straight from the wire into a database row and, when semantic search is
+enabled, an Ollama embedding request. A caller (accidentally or
+otherwise) handing it a multi-megabyte "title" would have been accepted
+exactly like a real one — stored forever and printed in full by every
+list tool's formatter.
+
+Fixed with per-field byte caps (`maxObservationTitleBytes` = 500,
+`maxObservationSubtitleBytes` = 1000, `maxObservationNarrativeBytes` =
+10000) sized several times larger than any real value ever needs —
+matching what `observer.go`'s own prompt already asks a well-behaved
+caller for (title a "short title", subtitle a "one-line detail",
+narrative "one paragraph") — plus count-and-per-item caps on `facts`/
+`concepts` (`maxObservationFactsCount`/`maxObservationConceptsCount` =
+50 items, `maxObservationFactBytes` = 1000, `maxObservationConceptBytes`
+= 200) following the same "no legitimate caller needs more than a page"
+reasoning already governing `store.MaxIDsPerLookup` and
+`store.MaxTimelineDepth` — facts and concepts are meant to be a handful
+of discrete, short items, not an unbounded list. An oversized argument
+gets a clean `isError` tool result naming the limit that was exceeded,
+the same shape `get_observations` already uses for too many ids, rather
+than a silently-accepted row or a raw driver/network error.
+
+Verified with dedicated tests sending real MCP `tools/call` requests
+with oversized title/narrative/facts arguments against a real SQLite
+backend, each confirmed as a genuine regression test by temporarily
+removing the validation call and watching every one of them fail
+(a 501-byte title, a 10001-byte narrative, 51 facts, and a 1001-byte
+single fact all got accepted and stored instead of rejected) before
+restoring the fix and confirming they pass again — plus a non-regression
+test confirming normal-sized fields still succeed, so this is a real
+bound and not an accidental block on legitimate calls.
+
 ## Quick start
 
 ```sh

@@ -296,6 +296,26 @@ process (this project doesn't cut tagged releases on a schedule).
   event was skipped before any observer call, confirmed by querying the
   real resulting database afterward (exactly one observation, from the
   unmatched project; zero from the excluded one).
+- **Fixed: `add_observation` had no size bound on any of its inputs.**
+  Every other external-input surface here is bounded somewhere
+  (`hook.MaxPayloadBytes` on the hook socket, `store.MaxIDsPerLookup` on
+  `get_observations`' id list, `maxLimit` on every list tool's `limit`) —
+  `add_observation`'s title/subtitle/narrative/facts/concepts were the
+  one exception, arriving straight from an MCP tool call's JSON
+  arguments with no length check, and landing directly in a database row
+  and (with semantic search enabled) an Ollama embedding request. Fixed
+  with per-field byte caps (title 500, subtitle 1000, narrative 10000)
+  sized generously against what `observer.go`'s own prompt already asks
+  for (a "short title", "one-line detail", "one paragraph"), plus
+  count-and-per-item caps on facts/concepts (50 items, 1000/200 bytes
+  each) following the same "no legitimate caller needs more than a page"
+  reasoning as `store.MaxIDsPerLookup`. An oversized argument now gets a
+  clean `isError` result naming the exceeded limit, the same shape
+  `get_observations` already uses. Verified with real MCP `tools/call`
+  tests sending oversized title/narrative/facts arguments, each confirmed
+  as a genuine regression test by temporarily removing the validation
+  and watching it fail before restoring it, plus a non-regression test
+  confirming normal-sized fields still succeed.
 
 ## 0.2.0 — 2026-08-20
 
