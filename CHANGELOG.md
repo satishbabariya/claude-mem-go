@@ -7,6 +7,36 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **A project's history was not walkable at all — 50 of 150 observations
+  were simply unreachable through the MCP surface.** `search_observations`
+  required a query (an empty one and `"*"` both returned "No matching
+  observations"), and `recent_observations` has no `offset` and stops at
+  the 100 most recent. So there was no way to express "every observation
+  in this date window", which is what a timeline or week-by-week digest
+  is built from — both of which real claude-mem ships as first-class
+  skills (`timeline-report`, `weekly-digests`). Measured on a
+  150-observation project: the 50 oldest could not be reached by any tool
+  call. `Search` now treats an empty query as enumeration in **both**
+  backends, reusing the `offset`/`dateStart`/`dateEnd`/`orderBy` plumbing
+  that already existed, and `query` is no longer a required MCP
+  parameter. Two shapes rather than one query with a neutered predicate:
+  SQLite skips the `observations_fts` join entirely (FTS5 has no
+  match-all term, and joining would restrict results to indexed rows) and
+  Postgres drops the `@@` predicate rather than passing a match-all
+  tsquery (`search_vector` is NULL for a row with empty indexed text, so
+  `@@` would silently exclude exactly the rows enumeration must include).
+  An empty `orderBy` falls back to newest-first on this path, since
+  "relevance" references `rank` / `ts_rank_cd(..., $1)` — expressions
+  that do not exist without a query, making it a SQL error rather than a
+  poor sort. Verified through the real MCP server on both backends: 150
+  observations reachable in two pages, a date-bounded window returning
+  exactly its slice, and an out-of-range window correctly returning
+  nothing, which is what proves the filter is applied rather than
+  ignored. Counterweight tests pin that a real query still narrows —
+  an enumeration path that swallowed the query would make every search
+  return the whole store, which reads as "more results" rather than as a
+  bug.
+
 - **The session summary silently described the wrong half of any long
   session — and confidently misstated its size.** `BySessionID` orders
   oldest-first and `stop` applied a plain `LIMIT` (default 50, hard cap

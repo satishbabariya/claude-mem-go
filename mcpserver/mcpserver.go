@@ -131,21 +131,25 @@ func tools() []toolDef {
 			},
 		},
 		{
-			Name:        "search_observations",
-			Description: "Keyword (full-text) search over claude-mem-go's persisted observations.",
+			Name: "search_observations",
+			Description: "Keyword (full-text) search over claude-mem-go's persisted observations. " +
+				"Omit `query` to ENUMERATE instead of search: every observation matching the other " +
+				"filters, newest first unless orderBy says otherwise. Combined with dateStart/dateEnd " +
+				"and offset, that is how you walk a project's full history — e.g. one ISO week at a " +
+				"time for a timeline or digest report. recent_observations cannot do this: it has no " +
+				"offset and stops at the 100 most recent.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query":        map[string]any{"type": "string", "description": "Search terms"},
+					"query":        map[string]any{"type": "string", "description": "Search terms. Omit or leave empty to enumerate everything matching the other filters instead of searching"},
 					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10)"},
 					"offset":       map[string]any{"type": "integer", "description": "Skip this many leading results, for paging past a prior call's limit (default 0)"},
 					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
 					"type":         map[string]any{"type": "string", "description": "Filter by observation type: discovery, change, decision, summary, or manual. Comma-separated for multiple (default: every type)"},
 					"dateStart":    map[string]any{"type": "string", "description": "Only observations created on or after this date (RFC3339 or YYYY-MM-DD)"},
 					"dateEnd":      map[string]any{"type": "string", "description": "Only observations created on or before this date (RFC3339 or YYYY-MM-DD)"},
-					"orderBy":      map[string]any{"type": "string", "description": "Sort order: date_desc or date_asc (default: relevance)"},
+					"orderBy":      map[string]any{"type": "string", "description": "Sort order: date_desc or date_asc (default: relevance when querying, date_desc when enumerating)"},
 				},
-				"required": []string{"query"},
 			},
 		},
 		{

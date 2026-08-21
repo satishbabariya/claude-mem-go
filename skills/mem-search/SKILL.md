@@ -127,6 +127,31 @@ suggested there was more:
 search_observations(query="rate limiting", limit=10, offset=10)  -- results 11-20
 ```
 
+### Omit `query` to enumerate instead of search
+
+`search_observations` with no `query` returns **everything matching the
+other filters**, newest first (or oldest first with
+`orderBy: "date_asc"`). This is the only way to walk a project's whole
+history: `recent_observations` has no `offset` and stops at the 100 most
+recent, so on a project with more than that, older observations are
+unreachable through it.
+
+```
+search_observations(dateStart="2026-08-10", dateEnd="2026-08-16",
+                    orderBy="date_asc", limit=100)          -- one week
+search_observations(orderBy="date_asc", limit=100, offset=100)  -- next page
+```
+
+Reach for this when the user asks for something spanning a period rather
+than matching a term — "what did we do last week", "walk me through this
+project's history", a timeline or digest. Page with `offset` until a call
+returns fewer than `limit` rows.
+
+Combine it with `type` to enumerate one kind of thing — `type="decision"`
+over a date range answers "what did we decide this month" without needing
+to guess the words any of those decisions were recorded in, which is
+exactly what keyword search cannot do.
+
 ### `semantic_search_observations` — meaning, not exact words
 
 Embedding-based search. Use when the user's question is phrased

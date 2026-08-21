@@ -175,9 +175,17 @@ func clampNegativeLimit(limit int) int {
 // created_at_epoch instead; any other, unrecognized value also falls
 // back to date_desc, matching buildOrderClause's own default case
 // exactly rather than silently treating it as relevance.
-func searchOrderClause(orderBy string) string {
+func searchOrderClause(orderBy string, enumerate bool) string {
 	switch orderBy {
 	case "", "relevance":
+		// "Relevance" is meaningless without a query to be relevant TO,
+		// and `rank` does not even exist outside an FTS MATCH — asking
+		// for it here is a SQL error, not a bad ordering. Newest-first
+		// is the sensible default for enumeration and matches what
+		// RecentByProject already returns.
+		if enumerate {
+			return "ORDER BY o.created_at_epoch DESC, o.id DESC"
+		}
 		return "ORDER BY rank, o.id"
 	case "date_asc":
 		return "ORDER BY o.created_at_epoch ASC, o.id ASC"
@@ -206,7 +214,13 @@ func searchOrderClause(orderBy string) string {
 func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
-	args := []any{sanitizeFTSQuery(query)}
+	// An empty query means "every observation matching the other
+	// filters", not "no results". See searchIsEnumeration.
+	enumerate := strings.TrimSpace(query) == ""
+	var args []any
+	if !enumerate {
+		args = append(args, sanitizeFTSQuery(query))
+	}
 	scope := ""
 	if project != "" {
 		scope += " AND o.project = ?"
@@ -248,16 +262,24 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		args = append(args, dateEndMs)
 	}
 	args = append(args, limit, offset)
+
+	// Two shapes, not one query with a neutered predicate: enumeration
+	// skips the FTS table entirely rather than asking it to match
+	// everything. FTS5 has no "match all" term, and a join against it
+	// would restrict results to rows that happen to be indexed.
+	from, where := "observations_fts f JOIN observations o ON o.id = f.rowid", "observations_fts MATCH ?"
+	if enumerate {
+		from, where = "observations o", "1=1"
+	}
 	rows, err := s.db.Query(`
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified
-		FROM observations_fts f
-		JOIN observations o ON o.id = f.rowid
-		WHERE observations_fts MATCH ? `+scope+`
-		`+searchOrderClause(orderBy)+`
+		FROM `+from+`
+		WHERE `+where+` `+scope+`
+		`+searchOrderClause(orderBy, enumerate)+`
 		LIMIT ? OFFSET ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("fts5 search %q: %w", query, err)
+		return nil, fmt.Errorf("search %q: %w", query, err)
 	}
 	defer rows.Close()
 

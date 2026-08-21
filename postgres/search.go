@@ -145,9 +145,15 @@ func websearchQuery(query string) string {
 // helper (see its own doc comment for the real claude-mem source this
 // ports) — same three cases, just against ts_rank_cd instead of FTS5's
 // bare rank column.
-func searchOrderClause(orderBy string) string {
+func searchOrderClause(orderBy string, enumerate bool) string {
 	switch orderBy {
 	case "", "relevance":
+		// Without a query there is nothing to be relevant to, and the
+		// rank expression references $1, which does not exist on the
+		// enumeration path — a SQL error, not merely a poor ordering.
+		if enumerate {
+			return "ORDER BY created_at_epoch DESC, id DESC"
+		}
 		return "ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) DESC, id"
 	case "date_asc":
 		return "ORDER BY created_at_epoch ASC, id ASC"
@@ -159,7 +165,14 @@ func searchOrderClause(orderBy string) string {
 func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]store.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
-	args := []any{websearchQuery(query)}
+	// An empty query means "every observation matching the other
+	// filters", not "no results" — the enumeration path the timeline and
+	// digest use cases need. See the SQLite backend for the same split.
+	enumerate := strings.TrimSpace(query) == ""
+	var args []any
+	if !enumerate {
+		args = append(args, websearchQuery(query))
+	}
 	scope := ""
 	if project != "" {
 		args = append(args, project)
@@ -187,6 +200,14 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		args = append(args, dateEndMs)
 		scope += fmt.Sprintf(" AND created_at_epoch <= $%d", len(args))
 	}
+	// Dropping the predicate entirely rather than passing a tsquery that
+	// matches everything: there is no such tsquery, and search_vector is
+	// NULL for a row whose text is empty, so `@@` would silently exclude
+	// rows enumeration must include.
+	matchPredicate := "search_vector @@ websearch_to_tsquery('english', $1)"
+	if enumerate {
+		matchPredicate = "TRUE"
+	}
 	args = append(args, limit)
 	limitPlaceholder := fmt.Sprintf("$%d", len(args))
 	args = append(args, offset)
@@ -195,8 +216,8 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified
 		FROM observations
-		WHERE search_vector @@ websearch_to_tsquery('english', $1) `+scope+`
-		`+searchOrderClause(orderBy)+`
+		WHERE `+matchPredicate+` `+scope+`
+		`+searchOrderClause(orderBy, enumerate)+`
 		LIMIT `+limitPlaceholder+`
 		OFFSET `+offsetPlaceholder, args...)
 	if err != nil {
