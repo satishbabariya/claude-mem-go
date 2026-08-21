@@ -13,6 +13,18 @@ split below exists because a simpler "hook does the work inline" design was
 tried, found to lose data, and fixed — not because it seemed like a good
 idea in the abstract.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [Installing as a Claude Code plugin](#installing-as-a-claude-code-plugin)
+- [Findings: what this port fixed, and how each was verified](#findings-what-this-port-fixed-and-how-each-was-verified)
+- [Running the worker as a supervised service (optional)](#running-the-worker-as-a-supervised-service-optional)
+- [Known limitations](#known-limitations)
+- [Security](#security)
+- [Testing](#testing)
+
 ## Requirements
 
 - The `claude` CLI on `PATH` (used as the actual model backend — no API key
@@ -21,6 +33,35 @@ idea in the abstract.
   pulled (`ollama pull nomic-embed-text`), if you want semantic search.
   Keyword search (`search`) works without it.
 - Go 1.24+.
+
+## Quick start
+
+```sh
+go build -o claude-mem-go ./cmd/claude-mem-go
+
+# One-shot, no hooks needed:
+./claude-mem-go ingest -limit 3
+./claude-mem-go search "some keyword"
+./claude-mem-go semantic-search "a question phrased differently"
+
+# Wired into a project via .claude/settings.json (see .claude/settings.json.example):
+./claude-mem-go start   # idempotent — safe to call from every SessionStart
+./claude-mem-go hook     # what PostToolUse actually invokes
+
+# As an MCP server (see .mcp.json.example):
+./claude-mem-go mcp
+```
+
+Data lives in `~/.claude-mem-go/` — `observations.db`, `worker.sock`,
+and `worker.log` / `start.log` / `hook.log` (hooks run detached from any
+terminal, so these logs are the only way to see what they did). Every log
+file rotates at 5MB, keeping one prior generation (`name.log.1`) — there
+was no cap at all before this, and `worker.log` in particular gets a new
+line on every `PostToolUse` event for as long as the daemon runs, which is
+meant to be months. Verified against a real running daemon, not just unit
+tests: grew a real `worker.log` past the cap by hand, restarted the
+daemon, and confirmed it rotated the oversized file to `worker.log.1` and
+started a fresh one on its very first log line.
 
 ## Architecture
 
@@ -881,6 +922,15 @@ and deliberately so: there are no published releases or tags yet, and the
 repository is private, so asset download would need auth. Building from
 the source the plugin already ships is the fix that works for the
 distribution actually in use.
+
+## Findings: what this port fixed, and how each was verified
+
+Everything below is a defect found in this port and the evidence that
+it was real — measurements, reproductions, and the break/restore that
+proved each test actually catches its bug. These sections were
+previously nested under "Installing as a Claude Code plugin", where
+they had nothing to do with installing and made that section 1,623
+lines long; they are their own thing and are now filed as such.
 
 ### Hook coverage, audited against the shipped CLI
 
@@ -2413,35 +2463,6 @@ behavior on both backends — ordering and tiebreakers, cross-project anchor
 rejection, missing-anchor errors, depth and limit clamping at `0`/`-1`/
 `-5`/`1000`, prune's `<` cutoff, and no orphaned vector rows on either.
 That part of the vein is dry.
-
-## Quick start
-
-```sh
-go build -o claude-mem-go ./cmd/claude-mem-go
-
-# One-shot, no hooks needed:
-./claude-mem-go ingest -limit 3
-./claude-mem-go search "some keyword"
-./claude-mem-go semantic-search "a question phrased differently"
-
-# Wired into a project via .claude/settings.json (see .claude/settings.json.example):
-./claude-mem-go start   # idempotent — safe to call from every SessionStart
-./claude-mem-go hook     # what PostToolUse actually invokes
-
-# As an MCP server (see .mcp.json.example):
-./claude-mem-go mcp
-```
-
-Data lives in `~/.claude-mem-go/` — `observations.db`, `worker.sock`,
-and `worker.log` / `start.log` / `hook.log` (hooks run detached from any
-terminal, so these logs are the only way to see what they did). Every log
-file rotates at 5MB, keeping one prior generation (`name.log.1`) — there
-was no cap at all before this, and `worker.log` in particular gets a new
-line on every `PostToolUse` event for as long as the daemon runs, which is
-meant to be months. Verified against a real running daemon, not just unit
-tests: grew a real `worker.log` past the cap by hand, restarted the
-daemon, and confirmed it rotated the oversized file to `worker.log.1` and
-started a fresh one on its very first log line.
 
 ## Running the worker as a supervised service (optional)
 

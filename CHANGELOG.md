@@ -7,6 +7,28 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
+- **The README was 2,604 lines with no table of contents, and 62% of it
+  was filed under the wrong heading.** An audit of the docs — which the
+  mandate names, and which this work has been appending to all along —
+  found a structural problem rather than a stylistic one: **32 `###`
+  sections, nearly all engineering findings** ("No `<private>` tag
+  redaction anywhere", "Truncation used to be able to corrupt real tool
+  output mid-character"), were nested under **"Installing as a Claude
+  Code plugin"**, which they have nothing to do with. That single section
+  ran 1,623 lines. Meanwhile **"Quick start" sat at line 2,417** — 93% of
+  the way down — with no navigation to reach it. Several of the misfiled
+  sections were added by this very effort, so this is as much a
+  correction as an improvement. Fixed by splitting at the natural
+  boundary (install content ends where the findings begin) under a
+  heading that says what they are, adding a table of contents, and moving
+  Quick start to immediately after Requirements — so the first thing a
+  newcomer meets after "can I run this" is "how do I run this", rather
+  than 1,500 lines of engineering history. Installing is now 91 lines.
+  Verified mechanically rather than by eye, since this was a scripted
+  content move: **zero** original lines lost, exactly 17 added (the TOC
+  and the new section header), every TOC anchor resolves, and no
+  duplicate anchors at either heading level.
+
 - **A third concurrent Claude Code session was silently never captured.**
   Found by running three real sessions at once against one daemon, which
   this project had never done. All three answered correctly; only two were
