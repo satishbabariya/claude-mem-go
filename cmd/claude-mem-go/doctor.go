@@ -11,6 +11,7 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/embed"
+	"claude-mem-go/plugincheck"
 	"claude-mem-go/store"
 	"claude-mem-go/worker"
 )
@@ -43,6 +44,41 @@ func cmdDoctor(args []string) int {
 		critical = false
 	} else {
 		fmt.Printf("✔ claude CLI found at %s\n", path)
+	}
+
+	// The single most consequential thing this check can tell an operator,
+	// and the one doctor had no way to ask before: every automatic capture
+	// path (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop)
+	// runs ONLY because a real plugin installation wires hooks/hooks.json
+	// in. Without it, everything below can pass — claude CLI present,
+	// database reachable, Ollama serving — while nothing is ever captured
+	// and the memory store stays permanently empty.
+	//
+	// Reported prominently but NOT as a critical failure, deliberately
+	// diverging from real claude-mem's own doctor (which marks the
+	// equivalent check required): there, an installed plugin is the only
+	// way the product runs at all, whereas this port's CLI subcommands
+	// (search/export/prune) and MCP server are genuinely first-class
+	// without it, and `--plugin-dir` runs the hooks for real without ever
+	// touching the installed-plugins manifest. Hard-failing would report a
+	// broken install for setups that are working exactly as intended.
+	if installed, installs := plugincheck.IsInstalled(plugincheck.DefaultManifestPath()); installed {
+		fmt.Printf("✔ plugin %q installed", plugincheck.PluginName)
+		for i, in := range installs {
+			if i == 0 {
+				fmt.Print(" (")
+			} else {
+				fmt.Print(", ")
+			}
+			fmt.Printf("scope=%s version=%s", in.Scope, in.Version)
+			if i == len(installs)-1 {
+				fmt.Print(")")
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Printf("… plugin %q is NOT installed — automatic capture is inactive: no hooks fire, so nothing is being recorded.\n", plugincheck.PluginName)
+		fmt.Printf("  Install it to enable capture, or ignore this if you're using --plugin-dir or only the CLI/MCP surface.\n")
 	}
 
 	if worker.IsRunning(*socketPath) {

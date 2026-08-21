@@ -338,13 +338,16 @@ var closeAllGracePeriod = 5 * time.Second
 // session regardless of whether a turn was still genuinely in flight —
 // the same use-after/during-close hazard on the subprocess's pipes.
 //
-// This does NOT fully solve every shutdown race by itself: a
-// handleConn/process goroutine already dispatched from Run's Accept
-// loop before shutdown began could still be racing getOrCreate for a
-// BRAND NEW session concurrently with this snapshot — a real, separate,
-// broader "drain in-flight requests before closing anything" concern
-// this fix doesn't attempt, scoped out deliberately rather than
-// overreaching beyond the specific mutex-safety gap found.
+// This does not close every shutdown race by itself, and deliberately
+// doesn't try to: a handleConn/process goroutine already dispatched from
+// Run's Accept loop before shutdown began could still be racing
+// getOrCreate for a BRAND NEW session concurrently with this snapshot,
+// which no amount of care inside this function can see. That broader
+// "drain in-flight requests before closing anything" concern is handled
+// separately and now genuinely IS handled — see Daemon.processWG and
+// waitForProcessDrain (worker.go), which Run registers to execute BEFORE
+// this function so every dispatched turn is already finished (or given up
+// on) by the time this snapshot is taken.
 func (c *sessionCache) closeAll() {
 	c.mu.Lock()
 	entries := make([]*sessionEntry, 0, len(c.byID))

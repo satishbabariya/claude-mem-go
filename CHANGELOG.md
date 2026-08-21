@@ -706,6 +706,37 @@ process (this project doesn't cut tagged releases on a schedule).
   watching the same test fail (the wait returned before the turn even
   finished) before restoring the fix. A live smoke test confirmed no
   regression to overall shutdown behavior.
+- **Added: `doctor` now checks whether this project is actually installed
+  as a Claude Code plugin — the one thing that makes automatic capture
+  work at all, and the one thing it never checked.** Every automatic
+  capture path runs only because a real plugin installation wires
+  `hooks/hooks.json` in; without it every other check passes while
+  nothing is ever captured, and `doctor` printed "All critical checks
+  passed" over a completely inert install. Real claude-mem's own doctor
+  has this check and marks it required. New `plugincheck` package reads
+  Claude Code's own `~/.claude/plugins/installed_plugins.json`, matching
+  on the plugin-name half of each `"<name>@<marketplace>"` key so an
+  install from any marketplace counts, and treating a missing or corrupt
+  manifest as "not installed" rather than an error. Reported prominently
+  but not as a critical failure — a documented divergence from real
+  claude-mem's `required: true`, since this port's CLI and MCP surfaces
+  are genuinely first-class without the plugin and `--plugin-dir` runs
+  the hooks without touching the manifest. Verified against real Claude
+  Code state in both directions: `doctor` reported the plugin missing
+  when it genuinely was, then reported `scope=local version=0.3.0` after
+  a real `claude plugin install` — which also confirmed the key Claude
+  Code actually writes matches the parsing shape — after which the
+  plugin and marketplace were uninstalled and the machine's plugin state
+  confirmed byte-identical to before. Unit tests cover marketplace
+  independence, multi-scope installs, absent/corrupt manifests, and a
+  drift guard reading the real `.claude-plugin/plugin.json` so the Go
+  constant can't silently go stale; each confirmed genuine by
+  break/restore.
+- **Fixed a stale comment the above surfaced:** `sessionCache.closeAll`'s
+  doc comment still described the "drain in-flight requests before
+  closing anything" gap as deliberately unaddressed, which stopped being
+  true when the previous entry's fix closed it. It now points at
+  `processWG`/`waitForProcessDrain` and explains the ordering.
 
 ## 0.2.0 — 2026-08-20
 

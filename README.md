@@ -1797,6 +1797,70 @@ daemon, a real dispatched event, `SIGTERM` sent mid-turn) confirmed no
 regression to the daemon's overall shutdown behavior — clean exit, no
 hang, no panic.
 
+### `doctor` never checked the one thing that makes automatic capture work at all
+
+`doctor` verified the `claude` CLI, the worker socket, the database, and
+Ollama — but never whether this project is actually **installed as a
+Claude Code plugin**. That's the single most consequential thing it could
+check: every automatic capture path (`SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `Stop`) runs *only* because a real plugin
+installation wires `hooks/hooks.json` in. Without it, every other check
+passes — CLI found, database reachable, Ollama serving — while nothing is
+ever captured and the store stays permanently empty. `doctor` would print
+"All critical checks passed" over a completely inert install. Real
+claude-mem's own doctor has exactly this check
+(`src/npx-cli/commands/doctor.ts`'s "Plugin installed") and marks it
+required.
+
+Added a `plugincheck` package that reads Claude Code's own
+`~/.claude/plugins/installed_plugins.json` and reports whether this
+plugin is present, at which scopes and versions. Matching is on the
+plugin-name half of each `"<name>@<marketplace>"` key rather than the
+whole key — the same plugin installed from a GitHub-hosted marketplace
+instead of this repo's local one is still installed, and a check that
+only recognized one marketplace name would report a false negative for a
+working setup. A missing or unparseable manifest reads as "not
+installed" rather than an error: a machine that has never installed any
+plugin simply has no such file, which is a real answer, not a failure to
+answer.
+
+Reported prominently but **not** as a critical failure — a deliberate
+divergence from real claude-mem's `required: true`, documented at the
+call site. There, an installed plugin is the only way the product runs at
+all; here, the CLI subcommands (`search`/`export`/`prune`) and the MCP
+server are genuinely first-class without it, and `--plugin-dir` runs the
+hooks for real without ever touching the installed-plugins manifest.
+Hard-failing would report a broken install for setups working exactly as
+intended, so the message names the real consequence ("automatic capture
+is inactive: no hooks fire, so nothing is being recorded") and the
+legitimate exceptions instead.
+
+Verified against real Claude Code state, both directions, not fixtures:
+with the plugin genuinely not installed, the real compiled `doctor`
+reported it missing; the plugin was then really installed
+(`claude plugin marketplace add` + `claude plugin install --scope local`),
+and the same binary reported `✔ plugin "claude-mem-go" installed
+(scope=local version=0.3.0)` — reading the real scope and version Claude
+Code itself had written. That round trip also confirmed the assumption
+the whole check rests on: the key Claude Code actually writes is exactly
+`claude-mem-go@claude-mem-go-local`, matching the parsing shape. The
+plugin and marketplace were then uninstalled and the machine's plugin
+state confirmed byte-identical to before (matching MD5s, zero residue).
+Unit tests cover marketplace-independent matching, multi-scope installs,
+absent/corrupt/missing manifests, and a `TestPluginNameMatchesManifest`
+drift guard that reads the *real* `.claude-plugin/plugin.json` and fails
+if the Go constant ever diverges from it — the exact silent-staleness
+shape this project already found once in the MCP server's hardcoded
+`serverInfo.version`. Each confirmed genuine by break/restore: breaking
+the name matching failed the marketplace-independence and multi-scope
+tests, and staling the constant failed the drift guard.
+
+Also fixed a stale comment this surfaced: `sessionCache.closeAll`'s doc
+comment still described the "drain in-flight requests before closing
+anything" gap as deliberately unaddressed, which stopped being true when
+the previous fix closed it. It now points at `processWG`/
+`waitForProcessDrain` and explains the ordering instead.
+
 ## Quick start
 
 ```sh
