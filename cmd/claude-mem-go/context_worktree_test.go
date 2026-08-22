@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // fakeBackend records which projects were queried and serves canned rows.

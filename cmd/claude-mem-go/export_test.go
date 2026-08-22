@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {

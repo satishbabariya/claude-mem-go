@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // cmdStats reports what the store actually CONTAINS.

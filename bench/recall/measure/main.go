@@ -7,9 +7,9 @@ import (
 	"sort"
 	"time"
 
-	"claude-mem-go/embed"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pgvector/pgvector-go"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
 )
 
 // Queries phrased differently from how the corpus is worded, so this

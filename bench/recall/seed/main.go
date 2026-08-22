@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/embed"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // Real, varied engineering prose — the kind of text this store actually

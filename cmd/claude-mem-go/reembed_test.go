@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"claude-mem-go/embed"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // fakeOllama stands in for a real Ollama server. Every reembed test below

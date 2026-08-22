@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 func cmdWorker(args []string) int {

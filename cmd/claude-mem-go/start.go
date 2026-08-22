@@ -1,16 +1,16 @@
 package main
 
 import (
-	"claude-mem-go/logging"
 	"flag"
 	"fmt"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"os"
 	"strconv"
 	"syscall"
 	"time"
 
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // cmdStart is the idempotent SessionStart entry point: mirrors

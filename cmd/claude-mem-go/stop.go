@@ -9,13 +9,13 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/embed"
-	"claude-mem-go/excludeproject"
-	"claude-mem-go/hook"
-	"claude-mem-go/observer"
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/observer"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // stopWaitPollInterval, stopStableStreakRequired, and stopWaitMaxAttempts

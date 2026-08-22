@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/embed"
-	"claude-mem-go/observer"
-	"claude-mem-go/store"
-	"claude-mem-go/transcript"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/observer"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
 func cmdIngest(args []string) int {

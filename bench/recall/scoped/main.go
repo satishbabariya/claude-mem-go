@@ -24,8 +24,8 @@ import (
 	"sort"
 	"time"
 
-	"claude-mem-go/embed"
-	"claude-mem-go/postgres"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/postgres"
 
 	"github.com/pgvector/pgvector-go"
 )

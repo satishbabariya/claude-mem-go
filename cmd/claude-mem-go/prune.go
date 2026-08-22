@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // cmdPrune deletes observations older than a cutoff — this store had no

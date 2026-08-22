@@ -25,12 +25,12 @@
 package main
 
 import (
-	"claude-mem-go/logging"
 	"fmt"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"log"
 	"os"
 
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 func main() {

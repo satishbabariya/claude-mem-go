@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // exportPageSize bounds how many rows ExportAll fetches per page — keeps

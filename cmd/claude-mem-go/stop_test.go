@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // setFastPollIntervalForTest shrinks stopWaitPollInterval for the

@@ -1,4 +1,4 @@
-module claude-mem-go
+module github.com/satishbabariya/claude-mem-go
 
 go 1.25.0
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // runStopWithPayload runs cmdStop with payload on stdin against an

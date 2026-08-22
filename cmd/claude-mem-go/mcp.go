@@ -4,8 +4,8 @@ import (
 	"flag"
 	"os"
 
-	"claude-mem-go/mcpserver"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/mcpserver"
+	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // cmdMCP runs the MCP stdio server. Diagnostics go to a log file, never
