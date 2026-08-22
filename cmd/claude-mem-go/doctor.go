@@ -380,5 +380,6 @@ func reportEfSearchRecall(details map[string]string, embedded int) {
 		return
 	}
 	fmt.Printf("… %d embedded rows with hnsw.ef_search at pgvector's default (40) — measured at ~80%% recall@10\n", embedded)
-	fmt.Println("  ↳ -hnsw-ef-search 200 measured ~94%, 400 ~98%, all under 4ms p50 (see bench/recall)")
+	fmt.Println("  ↳ project-scoped search — what every hook uses — measured worse still, ~71%")
+	fmt.Println("  ↳ -hnsw-ef-search 200 measured ~94% unscoped and exact-and-complete scoped, under 4ms p50 (see bench/recall)")
 }

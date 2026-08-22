@@ -124,9 +124,67 @@ sequential scan. Forcing both plans is what makes the comparison valid at
 either size; without that, a "natural" query below the crossover
 silently compares exact against exact and reports a meaningless 100%.
 
-**What this does not measure**: behaviour past 20,000 rows, and recall
-for filtered queries (project-scoped searches combine the vector index
-with a predicate, which changes the traversal). Anyone running materially
-more data should re-run this rather than trust this number — the harness
-now fails loudly instead of flattering itself, which is the point of
-keeping it in the tree.
+## Scoped recall — the case the hooks actually use
+
+`bench/recall/scoped` measures the project-filtered path, through the
+real `postgres.Store.SemanticSearch` rather than hand-written SQL. It is
+a separate question from the numbers above, not a variation on them: a
+project filter is a POST-filter on the HNSW scan, which this project has
+already caught returning **zero** rows for a project holding 60,000
+observations, and `SemanticSearch` fixes that with
+`hnsw.iterative_scan` — an entirely different traversal.
+
+On 20,000 rows spread over 20 projects (1,000 each), at pgvector's
+defaults:
+
+| | |
+|---|---|
+| scoped recall@10 | **71.2%** |
+| short results | 0/200 |
+| empty results | 0/200 |
+| p50 / p95 | 3.5ms / 8.5ms |
+
+The post-filter bug is genuinely fixed — nothing came back empty or
+short. But **scoped recall at the default is worse than unscoped**
+(71.2% vs 80%), and this is the path every hook takes.
+
+Raising `ef_search` fixes it, though not by the mechanism it appears to:
+
+| `ef_search` | recall@10 | plan actually used |
+|---|---|---|
+| default (40) | 71.2% | HNSW (approximate) |
+| 100 | 100.0% | exact (planner skipped HNSW) |
+| 200 | 100.0% | exact (planner skipped HNSW) |
+| 400 | 100.0% | exact (planner skipped HNSW) |
+
+At 100 and above the planner stops using the HNSW index altogether and
+takes a bitmap scan over `idx_observations_project`, reading all 1,000
+rows of the project and sorting them exactly — pgvector's cost estimate
+for an HNSW scan grows with `ef_search`, so past a point the exact path
+simply costs less. **Recall is 100% because the query became exact, not
+because the approximation improved.** That is good behaviour for a
+moderate project size, but it is a different fact from what a recall
+column alone appears to say, which is why the harness prints the plan
+next to every figure.
+
+### Two methodological traps this benchmark hit, both worth knowing
+
+**Measuring on a freshly bulk-updated table.** The first scoped run
+reported 100.0%; a rerun minutes later reported 71.2% with nothing
+changed. The corpus had just had 20,000 rows `UPDATE`d to assign
+projects, and autovacuum/autoanalyze ran *between* the two — the first
+number was measured against 20,000 dead tuples and stale statistics. Any
+measurement taken right after a bulk write is measuring the write.
+`VACUUM ANALYZE` first, then confirm the figure reproduces.
+
+**A corpus the same size as the cap.** `hnsw.max_scan_tuples` defaults to
+exactly 20,000, so on a 20,000-row corpus `iterative_scan` can walk the
+entire table and any perfect result is unfalsifiable. Rather than embed
+200,000 rows to escape it, the sweep lowers the cap on a fixed corpus,
+which is equivalent: recall held at 71.2% down to a cap of 1,000 (~a
+400,000-row corpus), so the ceiling is `ef_search` interacting with the
+filter, not the scan cap.
+
+**What this does not measure**: behaviour past 20,000 real rows, and
+projects large enough that the planner's exact fallback stops being
+cheap — at 1,000 rows per project it is; at 100,000 it would not be.
