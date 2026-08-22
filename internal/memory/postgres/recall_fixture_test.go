@@ -121,10 +121,18 @@ func TestSemanticSearchDefaultEfSearchIsInEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
 	vecs := loadRecallFixture(t)
 	proj := uniqueProject(t)
-	t.Cleanup(func() { st.Prune(ctx, proj, 1<<62, false) })
+	// Prune and close in ONE cleanup: a `defer st.Close()` runs before
+	// t.Cleanup, so a cleanup that pruned through st hit a closed store,
+	// failed silently, and left 300 duplicate vectors behind per run —
+	// which is exactly what made the ef_search bound flaky below.
+	t.Cleanup(func() {
+		if _, err := st.Prune(ctx, proj, 1<<62, false); err != nil {
+			t.Errorf("cleanup prune: %v", err)
+		}
+		st.Close()
+	})
 	for i, v := range vecs {
 		res, err := st.Insert(ctx, "recall", proj, "Bash", fmt.Sprintf("%s-%d", proj, i),
 			memory.Observation{Type: "discovery", Title: fmt.Sprintf("fixture %d", i)}, 0)
