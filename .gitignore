@@ -4,3 +4,7 @@
 *.sock
 *.log
 .claude/settings.json
+
+# local memory-plugin state, never source
+.memsearch/
+.remember/
