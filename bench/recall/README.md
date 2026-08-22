@@ -197,3 +197,17 @@ filter, not the scan cap.
 **What this does not measure**: behaviour past 20,000 real rows, and
 projects large enough that the planner's exact fallback stops being
 cheap — at 1,000 rows per project it is; at 100,000 it would not be.
+
+## What CI guards
+
+These harnesses need Ollama and a 20,000-row corpus, so CI does not run
+them. What CI does run, on every push against a real pgvector container,
+is `internal/memory/postgres/recall_fixture_test.go`: 300 of this corpus's
+real embeddings are committed as `testdata/recall_fixture.f32.gz`, and the
+test proves on them that `SemanticSearch` at the default `ef_search`
+returns a full top-10 at >= 90% of the exact top-10, and that a store
+opened with `ef_search = 3` returns at most 3 rows — i.e. the per-query
+`SET LOCAL` really reaches pgvector. A 300-row graph cannot show
+approximation loss (every `ef_search` recalls 100% on it), so the absolute
+figures above still need this harness; the CI test catches the
+regressions that would make those figures meaningless.
