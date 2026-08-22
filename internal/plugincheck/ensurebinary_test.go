@@ -340,8 +340,11 @@ func TestRunHookDetachesStopAndStillDeliversThePayload(t *testing.T) {
 	marker := filepath.Join(root, "received.txt")
 	// A stand-in for the real binary: slow enough that an un-detached
 	// wrapper would still be blocking when we check, and it records the
-	// stdin it was given.
-	script := "#!/bin/sh\nsleep 2\ncat > " + marker + "\n"
+	// stdin it was given. `version` must return at once — that is the
+	// wrapper's runnability probe, and the real binary answers it in
+	// milliseconds; a fixture that slept on it would be measuring the
+	// probe, not the detach.
+	script := "#!/bin/sh\n[ \"$1\" = version ] && exit 0\nsleep 2\ncat > " + marker + "\n"
 	if err := os.WriteFile(filepath.Join(root, "claude-mem-go"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}
@@ -402,5 +405,38 @@ func TestRunHookDoesNotDetachOtherHooks(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "ran-hook") {
 		t.Fatalf("a non-stop hook did not run in the foreground; its output was lost: %q", out)
+	}
+}
+
+// TestRunHookTreatsAnUnrunnableBinaryAsMissing pins the probe in
+// run-hook.sh. A binary that exists and is executable but cannot run
+// (wrong architecture, truncated build) used to take the healthy exec
+// path, so every hook failed with no diagnostic at all — none of the
+// degraded-mode output below ever fired. It must degrade exactly like a
+// missing binary does.
+func TestRunHookTreatsAnUnrunnableBinaryAsMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash script; not exercised on windows")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "claude-mem-go")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write broken binary: %v", err)
+	}
+
+	out, code := runHookScript(t, root, "context")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a broken install must degrade, not block: %s", code, out)
+	}
+	var payload struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("an unrunnable binary did not take the degraded path; output: %q (%v)", out, err)
+	}
+	if !strings.Contains(payload.HookSpecificOutput.AdditionalContext, "not runnable") {
+		t.Fatalf("the message does not say the binary is present but broken: %q", payload.HookSpecificOutput.AdditionalContext)
 	}
 }

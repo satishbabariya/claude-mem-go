@@ -24,15 +24,30 @@
 # claude-mem records for moving its own install step off the SessionStart
 # path and onto Setup.
 #
-# Cost on the healthy path is one bash startup plus an exec, on hooks
-# that already open a database or spawn a model call.
+# WHAT IS CHECKED
+#
+# Two things: that the binary exists and is executable, and that it
+# actually runs (`"$bin" version` exits 0). The second matters because a
+# present-but-broken binary — wrong architecture, a truncated or corrupt
+# build, a leftover from a failed `go build` — stats and `-x`-checks
+# perfectly and only fails when executed. Without the probe such a binary
+# takes the healthy exec path and NONE of the degraded-mode diagnostics
+# below ever fire, which is the same silent death this wrapper exists to
+# prevent. Not checked: that the binary is the right version, or that the
+# daemon/database it talks to is healthy — `doctor` covers those.
+#
+# Cost on the healthy path is one bash startup, one short exec of the
+# binary for the probe (`version` does no I/O beyond printing), then the
+# real exec — on hooks that already open a database or spawn a model
+# call. The probe reads stdin from /dev/null so it cannot consume the
+# hook payload the real invocation needs.
 set -u
 
 root="${CLAUDE_PLUGIN_ROOT:-}"
 bin="$root/claude-mem-go"
 cmd="${1:-}"
 
-if [ -n "$root" ] && [ -x "$bin" ]; then
+if [ -n "$root" ] && [ -x "$bin" ] && "$bin" version </dev/null >/dev/null 2>&1; then
 	# The Stop hook is detached rather than exec'd, because otherwise its
 	# work never finishes in a headless session.
 	#
@@ -73,7 +88,7 @@ if [ -n "$root" ] && [ -x "$bin" ]; then
 	exec "$bin" "$@"
 fi
 
-# Degraded path: the binary is missing or not executable.
+# Degraded path: the binary is missing, not executable, or does not run.
 #
 # SessionStart's `context` hook is the one place a hook can put text in
 # front of the user, via hookSpecificOutput.additionalContext. Use it, so
@@ -81,7 +96,7 @@ fi
 # rather than something only a log knows.
 if [ "$cmd" = "context" ]; then
 	cat <<-JSON
-		{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"claude-mem-go is installed but its binary is missing, so no memory is being captured or recalled this session. Tell the user to run: (cd '$root' && go build -o claude-mem-go ./cmd/claude-mem-go) and restart Claude Code."}}
+		{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"claude-mem-go is installed but its binary is missing or not runnable, so no memory is being captured or recalled this session. Tell the user to run: (cd '$root' && go build -o claude-mem-go ./cmd/claude-mem-go) and restart Claude Code."}}
 	JSON
 	exit 0
 fi
@@ -92,7 +107,7 @@ fi
 logdir="${HOME:-/tmp}/.claude-mem-go"
 mkdir -p "$logdir" 2>/dev/null
 {
-	printf '%s hook %q could not run: %s is missing or not executable.\n' \
+	printf '%s hook %q could not run: %s is missing, not executable, or does not run.\n' \
 		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$cmd" "$bin"
 	printf '  fix: (cd %q && go build -o claude-mem-go ./cmd/claude-mem-go)\n' "$root"
 } >>"$logdir/missing-binary.log" 2>/dev/null

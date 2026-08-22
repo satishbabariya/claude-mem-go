@@ -55,9 +55,22 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 echo "claude-mem-go: building $bin (first run after install; ~30s cold, then cached)…" >&2
-if (cd "$root" && go build -o claude-mem-go ./cmd/claude-mem-go) >&2; then
+# Build to a temporary name and rename into place rather than building
+# straight onto $bin. Two reasons:
+#
+#  - Go >= 1.26 refuses `go build -o X` when X already exists and is not
+#    a Go object file ("build output already exists and is not an object
+#    file"), so a corrupt or foreign file at $bin could never be repaired
+#    by building over it — exactly the "present but not runnable" case
+#    this script exists to fix.
+#  - rename(2) is atomic, so a hook that fires while a concurrent Setup
+#    is mid-build sees either the old binary or the new one, never a
+#    half-written file.
+tmp="$bin.build.$$"
+if (cd "$root" && go build -o "$tmp" ./cmd/claude-mem-go) >&2 && mv -f "$tmp" "$bin"; then
 	echo "claude-mem-go: built successfully." >&2
 else
+	rm -f "$tmp"
 	echo "claude-mem-go: build FAILED — hooks will not fire until this is resolved." >&2
 fi
 exit 0
