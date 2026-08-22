@@ -85,12 +85,21 @@ overlap.
 |---|---|---|
 | 20 | 71.0% | 1.5ms |
 | 40 (pgvector default) | **80.0%** | 2.2ms |
-| 100 | 82.0% | 2.0ms |
+| 100 | 92.0% | 2.1ms |
 | 200 | 94.0% | 3.9ms |
 | 400 | 98.0% | 3.9ms |
 
 The curve is now monotonic, which is the first thing to check: recall
 cannot fall as `ef_search` rises.
+
+One row of this table has been corrected, and the reason is worth
+keeping. `ef_search` 100 originally measured 82.0%; after the corpus was
+bulk-`UPDATE`d to redistribute projects for the scoped benchmark and then
+`VACUUM ANALYZE`d, it reproduces at 92.0% across three consecutive runs.
+Every other row is unchanged. Rewriting 20,000 rows replaces every tuple
+and changes the HNSW graph, so this is the same "never measure a freshly
+mutated table" trap documented below — visible here in the benchmark's
+own numbers rather than in someone else's.
 
 **The headline is that pgvector's default is not good enough here.** At
 20,000 rows it returns 80% of what an exact scan would — one relevant

@@ -115,14 +115,26 @@ func assertCorpusUsable(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("  corpus: %d embedded rows, %d distinct vectors\n", rows, distinct)
+	return checkCorpus(rows, distinct)
+}
+
+// minDistinctFraction is how much of the corpus must be distinct vectors
+// before a recall figure means anything.
+const minDistinctFraction = 0.99
+
+// checkCorpus is assertCorpusUsable's decision, split out from the query
+// so it can be tested without a database.
+//
+// Duplicates are not merely noise: they make the exact top-k ambiguous,
+// because ten copies of one vector all sit at an identical distance and
+// the two plans enumerate them in different orders. That is what made
+// this harness's first published figure meaningless.
+func checkCorpus(rows, distinct int64) error {
 	if rows == 0 {
 		return fmt.Errorf("corpus is empty — run the seeder first")
 	}
-	fmt.Printf("  corpus: %d embedded rows, %d distinct vectors\n", rows, distinct)
-	// Duplicates are not merely noise here; they make the exact top-k
-	// ambiguous. Anything below near-total uniqueness means the generator
-	// saturated its combinatorial space.
-	if float64(distinct) < 0.99*float64(rows) {
+	if float64(distinct) < minDistinctFraction*float64(rows) {
 		return fmt.Errorf(
 			"corpus is degenerate: only %d distinct vectors across %d rows (%.1f%%).\n"+
 				"The exact top-k is then a tie among identical vectors and recall is not measurable.\n"+
