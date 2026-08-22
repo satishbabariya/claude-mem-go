@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
 func TestBuildSummaryPromptIncludesEveryObservationInOrder(t *testing.T) {
-	observations := []store.SearchResult{
-		{Observation: store.Observation{Type: "discovery", Title: "Found the bug", Subtitle: "in the parser"}},
-		{Observation: store.Observation{Type: "change", Title: "Fixed the parser"}},
+	observations := []memory.SearchResult{
+		{Observation: memory.Observation{Type: "discovery", Title: "Found the bug", Subtitle: "in the parser"}},
+		{Observation: memory.Observation{Type: "change", Title: "Fixed the parser"}},
 	}
 	prompt := BuildSummaryPrompt(SelectSummaryWindow(observations, 0))
 
@@ -29,8 +29,8 @@ func TestBuildSummaryPromptIncludesEveryObservationInOrder(t *testing.T) {
 }
 
 func TestBuildSummaryPromptHandlesNoSubtitle(t *testing.T) {
-	observations := []store.SearchResult{
-		{Observation: store.Observation{Type: "discovery", Title: "Just a title"}},
+	observations := []memory.SearchResult{
+		{Observation: memory.Observation{Type: "discovery", Title: "Just a title"}},
 	}
 	prompt := BuildSummaryPrompt(SelectSummaryWindow(observations, 0))
 	if strings.Contains(prompt, "Just a title — ") {
@@ -38,10 +38,10 @@ func TestBuildSummaryPromptHandlesNoSubtitle(t *testing.T) {
 	}
 }
 
-func obsN(n int) []store.SearchResult {
-	out := make([]store.SearchResult, n)
+func obsN(n int) []memory.SearchResult {
+	out := make([]memory.SearchResult, n)
 	for i := range out {
-		out[i] = store.SearchResult{Observation: store.Observation{
+		out[i] = memory.SearchResult{Observation: memory.Observation{
 			Type: "change", Title: fmtTitle(i + 1)}}
 	}
 	return out

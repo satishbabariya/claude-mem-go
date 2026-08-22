@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
-func res(title, subtitle string, next ...string) store.SearchResult {
-	return store.SearchResult{Observation: store.Observation{
+func res(title, subtitle string, next ...string) memory.SearchResult {
+	return memory.SearchResult{Observation: memory.Observation{
 		Title: title, Subtitle: subtitle, NextSteps: next,
 	}}
 }
@@ -18,7 +18,7 @@ func res(title, subtitle string, next ...string) store.SearchResult {
 // phantom "Unfinished" heading at the top of every session would be worse
 // than the feature is worth.
 func TestSessionStartWithoutNextSteps(t *testing.T) {
-	got := SessionStart([]store.SearchResult{
+	got := SessionStart([]memory.SearchResult{
 		res("switched to Postgres", "SQLite could not keep up"),
 	})
 	want := "Relevant memory from previous sessions in this project:\n\n" +
@@ -33,7 +33,7 @@ func TestSessionStartWithoutNextSteps(t *testing.T) {
 // identical only ever exercised observations WITHOUT next steps, so the
 // copy that never gained the feature still matched.
 func TestSessionStartLeadsWithNextSteps(t *testing.T) {
-	got := SessionStart([]store.SearchResult{
+	got := SessionStart([]memory.SearchResult{
 		res("session summary", "wrapped up the migration", "finish the backfill", "delete the old flag"),
 		res("switched to Postgres", ""),
 	})
@@ -58,7 +58,7 @@ func TestSessionStartLeadsWithNextSteps(t *testing.T) {
 // were most likely done, and presenting stale intentions as current is
 // worse than omitting them.
 func TestLatestNextStepsUsesOnlyTheNewest(t *testing.T) {
-	got := LatestNextSteps([]store.SearchResult{
+	got := LatestNextSteps([]memory.SearchResult{
 		res("newest", ""),
 		res("has steps", "", "the current one"),
 		res("older", "", "long since done"),
@@ -70,8 +70,8 @@ func TestLatestNextStepsUsesOnlyTheNewest(t *testing.T) {
 
 // TestPromptContextShape pins the other injected block.
 func TestPromptContextShape(t *testing.T) {
-	got := PromptContext([]store.VectorMatch{
-		{Observation: store.Observation{Title: "token TTL", Subtitle: "900 seconds"}},
+	got := PromptContext([]memory.VectorMatch{
+		{Observation: memory.Observation{Title: "token TTL", Subtitle: "900 seconds"}},
 	})
 	want := "Memory relevant to what you just asked:\n\n- token TTL — 900 seconds"
 	if got != want {

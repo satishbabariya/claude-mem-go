@@ -3,10 +3,11 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 )
 
 // TestProcessSkipsExcludedProjectBeforeAnyRealWork is the regression

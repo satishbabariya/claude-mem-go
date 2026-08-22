@@ -7,17 +7,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
 func cmdIngest(args []string) int {
 	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	transcriptPath := fs.String("transcript", "", "transcript .jsonl path; "+
 		"defaults to the most recently modified one under ~/.claude/projects/*/*.jsonl")
 	limit := fs.Int("limit", 3, "how many real tool_use/tool_result pairs to ingest")
@@ -73,7 +73,7 @@ func cmdIngest(args []string) int {
 		fmt.Printf("turn %d: session=%s cost=$%.4f title=%q\n",
 			i+1, turn.Result.SessionID, turn.Result.CostUSD, turn.Observation.Title)
 
-		hash := store.ContentHash(turn.Result.SessionID, tc.ToolName, tc.ToolInput, tc.ToolOutput)
+		hash := memory.ContentHash(turn.Result.SessionID, tc.ToolName, tc.ToolInput, tc.ToolOutput)
 		res, err := st.Insert(turn.Result.SessionID, project, tc.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: sqlite insert failed: %v\n", err)

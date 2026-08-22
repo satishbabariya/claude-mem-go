@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
 )
 
 // runFileContext drives cmdFileContext end to end and returns (stdout,
@@ -46,14 +47,14 @@ func runFileContext(t *testing.T, dbPath, payload string) (string, string) {
 func seedFileObservation(t *testing.T, project, filePath string) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "fc.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	res, err := st.Insert("s1", project, "Read", store.ContentHash("s1", "Read", filePath, "1"),
-		store.Observation{Type: "discovery", Title: "the parser used a regex here", FilesRead: []string{filePath}}, 0)
+	res, err := st.Insert("s1", project, "Read", memory.ContentHash("s1", "Read", filePath, "1"),
+		memory.Observation{Type: "discovery", Title: "the parser used a regex here", FilesRead: []string{filePath}}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestFileContextInjectsWhenTheFileCannotBeStatted(t *testing.T) {
 }
 
 // TestFileContextInjectsAcrossSessionsNotJustTheLatest is the end-to-end
-// version of store.TestSelectFileContextRecoversOlderSessions, through
+// version of memory.TestSelectFileContextRecoversOlderSessions, through
 // the real hook: the wiring matters as much as the selection function,
 // because the hook previously queried exactly `limit` rows, which left
 // selection nothing to select from.
@@ -162,13 +163,13 @@ func TestFileContextInjectsAcrossSessionsNotJustTheLatest(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "fc.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	ins := func(sess, title string) {
-		if _, err := st.Insert(sess, project, "Read", store.ContentHash(sess, "Read", title, target),
-			store.Observation{Type: "change", Title: title, FilesRead: []string{target}}, 0); err != nil {
+		if _, err := st.Insert(sess, project, "Read", memory.ContentHash(sess, "Read", title, target),
+			memory.Observation{Type: "change", Title: title, FilesRead: []string{target}}, 0); err != nil {
 			t.Fatalf("Insert %q: %v", title, err)
 		}
 	}

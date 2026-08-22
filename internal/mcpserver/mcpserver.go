@@ -23,15 +23,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"io"
 	"runtime/debug"
 	"strings"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 const protocolVersion = "2025-11-25"
@@ -333,7 +334,7 @@ type Server struct {
 	HNSWEfSearch int
 	Log          *logging.Logger
 
-	st store.Backend
+	st memory.Backend
 }
 
 // Run reads newline-delimited JSON-RPC requests from r and writes responses
@@ -390,7 +391,7 @@ func (s *Server) handle(req rpcRequest) (resp *rpcResponse) {
 	// that unwinds past main), ending the whole MCP session and, if this
 	// was mid-write, potentially the whole `claude` session using it.
 	// Found not hypothetically: a real, reproducible panic existed in
-	// store.Store.SemanticSearch (a negative limit slicing out of
+	// sqlite.Store.SemanticSearch (a negative limit slicing out of
 	// bounds) before that call site was fixed — this recover is the
 	// backstop for that entire class of bug, not a substitute for fixing
 	// root causes when they're found.
@@ -507,8 +508,8 @@ func (s *Server) handleToolCall(req rpcRequest) *rpcResponse {
 	case "important_workflow":
 		result = runImportantWorkflow()
 	case "search_observations":
-		dateStartMs, dsErr := store.ParseDateArg(params.Arguments.DateStart)
-		dateEndMs, deErr := store.ParseDateArg(params.Arguments.DateEnd)
+		dateStartMs, dsErr := memory.ParseDateArg(params.Arguments.DateStart)
+		dateEndMs, deErr := memory.ParseDateArg(params.Arguments.DateEnd)
 		if dsErr != nil {
 			result = toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search_observations: invalid dateStart: " + dsErr.Error()}}}
 		} else if deErr != nil {
@@ -785,7 +786,7 @@ func (s *Server) runTimeline(project string, anchor int64, query string, depthBe
 // generous-but-real-bound approach transcript.FieldCap takes for hook
 // payload fields. The facts/concepts count and per-item caps match the
 // "no legitimate caller needs more than a page" reasoning already
-// governing store.MaxIDsPerLookup and store.MaxTimelineDepth: facts and
+// governing memory.MaxIDsPerLookup and memory.MaxTimelineDepth: facts and
 // concepts are meant to be a handful of discrete, short items (a fact is
 // a sentence, a concept is a tag), not an unbounded list.
 const (
@@ -852,8 +853,8 @@ func (s *Server) runAddObservation(project, title, subtitle, narrative string, f
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: msg}}}
 	}
 
-	o := store.Observation{Type: "manual", Title: title, Subtitle: subtitle, Narrative: narrative, Facts: facts, Concepts: concepts}
-	hash := store.ContentHash(s.SessionID, "manual", title, narrative)
+	o := memory.Observation{Type: "manual", Title: title, Subtitle: subtitle, Narrative: narrative, Facts: facts, Concepts: concepts}
+	hash := memory.ContentHash(s.SessionID, "manual", title, narrative)
 	res, err := s.st.Insert(s.SessionID, project, "manual", hash, o, 0)
 	if err != nil {
 		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "add_observation failed: " + err.Error()}}}
@@ -935,7 +936,7 @@ func (s *Server) runObservationContext(project, query string, limit int) toolCal
 	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatObservationContext(matches)}}}
 }
 
-func formatSearchResults(results []store.SearchResult) string {
+func formatSearchResults(results []memory.SearchResult) string {
 	if len(results) == 0 {
 		return "No matching observations."
 	}
@@ -955,7 +956,7 @@ func formatSearchResults(results []store.SearchResult) string {
 // caller can see which one the before/after entries are actually relative
 // to, especially when it was resolved automatically from a query rather
 // than given directly.
-func formatTimeline(results []store.SearchResult, anchor int64) string {
+func formatTimeline(results []memory.SearchResult, anchor int64) string {
 	if len(results) == 0 {
 		return "No observations found."
 	}
@@ -976,7 +977,7 @@ func formatTimeline(results []store.SearchResult, anchor int64) string {
 // formatFullObservations is get_observations' formatter — the one place
 // this server prints narrative/facts/concepts/files, deliberately omitted
 // from formatSearchResults/formatVectorMatches to keep list output short.
-func formatFullObservations(results []store.SearchResult) string {
+func formatFullObservations(results []memory.SearchResult) string {
 	if len(results) == 0 {
 		return "No observations found for those ids (wrong id, already pruned, or belongs to a different project)."
 	}
@@ -1015,7 +1016,7 @@ func formatFullObservations(results []store.SearchResult) string {
 // whole point of this tool is returning the identical ready-to-inject
 // shape that hook already produces automatically, not a fresh format
 // only coincidentally similar to it.
-func formatObservationContext(matches []store.VectorMatch) string {
+func formatObservationContext(matches []memory.VectorMatch) string {
 	return contextfmt.PromptContext(matches)
 }
 
@@ -1026,11 +1027,11 @@ func formatObservationContext(matches []store.VectorMatch) string {
 // mcpserver for cmdMCP). The whole point of session_start_context is
 // returning the identical text the real SessionStart hook injects, not a
 // fresh format only coincidentally similar to it.
-func formatSessionStartContext(recent []store.SearchResult) string {
+func formatSessionStartContext(recent []memory.SearchResult) string {
 	return contextfmt.SessionStart(recent)
 }
 
-func formatVectorMatches(matches []store.VectorMatch) string {
+func formatVectorMatches(matches []memory.VectorMatch) string {
 	if len(matches) == 0 {
 		return "No embedded observations to search."
 	}

@@ -10,11 +10,11 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -31,7 +31,7 @@ import (
 // exactly like cmdMCP's stdout constraint.
 func cmdContext(args []string) int {
 	fs := flag.NewFlagSet("context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 5, "how many recent observations to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
@@ -55,7 +55,7 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	pc := store.ProjectContextFor(in.Cwd)
+	pc := memory.ProjectContextFor(in.Cwd)
 	project := pc.Primary
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
@@ -65,7 +65,7 @@ func cmdContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -117,7 +117,7 @@ func cmdContext(args []string) int {
 // formatContext delegates to contextfmt so the SessionStart hook and the
 // session_start_context MCP tool cannot drift apart — they used to be
 // separate copies, and they did drift.
-func formatContext(recent []store.SearchResult) string {
+func formatContext(recent []memory.SearchResult) string {
 	return contextfmt.SessionStart(recent)
 }
 
@@ -134,7 +134,7 @@ func formatContext(recent []store.SearchResult) string {
 // worktree with plenty of its own history is not forced to give up half
 // its slots to the parent — the newest observations win regardless of
 // which project they came from.
-func recentAcrossProjects(st store.Backend, projects []string, limit int) ([]store.SearchResult, error) {
+func recentAcrossProjects(st memory.Backend, projects []string, limit int) ([]memory.SearchResult, error) {
 	if len(projects) <= 1 {
 		p := ""
 		if len(projects) == 1 {
@@ -142,7 +142,7 @@ func recentAcrossProjects(st store.Backend, projects []string, limit int) ([]sto
 		}
 		return st.RecentByProject(p, limit)
 	}
-	var all []store.SearchResult
+	var all []memory.SearchResult
 	seen := make(map[int64]bool)
 	for _, p := range projects {
 		rs, err := st.RecentByProject(p, limit)

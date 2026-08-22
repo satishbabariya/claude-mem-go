@@ -9,12 +9,12 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -156,8 +156,8 @@ const (
 // conversation, no tool calls at all) pays the full wait budget before
 // this gives up — an acceptable cost since Stop runs fire-and-forget,
 // not a cost the user waiting on their own session ever sees.
-func waitForSessionObservations(st store.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]store.SearchResult, error) {
-	var observations []store.SearchResult
+func waitForSessionObservations(st memory.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]memory.SearchResult, error) {
+	var observations []memory.SearchResult
 	prevCount := -1
 	streak := 0
 	inFlightZeroStreak := 0
@@ -245,7 +245,7 @@ const summaryFetchCap = 2000
 func cmdStop(args []string) int {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, queried for real in-flight state (best-effort — falls back to a row-count heuristic if unreachable)")
 	limit := fs.Int("limit", 50, "max observations from this session to include in the summary")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
@@ -318,7 +318,7 @@ func cmdStop(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		return 0
 	}
 	defer st.Close()
@@ -369,9 +369,9 @@ func cmdStop(args []string) int {
 	// Idempotency key is the session_id alone, not what's being summarized —
 	// exactly one summary per session regardless of how many times Stop
 	// fires or how the observation count changes between firings.
-	hash := store.ContentHash(in.SessionID, "SessionSummary", "session-summary", "")
+	hash := memory.ContentHash(in.SessionID, "SessionSummary", "session-summary", "")
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}

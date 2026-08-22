@@ -3,7 +3,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
@@ -46,7 +48,7 @@ type blockingHandle struct {
 
 func (b *blockingHandle) Observe(tc transcript.ToolCall) (observer.Turn, error) {
 	<-b.release
-	return observer.Turn{Observation: store.Observation{Title: "done"}}, nil
+	return observer.Turn{Observation: memory.Observation{Title: "done"}}, nil
 }
 func (b *blockingHandle) Close() error {
 	atomic.StoreInt32(&b.closed, 1)
@@ -71,7 +73,7 @@ func TestInFlightQueryReflectsARealInProgressEvent(t *testing.T) {
 	entry := &sessionEntry{handle: &blockingHandle{release: release}, lastUsed: time.Now()}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

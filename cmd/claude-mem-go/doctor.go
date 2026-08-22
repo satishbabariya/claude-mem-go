@@ -11,10 +11,10 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/plugincheck"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -27,7 +27,7 @@ import (
 // Ollama unreachable — keyword search still works, just not semantic).
 func cmdDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	// Parallel to -socket, and for the same reason: a daemon can be run
 	// on a non-default socket and stats path (the worker subcommand has
@@ -133,7 +133,7 @@ func cmdDoctor(args []string) int {
 		fmt.Printf("… worker daemon not running at %s (not necessarily a problem — `start` launches it lazily from SessionStart)\n", *socketPath)
 	}
 
-	redactedDBPath := store.RedactDSN(*dbPath)
+	redactedDBPath := memory.RedactDSN(*dbPath)
 
 	// Informational only, never critical: a missing stats file just means
 	// the worker hasn't processed anything yet (or predates this feature),
@@ -243,7 +243,7 @@ func cmdDoctor(args []string) int {
 			fmt.Printf("    worker:    %s\n", stats.Store)
 			fmt.Printf("    this cmd:  %s\n", redactedDBPath)
 			fmt.Printf("    Every captured observation goes to the worker's store. Restart the daemon to pick up\n")
-			fmt.Printf("    the current $%s (stop it and let SessionStart respawn it).\n", store.DBPathEnvVar)
+			fmt.Printf("    the current $%s (stop it and let SessionStart respawn it).\n", memory.DBPathEnvVar)
 			critical = false
 		}
 	}
@@ -255,21 +255,21 @@ func cmdDoctor(args []string) int {
 	// nothing anywhere naming a second database. Printing the source turns
 	// that into a one-line diagnosis. Only shown when the env var is
 	// actually set, so the common case stays quiet.
-	if envDB := strings.TrimSpace(os.Getenv(store.DBPathEnvVar)); envDB != "" {
+	if envDB := strings.TrimSpace(os.Getenv(memory.DBPathEnvVar)); envDB != "" {
 		switch {
 		case *dbPath == envDB:
-			fmt.Printf("  store selected by $%s (hooks and the MCP server use this too)\n", store.DBPathEnvVar)
+			fmt.Printf("  store selected by $%s (hooks and the MCP server use this too)\n", memory.DBPathEnvVar)
 		default:
 			// An explicit -db beat the env var. Worth saying out loud: it
 			// means THIS command is not looking at the store the hooks are
 			// writing to, which is exactly when someone concludes their
 			// memory vanished.
 			fmt.Printf("  note: -db overrides $%s (=%s), which is what hooks and the MCP server will still use\n",
-				store.DBPathEnvVar, store.RedactDSN(envDB))
+				memory.DBPathEnvVar, memory.RedactDSN(envDB))
 		}
 	}
 
-	var st store.Backend
+	var st memory.Backend
 	if opened, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false

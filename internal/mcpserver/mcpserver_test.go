@@ -5,13 +5,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 )
 
 // testEmbedModel skips (not fails) a test when Ollama isn't reachable —
@@ -33,12 +35,12 @@ func testEmbedModel(t *testing.T) string {
 func newTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	o := store.Observation{Type: "discovery", Title: "claude-mem-go MCP server implemented", Subtitle: "stdio JSON-RPC"}
-	if _, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "b"), o, 0); err != nil {
+	o := memory.Observation{Type: "discovery", Title: "claude-mem-go MCP server implemented", Subtitle: "stdio JSON-RPC"}
+	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "b"), o, 0); err != nil {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	st.Close() // Server.Run opens its own handle
@@ -218,15 +220,15 @@ func TestToolsCallSearchObservationsFindsSeededRow(t *testing.T) {
 // works (already covered by a dedicated store-level test).
 func TestToolsCallSearchObservationsFiltersByType(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	discovery, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"), store.Observation{Type: "discovery", Title: "sprocket rollout"}, 0)
+	discovery, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "sprocket rollout"}, 0)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	decision, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"), store.Observation{Type: "decision", Title: "sprocket rollout plan approved"}, 0)
+	decision, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "decision", Title: "sprocket rollout plan approved"}, 0)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -258,15 +260,15 @@ func TestToolsCallSearchObservationsFiltersByType(t *testing.T) {
 // own top result.
 func TestToolsCallSearchObservationsOffsetSkipsLeadingResults(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	first, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"), store.Observation{Type: "discovery", Title: "gizmo rollout phase one"}, 0)
+	first, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "gizmo rollout phase one"}, 0)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	second, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"), store.Observation{Type: "discovery", Title: "gizmo rollout phase two"}, 0)
+	second, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "discovery", Title: "gizmo rollout phase two"}, 0)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -306,13 +308,13 @@ func TestToolsCallSearchObservationsOffsetSkipsLeadingResults(t *testing.T) {
 // from whatever's calling the server, not necessarily a careful human.
 func TestToolsCallLimitIsCappedRegardlessOfCallerValue(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	for i := 0; i < 105; i++ {
-		o := store.Observation{Type: "discovery", Title: "bulk seeded observation about widgets"}
-		hash := store.ContentHash("s1", "Bash", string(rune('a'+i%26)), string(rune(i)))
+		o := memory.Observation{Type: "discovery", Title: "bulk seeded observation about widgets"}
+		hash := memory.ContentHash("s1", "Bash", string(rune('a'+i%26)), string(rune(i)))
 		if _, err := st.Insert("s1", "proj", "Bash", hash, o, 0); err != nil {
 			t.Fatalf("seed Insert %d: %v", i, err)
 		}
@@ -368,22 +370,22 @@ func TestUnknownMethodIsMethodNotFound(t *testing.T) {
 // TestSearchObservationsScopesToServerProject is the regression test for a
 // real cross-project leak: the underlying store is one shared database
 // across every project ever recorded on the machine (see
-// store.DefaultDBPath), so an MCP client working on project A must not see
+// memory.DefaultDBPath), so an MCP client working on project A must not see
 // project B's memory just because both happen to share a keyword. Server.
 // Project (set from the server process's cwd in cmd's cmdMCP) is what
 // enforces that boundary by default.
 func TestSearchObservationsScopesToServerProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	oA := store.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-a"}
-	if _, err := st.Insert("s1", "project-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"), oA, 0); err != nil {
+	oA := memory.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-a"}
+	if _, err := st.Insert("s1", "project-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), oA, 0); err != nil {
 		t.Fatalf("seed project-a: %v", err)
 	}
-	oB := store.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-b"}
-	if _, err := st.Insert("s1", "project-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"), oB, 0); err != nil {
+	oB := memory.Observation{Type: "discovery", Title: "widgets pipeline rewritten in project-b"}
+	if _, err := st.Insert("s1", "project-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), oB, 0); err != nil {
 		t.Fatalf("seed project-b: %v", err)
 	}
 	st.Close()
@@ -447,16 +449,16 @@ func toolCallIsError(t *testing.T, resp map[string]any) bool {
 // argument overrides that.
 func TestToolsCallRecentObservationsScopesToServerProjectOrOverride(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
 		t.Fatalf("seed proj-a: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
-		store.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
 		t.Fatalf("seed proj-b: %v", err)
 	}
 	st.Close()
@@ -498,20 +500,20 @@ func TestToolsCallRecentObservationsWithNoProjectIsAnError(t *testing.T) {
 // (BySessionID) — oldest first, and scoped to one session, not a project.
 func TestToolsCallSessionObservationsReturnsOnlyThatSessionInOrder(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("session-x", "proj", "Bash", store.ContentHash("session-x", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "first thing in session x"}, 0); err != nil {
+	if _, err := st.Insert("session-x", "proj", "Bash", memory.ContentHash("session-x", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "first thing in session x"}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.Insert("session-x", "proj", "Bash", store.ContentHash("session-x", "Bash", "b", "2"),
-		store.Observation{Type: "discovery", Title: "second thing in session x"}, 0); err != nil {
+	if _, err := st.Insert("session-x", "proj", "Bash", memory.ContentHash("session-x", "Bash", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "second thing in session x"}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.Insert("session-y", "proj", "Bash", store.ContentHash("session-y", "Bash", "c", "3"),
-		store.Observation{Type: "discovery", Title: "something in session y"}, 0); err != nil {
+	if _, err := st.Insert("session-y", "proj", "Bash", memory.ContentHash("session-y", "Bash", "c", "3"),
+		memory.Observation{Type: "discovery", Title: "something in session y"}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	st.Close()
@@ -548,16 +550,16 @@ func TestToolsCallSessionObservationsWithNoSessionIDIsAnError(t *testing.T) {
 // recent_observations.
 func TestToolsCallFileObservationsFindsMentionsScopedToProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-a", "Read", store.ContentHash("s1", "Read", "a", "1"),
-		store.Observation{Type: "discovery", Title: "read main.go in A", FilesRead: []string{"main.go"}}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-a", "Read", memory.ContentHash("s1", "Read", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "read main.go in A", FilesRead: []string{"main.go"}}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-b", "Read", store.ContentHash("s1", "Read", "b", "2"),
-		store.Observation{Type: "discovery", Title: "read main.go in B", FilesRead: []string{"main.go"}}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-b", "Read", memory.ContentHash("s1", "Read", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "read main.go in B", FilesRead: []string{"main.go"}}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	st.Close()
@@ -591,17 +593,17 @@ func TestToolsCallFileObservationsWithNoFilePathIsAnError(t *testing.T) {
 // semantic_search_observations were fixed for earlier this project.
 func TestToolsCallGetObservationsReturnsFullDetailAndScopesToProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	ra, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "in A", Narrative: "the full story", Facts: []string{"fact one"}}, 0)
+	ra, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "in A", Narrative: "the full story", Facts: []string{"fact one"}}, 0)
 	if err != nil {
 		t.Fatalf("seed a: %v", err)
 	}
-	rb, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
-		store.Observation{Type: "discovery", Title: "in B", Narrative: "someone else's story"}, 0)
+	rb, err := st.Insert("s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "in B", Narrative: "someone else's story"}, 0)
 	if err != nil {
 		t.Fatalf("seed b: %v", err)
 	}
@@ -632,14 +634,14 @@ func TestToolsCallGetObservationsRequiresNonEmptyIDs(t *testing.T) {
 
 // TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError is the
 // real-driver-limit regression test at the MCP protocol boundary: a
-// caller sending more IDs than store.MaxIDsPerLookup must get back a
+// caller sending more IDs than memory.MaxIDsPerLookup must get back a
 // normal JSON-RPC tool-error result (isError=true, a readable message),
 // not a raw SQL driver error leaking through or the server crashing —
-// confirmed against the real store.Store.ByIDs error path, not a mock.
+// confirmed against the real sqlite.Store.ByIDs error path, not a mock.
 func TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	ids := make([]string, store.MaxIDsPerLookup+1)
+	ids := make([]string, memory.MaxIDsPerLookup+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("%d", i+1)
 	}
@@ -650,7 +652,7 @@ func TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError(t *testing.T) {
 		t.Fatalf("got %d responses, want 1", len(resp))
 	}
 	if !toolCallIsError(t, resp[0]) {
-		t.Fatalf("get_observations with %d ids (limit %d): want isError=true, got %v", len(ids), store.MaxIDsPerLookup, resp[0])
+		t.Fatalf("get_observations with %d ids (limit %d): want isError=true, got %v", len(ids), memory.MaxIDsPerLookup, resp[0])
 	}
 	// Not toolCallText — that helper asserts isError is false, since every
 	// other caller uses it only on the success path. Read the error
@@ -671,14 +673,14 @@ func TestToolsCallGetObservationsWithTooManyIDsIsACleanToolError(t *testing.T) {
 // surrounds this specific one").
 func TestToolsCallTimelineWithDirectAnchorReturnsSurroundingContext(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	var anchorID int64
 	for _, title := range []string{"first", "second", "third", "fourth", "fifth"} {
-		res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", title, "x"),
-			store.Observation{Type: "discovery", Title: title}, 0)
+		res, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", title, "x"),
+			memory.Observation{Type: "discovery", Title: title}, 0)
 		if err != nil {
 			t.Fatalf("seed %s: %v", title, err)
 		}
@@ -709,16 +711,16 @@ func TestToolsCallTimelineWithDirectAnchorReturnsSurroundingContext(t *testing.T
 // timeline tool offers the identical way.
 func TestToolsCallTimelineResolvesAnchorFromQuery(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "unrelated observation about kites"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "unrelated observation about kites"}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
-		store.Observation{Type: "discovery", Title: "rate limiting middleware added"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "rate limiting middleware added"}, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	st.Close()
@@ -752,12 +754,12 @@ func TestToolsCallTimelineRequiresAnchorOrQuery(t *testing.T) {
 // different call) instead of surfacing it.
 func TestToolsCallTimelineRejectsBothAnchorAndQuery(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "anchor candidate"}, 0)
+	res, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "anchor candidate"}, 0)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -781,15 +783,15 @@ func TestToolsCallTimelineRejectsBothAnchorAndQuery(t *testing.T) {
 // on both sides of the anchor to distinguish "10" from "3" unambiguously.
 func TestToolsCallTimelineDefaultDepthIsTen(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	var anchorID int64
 	for i := 0; i < 21; i++ {
 		title := fmt.Sprintf("item-%02d", i)
-		res, err := st.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", title, "x"),
-			store.Observation{Type: "discovery", Title: title}, 0)
+		res, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", title, "x"),
+			memory.Observation{Type: "discovery", Title: title}, 0)
 		if err != nil {
 			t.Fatalf("seed %s: %v", title, err)
 		}
@@ -821,7 +823,7 @@ func TestToolsCallTimelineDefaultDepthIsTen(t *testing.T) {
 // the same store, not a side channel.
 func TestToolsCallAddObservationPersistsAndIsFindable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -861,7 +863,7 @@ func TestToolsCallAddObservationIsSemanticallySearchable(t *testing.T) {
 	model := testEmbedModel(t)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -929,7 +931,7 @@ func TestToolsCallAddObservationRequiresAProject(t *testing.T) {
 // for a real gap add_observation had until now: title/subtitle/narrative/
 // facts/concepts arrived from MCP tool-call arguments with no length check
 // at all, unlike every other external-input surface in this codebase
-// (hook.MaxPayloadBytes bounds the hook socket, store.MaxIDsPerLookup
+// (hook.MaxPayloadBytes bounds the hook socket, memory.MaxIDsPerLookup
 // bounds get_observations' id list). A caller sending a title far past
 // maxObservationTitleBytes must get a clean isError result naming the
 // limit, not a row silently accepted and stored forever.
@@ -1049,12 +1051,12 @@ func TestToolsCallObservationContextReturnsThePromptContextHookFormat(t *testing
 	model := testEmbedModel(t)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	o := store.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
-	res, err := st.Insert("s1", "proj", "manual", store.ContentHash("s1", "manual", "a", "b"), o, 0)
+	o := memory.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
+	res, err := st.Insert("s1", "proj", "manual", memory.ContentHash("s1", "manual", "a", "b"), o, 0)
 	if err != nil {
 		t.Fatalf("seed Insert: %v", err)
 	}
@@ -1111,12 +1113,12 @@ func TestToolsCallObservationContextRequiresAQuery(t *testing.T) {
 // TestToolsCallSessionStartContextIncludesNextSteps.
 func TestToolsCallSessionStartContextReturnsTheContextHookFormat(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	o := store.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
-	if _, err := st.Insert("s1", "proj", "manual", store.ContentHash("s1", "manual", "a", "b"), o, 0); err != nil {
+	o := memory.Observation{Type: "decision", Title: "switched the database to Postgres for production scale", Subtitle: "local SQLite could not keep up with concurrent writes"}
+	if _, err := st.Insert("s1", "proj", "manual", memory.ContentHash("s1", "manual", "a", "b"), o, 0); err != nil {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	st.Close()
@@ -1141,14 +1143,14 @@ func TestToolsCallSessionStartContextReturnsTheContextHookFormat(t *testing.T) {
 // actually inject is the whole point.
 func TestToolsCallSessionStartContextDefaultLimitMatchesRealHook(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	for i := 0; i < 7; i++ {
 		if _, err := st.Insert("s1", "proj", "Bash",
-			store.ContentHash("s1", "Bash", fmt.Sprintf("cmd-%d", i), "out"),
-			store.Observation{Type: "discovery", Title: fmt.Sprintf("observation %d", i)}, 0); err != nil {
+			memory.ContentHash("s1", "Bash", fmt.Sprintf("cmd-%d", i), "out"),
+			memory.Observation{Type: "discovery", Title: fmt.Sprintf("observation %d", i)}, 0); err != nil {
 			t.Fatalf("seed Insert %d: %v", i, err)
 		}
 	}
@@ -1168,16 +1170,16 @@ func TestToolsCallSessionStartContextDefaultLimitMatchesRealHook(t *testing.T) {
 // TestToolsCallRecentObservationsScopesToServerProjectOrOverride.
 func TestToolsCallSessionStartContextScopesToServerProjectOrOverride(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-a", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "recent in project A"}, 0); err != nil {
 		t.Fatalf("seed proj-a: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj-b", "Bash", store.ContentHash("s1", "Bash", "b", "2"),
-		store.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
+	if _, err := st.Insert("s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+		memory.Observation{Type: "discovery", Title: "recent in project B"}, 0); err != nil {
 		t.Fatalf("seed proj-b: %v", err)
 	}
 	st.Close()
@@ -1219,7 +1221,7 @@ func TestToolsCallSessionStartContextWithNoProjectIsAnError(t *testing.T) {
 // but an MCP tool call still needs to say that explicitly.
 func TestToolsCallSessionStartContextEmptyProjectSaysSo(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1261,16 +1263,16 @@ func TestToolsCallObservationContextDisabledWithoutEmbedModel(t *testing.T) {
 // same silent-omission shape the original drift had.
 func TestToolsCallSessionStartContextIncludesNextSteps(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	o := store.Observation{
+	o := memory.Observation{
 		Type:      "summary",
 		Title:     "session summary",
 		NextSteps: []string{"finish the backfill"},
 	}
-	if _, err := st.Insert("s1", "proj", "SessionSummary", store.ContentHash("s1", "SessionSummary", "ns", ""), o, 0); err != nil {
+	if _, err := st.Insert("s1", "proj", "SessionSummary", memory.ContentHash("s1", "SessionSummary", "ns", ""), o, 0); err != nil {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	st.Close()

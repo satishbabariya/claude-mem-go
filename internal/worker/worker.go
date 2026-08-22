@@ -16,7 +16,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"io"
 	"net"
 	"net/http"
@@ -26,22 +25,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/classify"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
 	"github.com/satishbabariya/claude-mem-go/internal/pool"
 	"github.com/satishbabariya/claude-mem-go/internal/privacy"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
 // DefaultSocketPath is ~/.claude-mem-go/worker.sock.
-func DefaultSocketPath() string { return filepath.Join(store.DefaultHome(), "worker.sock") }
+func DefaultSocketPath() string { return filepath.Join(memory.DefaultHome(), "worker.sock") }
 
 // idleEvictInterval is how often the background sweep checks for sessions
 // past sessionIdleTimeout — doesn't need to be frequent, this is just
@@ -83,7 +84,7 @@ type Daemon struct {
 
 	sessions *sessionCache
 	counters statsCounters
-	st       store.Backend
+	st       memory.Backend
 
 	// inflight and inflightOnce back getInflight (inflight.go) — see its
 	// own doc comment for why a caller like the Stop hook can query this
@@ -120,7 +121,7 @@ func (d *Daemon) Stats() Stats {
 	// Redacted here rather than at the reader: this snapshot is written
 	// to a world-readable file in the user's home, and a Postgres DSN
 	// carries a password.
-	snap.Store = store.RedactDSN(d.DBPath)
+	snap.Store = memory.RedactDSN(d.DBPath)
 	snap.Version = d.Version
 	snap.PID = os.Getpid()
 	return snap
@@ -421,7 +422,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// crashes the ENTIRE daemon process, taking memory capture down for
 	// every project on the machine sharing this one daemon. Found not
 	// hypothetically: a real, reproducible panic existed in
-	// store.Store.SemanticSearch (a negative limit slicing out of
+	// sqlite.Store.SemanticSearch (a negative limit slicing out of
 	// bounds) before that was fixed — this recover is the backstop for
 	// that entire class of bug (this one and any other not yet found),
 	// not a substitute for fixing root causes when they're found.
@@ -557,11 +558,11 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// reflecting real last-activity time, not merely a turn's start.
 	d.sessions.touch(in.SessionID)
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
-	hash := store.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
+	hash := memory.ContentHash(in.SessionID, in.ToolName, tc.ToolInput, tc.ToolOutput)
 	// Canonicalize the observer's file paths before they are stored.
 	//
 	// The model is told only "<file>...</file>", so it sometimes shortens
@@ -576,8 +577,8 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// form in the column — which the SQLite observation_files trigger and
 	// Postgres's GIN indexes both derive from, so they stay consistent
 	// for free.
-	turn.Observation.FilesRead = store.NormalizeFilePaths(in.Cwd, turn.Observation.FilesRead)
-	turn.Observation.FilesModified = store.NormalizeFilePaths(in.Cwd, turn.Observation.FilesModified)
+	turn.Observation.FilesRead = memory.NormalizeFilePaths(in.Cwd, turn.Observation.FilesRead)
+	turn.Observation.FilesModified = memory.NormalizeFilePaths(in.Cwd, turn.Observation.FilesModified)
 
 	res, err := d.st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {

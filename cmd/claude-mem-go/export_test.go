@@ -4,17 +4,18 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
 )
 
 func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "source.db")
-	src, err := store.Open(sourcePath)
+	src, err := sqlite.Open(sourcePath)
 	if err != nil {
 		t.Fatalf("Open source: %v", err)
 	}
-	if _, err := src.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "cli round trip"}, 0.03); err != nil {
+	if _, err := src.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "cli round trip"}, 0.03); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	src.Close()
@@ -29,7 +30,7 @@ func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 		t.Fatalf("cmdImport exit code = %d, want 0", rc)
 	}
 
-	dest, err := store.Open(destPath)
+	dest, err := sqlite.Open(destPath)
 	if err != nil {
 		t.Fatalf("Open dest: %v", err)
 	}
@@ -45,12 +46,12 @@ func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 
 func TestImportIsIdempotentAcrossTwoRuns(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "source.db")
-	src, err := store.Open(sourcePath)
+	src, err := sqlite.Open(sourcePath)
 	if err != nil {
 		t.Fatalf("Open source: %v", err)
 	}
-	if _, err := src.Insert("s1", "proj", "Bash", store.ContentHash("s1", "Bash", "a", "1"),
-		store.Observation{Type: "discovery", Title: "idempotent import"}, 0); err != nil {
+	if _, err := src.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+		memory.Observation{Type: "discovery", Title: "idempotent import"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	src.Close()
@@ -68,7 +69,7 @@ func TestImportIsIdempotentAcrossTwoRuns(t *testing.T) {
 		t.Fatalf("second cmdImport exit code = %d, want 0", rc)
 	}
 
-	dest, err := store.Open(destPath)
+	dest, err := sqlite.Open(destPath)
 	if err != nil {
 		t.Fatalf("Open dest: %v", err)
 	}

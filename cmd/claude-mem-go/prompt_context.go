@@ -11,13 +11,13 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/privacy"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -46,7 +46,7 @@ import (
 // every single message for no benefit.
 func cmdPromptContext(args []string) int {
 	fs := flag.NewFlagSet("prompt-context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embedding the prompt (empty disables this hook)")
 	limit := fs.Int("limit", 5, "how many semantically relevant observations to inject")
 	minPromptLen := fs.Int("min-prompt-len", 20, "prompts shorter than this are skipped, not embedded")
@@ -135,7 +135,7 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
 		fmt.Println("{}")
@@ -151,7 +151,7 @@ func cmdPromptContext(args []string) int {
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -216,6 +216,6 @@ func promptHash(prompt string) string {
 
 // formatPromptContext delegates to contextfmt so this hook and the
 // observation_context MCP tool share one implementation.
-func formatPromptContext(matches []store.VectorMatch) string {
+func formatPromptContext(matches []memory.VectorMatch) string {
 	return contextfmt.PromptContext(matches)
 }

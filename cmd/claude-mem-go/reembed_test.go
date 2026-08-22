@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
 )
 
 // fakeOllama stands in for a real Ollama server. Every reembed test below
@@ -71,7 +72,7 @@ func (f *fakeOllama) calls() int {
 func seedRowsNeedingEmbedding(t *testing.T, n int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "reembed.db")
-	st, err := store.Open(path)
+	st, err := sqlite.Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -79,8 +80,8 @@ func seedRowsNeedingEmbedding(t *testing.T, n int) string {
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("observation %d", i)
 		if _, err := st.Insert("s1", "reembed-proj", "Bash",
-			store.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
-			store.Observation{Type: "discovery", Title: title}, 0); err != nil {
+			memory.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
+			memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
 	}
@@ -138,7 +139,7 @@ func TestReembedBreakerResetsOnSuccess(t *testing.T) {
 	dbPath := seedRowsNeedingEmbedding(t, seeded)
 	rc := cmdReembed([]string{"-db", dbPath, "-yes"})
 
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

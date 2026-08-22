@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // Real, varied engineering prose — the kind of text this store actually
@@ -69,8 +69,8 @@ func main() {
 			sites[rng.Intn(len(sites))], i+1)
 		title := strings.ToUpper(text[:1]) + text[1:]
 		res, err := st.Insert("s-recall", "recall-proj", "Bash",
-			store.ContentHash("s-recall", "Bash", title, fmt.Sprint(i)),
-			store.Observation{Type: "discovery", Title: title, Narrative: text}, 0)
+			memory.ContentHash("s-recall", "Bash", title, fmt.Sprint(i)),
+			memory.Observation{Type: "discovery", Title: title, Narrative: text}, 0)
 		if err != nil {
 			panic(err)
 		}

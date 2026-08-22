@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
 )
 
 // runStopWithPayload runs cmdStop with payload on stdin against an
 // isolated HOME, and returns everything the hook logged. HOME is
-// redirected because store.DefaultHome resolves through os.UserHomeDir —
+// redirected because memory.DefaultHome resolves through os.UserHomeDir —
 // which keeps the test off the developer's real stop.log, and, more to
 // the point, makes the log readable as the assertion surface. cmdStop is
 // fire-and-forget by design (nothing reads its stdout, and it returns 0
@@ -49,23 +50,23 @@ func runStopWithPayload(t *testing.T, dbPath, payload string) string {
 func seedSummarizedSession(t *testing.T, sessionID string, withSummary bool) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "stop.db")
-	st, err := store.Open(path)
+	st, err := sqlite.Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	if _, err := st.Insert(sessionID, "guard-proj", "Bash",
-		store.ContentHash(sessionID, "Bash", "did a thing", "1"),
-		store.Observation{Type: "change", Title: "did a thing"}, 0); err != nil {
+		memory.ContentHash(sessionID, "Bash", "did a thing", "1"),
+		memory.Observation{Type: "change", Title: "did a thing"}, 0); err != nil {
 		t.Fatalf("Insert observation: %v", err)
 	}
 	if withSummary {
 		// The same shape cmdStop itself writes: type "summary", tool name
 		// "SessionSummary", and the session-derived content hash.
 		if _, err := st.Insert(sessionID, "guard-proj", "SessionSummary",
-			store.ContentHash(sessionID, "SessionSummary", "session-summary", ""),
-			store.Observation{Type: "summary", Title: "already summarized"}, 0); err != nil {
+			memory.ContentHash(sessionID, "SessionSummary", "session-summary", ""),
+			memory.Observation{Type: "summary", Title: "already summarized"}, 0); err != nil {
 			t.Fatalf("Insert summary: %v", err)
 		}
 	}

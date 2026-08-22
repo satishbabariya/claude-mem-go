@@ -3,10 +3,11 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 )
 
 // TestProcessPanicRecoverySurvives is the regression test for a real,
@@ -16,7 +17,7 @@ import (
 // just fail one event, it crashes the ENTIRE daemon process, taking
 // memory capture down for every project on the machine sharing this one
 // daemon. A real, reproducible panic existed in
-// store.Store.SemanticSearch's own limit handling before this iteration
+// sqlite.Store.SemanticSearch's own limit handling before this iteration
 // fixed it, which was reachable from here.
 //
 // Uses a bare *Daemon with no sessions cache initialized (the zero value,

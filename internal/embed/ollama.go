@@ -30,7 +30,7 @@ const DefaultBaseURL = "http://localhost:11434"
 // where Ollama runs anywhere but this machine's own :11434 — a shared GPU
 // box, a container on a different port, a colleague's workstation — could
 // not embed at all, and the failure had no configuration route out of it.
-// This is the same shape of gap as CLAUDE_MEM_DB (see store.DBPathEnvVar):
+// This is the same shape of gap as CLAUDE_MEM_DB (see memory.DBPathEnvVar):
 // hooks and the MCP server take no flags, so an env var is the only way
 // they can be told anything.
 //
@@ -175,7 +175,7 @@ func (c *Client) Ping() error {
 
 // ObservationText builds the text an observation's embedding is computed
 // from: title, subtitle, narrative, and facts joined into one blob. Takes
-// plain fields rather than a store.Observation so this package doesn't need
+// plain fields rather than a memory.Observation so this package doesn't need
 // to import store — the caller already has these fields either way.
 func ObservationText(title, subtitle, narrative string, facts []string) string {
 	parts := []string{title, subtitle, narrative}

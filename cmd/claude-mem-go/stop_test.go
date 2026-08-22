@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
 // setFastPollIntervalForTest shrinks stopWaitPollInterval for the
@@ -18,7 +18,7 @@ func setFastPollIntervalForTest(t *testing.T) {
 	t.Cleanup(func() { stopWaitPollInterval = original })
 }
 
-// sequencedBackend is a minimal store.Backend fake whose BySessionID
+// sequencedBackend is a minimal memory.Backend fake whose BySessionID
 // returns one entry from counts per call (clamped to the last entry once
 // exhausted), each call returning that many placeholder SearchResults —
 // simulating the worker's own async pipeline persisting observations for
@@ -27,21 +27,21 @@ func setFastPollIntervalForTest(t *testing.T) {
 // intentionally unimplemented panic, so a test that accidentally
 // exercises one fails loudly rather than silently returning a zero value.
 type sequencedBackend struct {
-	store.Backend
+	memory.Backend
 	counts []int
 	calls  int
 }
 
-func (s *sequencedBackend) BySessionID(sessionID string, limit int) ([]store.SearchResult, error) {
+func (s *sequencedBackend) BySessionID(sessionID string, limit int) ([]memory.SearchResult, error) {
 	i := s.calls
 	if i >= len(s.counts) {
 		i = len(s.counts) - 1
 	}
 	s.calls++
 	n := s.counts[i]
-	out := make([]store.SearchResult, n)
+	out := make([]memory.SearchResult, n)
 	for j := range out {
-		out[j] = store.SearchResult{ID: int64(j + 1)}
+		out[j] = memory.SearchResult{ID: int64(j + 1)}
 	}
 	return out, nil
 }

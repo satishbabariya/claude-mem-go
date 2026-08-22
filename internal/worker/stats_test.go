@@ -1,10 +1,11 @@
 package worker
 
 import (
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"io"
 	"path/filepath"
 	"testing"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 )
 
 func nopLogger() *logging.Logger { return logging.New(io.Discard, "", 0) }

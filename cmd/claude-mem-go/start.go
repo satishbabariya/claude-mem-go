@@ -3,13 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"os"
 	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -20,7 +21,7 @@ func cmdStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings (empty to skip)")
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	// Forwarded to the spawned worker, and read here to identify the
 	// daemon already running on -socket. Symmetric with the worker's and

@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // maxConsecutiveFailures stops a run once the embedding service is
@@ -84,7 +84,7 @@ func printReembedProgress(reembedded, failed int, started time.Time) {
 // before doing it.
 func cmdReembed(args []string) int {
 	fs := flag.NewFlagSet("reembed", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model to re-embed with")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	yes := fs.Bool("yes", false, "actually re-embed — without this, reembed only reports how many rows WOULD be re-embedded")

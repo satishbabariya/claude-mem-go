@@ -13,7 +13,7 @@ import (
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"github.com/satishbabariya/claude-mem-go/internal/classify"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
@@ -52,7 +52,7 @@ func HardenedOptions(model string) claudeagent.Options {
 // BuildPrompt mirrors buildObservationPrompt in src/sdk/prompts.ts: raw
 // JSON.stringify(tool_input)/JSON.stringify(tool_response) embedded
 // verbatim (see ClaudeProvider.ts:521-522), asking for the same field set
-// store.Observation persists.
+// memory.Observation persists.
 func BuildPrompt(tc transcript.ToolCall) string {
 	var b strings.Builder
 	b.WriteString("Compress this tool-use record into an observation.\n\n")
@@ -81,7 +81,7 @@ func BuildPrompt(tc transcript.ToolCall) string {
 // It exists because len(Observations) and Total are routinely different
 // and the difference used to be invisible. See SelectSummaryWindow.
 type SummaryWindow struct {
-	Observations []store.SearchResult
+	Observations []memory.SearchResult
 	// Positions[i] is the 1-based index of Observations[i] within the
 	// full session. Same length as Observations.
 	Positions []int
@@ -105,7 +105,7 @@ type SummaryWindow struct {
 // claude-mem summarizes from last_assistant_message alone, which is the
 // opposite bias — better than head-only, but it still cannot say how the
 // session started.
-func SelectSummaryWindow(all []store.SearchResult, max int) SummaryWindow {
+func SelectSummaryWindow(all []memory.SearchResult, max int) SummaryWindow {
 	total := len(all)
 	if max <= 0 || total <= max {
 		positions := make([]int, total)
@@ -119,7 +119,7 @@ func SelectSummaryWindow(all []store.SearchResult, max int) SummaryWindow {
 	head := max / 2
 	tail := max - head
 
-	out := make([]store.SearchResult, 0, max)
+	out := make([]memory.SearchResult, 0, max)
 	positions := make([]int, 0, max)
 	for i := 0; i < head; i++ {
 		out = append(out, all[i])
@@ -134,7 +134,7 @@ func SelectSummaryWindow(all []store.SearchResult, max int) SummaryWindow {
 
 // BuildSummaryPrompt asks the model to synthesize one session-level
 // observation out of the individual tool-call observations already
-// recorded for that session (see store.Backend.BySessionID) — the
+// recorded for that session (see memory.Backend.BySessionID) — the
 // Stop-hook analog of BuildPrompt: real claude-mem's "summarize" mode,
 // condensing a whole session into one narrative, reimplemented here from
 // what's actually persisted per turn instead of re-reading the raw
@@ -207,7 +207,7 @@ func BuildSummaryPrompt(w SummaryWindow) string {
 // underlying Session's raw Result (session id, cost, cache stats), or an
 // error if the turn failed or didn't parse.
 type Turn struct {
-	Observation store.Observation
+	Observation memory.Observation
 	Result      claudeagent.Result
 }
 
@@ -263,7 +263,7 @@ func (o *Observer) sendAndParse(prompt string) (Turn, error) {
 	if ce := classify.Result(r); ce != nil {
 		return Turn{Result: r}, ce
 	}
-	parsed, err := store.ParseXML(r.Text)
+	parsed, err := memory.ParseXML(r.Text)
 	if err != nil {
 		return Turn{Result: r}, &classify.Error{Kind: classify.Unrecoverable, Message: err.Error()}
 	}

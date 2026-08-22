@@ -3,16 +3,17 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
 	"github.com/satishbabariya/claude-mem-go/internal/pool"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
@@ -414,7 +415,7 @@ func (h *slowFakeHandle) Close() error { return nil }
 // that delay from the call's own start time.
 func TestProcessTouchesSessionAfterSuccessfulTurn(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

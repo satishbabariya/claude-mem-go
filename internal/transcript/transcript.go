@@ -64,7 +64,7 @@ func Truncate(s string) string { return truncate(s, FieldCap) }
 
 // ToolCall is one completed tool_use/tool_result pair — the raw material an
 // observation gets built from. Deliberately distinct from a persisted
-// observation (store.Observation): this is what the model reads, not what
+// observation (memory.Observation): this is what the model reads, not what
 // it produces.
 type ToolCall struct {
 	ToolName   string

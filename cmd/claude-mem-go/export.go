@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // exportPageSize bounds how many rows ExportAll fetches per page — keeps
@@ -23,7 +23,7 @@ const exportPageSize = 500
 // cleanly into either).
 func cmdExport(args []string) int {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	out := fs.String("out", "", "output file (JSON Lines, one observation per line); defaults to stdout")
 	fs.Parse(args)
 
@@ -80,7 +80,7 @@ func cmdExport(args []string) int {
 // duplicating them.
 func cmdImport(args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	in := fs.String("in", "", "input file written by `export` (JSON Lines); required")
 	fs.Parse(args)
 
@@ -106,7 +106,7 @@ func cmdImport(args []string) int {
 	dec := json.NewDecoder(f)
 	imported, skipped := 0, 0
 	for dec.More() {
-		var row store.ExportRow
+		var row memory.ExportRow
 		if err := dec.Decode(&row); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED decoding row from %s: %v\n", *in, err)
 			return 1

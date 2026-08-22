@@ -25,12 +25,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
 // SessionStart renders the block the SessionStart hook injects, and that
 // the session_start_context MCP tool returns verbatim.
-func SessionStart(recent []store.SearchResult) string {
+func SessionStart(recent []memory.SearchResult) string {
 	var b strings.Builder
 	// Unfinished work goes FIRST and separately, because it is the one
 	// thing here that is not merely context. Everything below records what
@@ -59,7 +59,7 @@ func SessionStart(recent []store.SearchResult) string {
 // has any. recent is newest-first, so the first hit is the most recent —
 // and only that one is used, rather than accumulating every session's
 // leftovers into a growing list of things probably long since done.
-func LatestNextSteps(recent []store.SearchResult) []string {
+func LatestNextSteps(recent []memory.SearchResult) []string {
 	for _, r := range recent {
 		if len(r.Observation.NextSteps) > 0 {
 			return r.Observation.NextSteps
@@ -70,7 +70,7 @@ func LatestNextSteps(recent []store.SearchResult) []string {
 
 // PromptContext renders the block the UserPromptSubmit hook injects, and
 // that the observation_context MCP tool returns verbatim.
-func PromptContext(matches []store.VectorMatch) string {
+func PromptContext(matches []memory.VectorMatch) string {
 	var b strings.Builder
 	b.WriteString("Memory relevant to what you just asked:\n\n")
 	for _, m := range matches {

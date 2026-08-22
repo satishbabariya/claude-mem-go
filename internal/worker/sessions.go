@@ -14,9 +14,10 @@ package worker
 import (
 	"context"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"sync"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
 	"github.com/satishbabariya/claude-mem-go/internal/pool"

@@ -3,13 +3,14 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
 )

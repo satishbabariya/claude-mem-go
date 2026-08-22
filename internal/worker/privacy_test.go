@@ -3,20 +3,22 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
 // recordingFakeHandle captures the transcript.ToolCall process() actually
 // hands to Observe — the real point of insertion to check, since a
 // privacy-tag leak here reaches both the observer LLM prompt and (via
-// tc.ToolInput/ToolOutput's role in store.ContentHash) whatever gets
+// tc.ToolInput/ToolOutput's role in memory.ContentHash) whatever gets
 // persisted, not just one or the other.
 type recordingFakeHandle struct {
 	got transcript.ToolCall
@@ -24,7 +26,7 @@ type recordingFakeHandle struct {
 
 func (f *recordingFakeHandle) Observe(tc transcript.ToolCall) (observer.Turn, error) {
 	f.got = tc
-	return observer.Turn{Observation: store.Observation{Type: "change", Title: "t"}}, nil
+	return observer.Turn{Observation: memory.Observation{Type: "change", Title: "t"}}, nil
 }
 func (f *recordingFakeHandle) Close() error { return nil }
 
@@ -48,7 +50,7 @@ func TestProcessStripsPrivacyTagsBeforeObserving(t *testing.T) {
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

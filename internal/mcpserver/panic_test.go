@@ -2,68 +2,68 @@ package mcpserver
 
 import (
 	"bytes"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"strings"
 	"testing"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
-// panickingBackend implements store.Backend with every method panicking
+// panickingBackend implements memory.Backend with every method panicking
 // except the ones needed to get a tools/call request to Search — a
 // minimal fault-injection double, not a real store, purpose-built to
 // prove Server.handle's recover() actually stops a panic from escaping
 // rather than crashing the process.
 type panickingBackend struct{}
 
-func (panickingBackend) Insert(string, string, string, string, store.Observation, float64) (store.InsertResult, error) {
+func (panickingBackend) Insert(string, string, string, string, memory.Observation, float64) (memory.InsertResult, error) {
 	panic("panickingBackend: Insert")
 }
 func (panickingBackend) CountByProject(string) (int, error) {
 	panic("panickingBackend: CountByProject")
 }
-func (panickingBackend) Search(string, string, string, int, int, int64, int64, string) ([]store.SearchResult, error) {
+func (panickingBackend) Search(string, string, string, int, int, int64, int64, string) ([]memory.SearchResult, error) {
 	panic("panickingBackend: Search")
 }
 func (panickingBackend) SaveEmbedding(int64, []float32) error {
 	panic("panickingBackend: SaveEmbedding")
 }
-func (panickingBackend) SemanticSearch(string, []float32, int) ([]store.VectorMatch, error) {
+func (panickingBackend) SemanticSearch(string, []float32, int) ([]memory.VectorMatch, error) {
 	panic("panickingBackend: SemanticSearch")
 }
-func (panickingBackend) RecentByProject(string, int) ([]store.SearchResult, error) {
+func (panickingBackend) RecentByProject(string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: RecentByProject")
 }
-func (panickingBackend) BySessionID(string, int) ([]store.SearchResult, error) {
+func (panickingBackend) BySessionID(string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: BySessionID")
 }
-func (panickingBackend) ObservationsForFile(string, string, int) ([]store.SearchResult, error) {
+func (panickingBackend) ObservationsForFile(string, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ObservationsForFile")
 }
-func (panickingBackend) ByIDs([]int64) ([]store.SearchResult, error) {
+func (panickingBackend) ByIDs([]int64) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ByIDs")
 }
-func (panickingBackend) Timeline(string, int64, int, int) ([]store.SearchResult, error) {
+func (panickingBackend) Timeline(string, int64, int, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: Timeline")
 }
-func (panickingBackend) ObservationsNeedingEmbedding(string, int64, int64, int) ([]store.SearchResult, error) {
+func (panickingBackend) ObservationsNeedingEmbedding(string, int64, int64, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ObservationsNeedingEmbedding")
 }
 func (panickingBackend) Prune(string, int64, bool) (int64, error) { panic("panickingBackend: Prune") }
-func (panickingBackend) ExportAll(int64, int) ([]store.ExportRow, error) {
+func (panickingBackend) ExportAll(int64, int) ([]memory.ExportRow, error) {
 	panic("panickingBackend: ExportAll")
 }
-func (panickingBackend) ImportRow(store.ExportRow) (store.InsertResult, error) {
+func (panickingBackend) ImportRow(memory.ExportRow) (memory.InsertResult, error) {
 	panic("panickingBackend: ImportRow")
 }
-func (panickingBackend) Stats() (store.StoreStats, error) { panic("boom") }
+func (panickingBackend) Stats() (memory.StoreStats, error) { panic("boom") }
 
 func (panickingBackend) HealthDetails() (map[string]string, error) {
 	panic("panickingBackend: HealthDetails")
 }
 func (panickingBackend) Close() error { panic("panickingBackend: Close") }
 
-var _ store.Backend = panickingBackend{}
+var _ memory.Backend = panickingBackend{}
 
 // TestHandlePanicRecoverySurvivesAndReturnsCleanError is the regression
 // test for a real, severe gap found this iteration: neither this server

@@ -11,10 +11,10 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"github.com/satishbabariya/claude-mem-go/internal/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -27,7 +27,7 @@ import (
 // an actual Read tool call, before writing any of this.
 func cmdFileContext(args []string) int {
 	fs := flag.NewFlagSet("file-context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	limit := fs.Int("limit", 5, "how many prior observations about this file to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic file-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
@@ -73,14 +73,14 @@ func cmdFileContext(args []string) int {
 		return 0
 	}
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 
 	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -93,9 +93,9 @@ func cmdFileContext(args []string) int {
 	// a payload ever carries a relative path. Claude Code sends absolute
 	// today, which is exactly why relative rows written by the observer
 	// never matched.
-	targetPath := store.NormalizeFilePath(in.Cwd, toolInput.FilePath)
+	targetPath := memory.NormalizeFilePath(in.Cwd, toolInput.FilePath)
 
-	results, err := st.ObservationsForFile(project, targetPath, store.FileContextCandidateLimit(*limit))
+	results, err := st.ObservationsForFile(project, targetPath, memory.FileContextCandidateLimit(*limit))
 	if err != nil {
 		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
@@ -147,7 +147,7 @@ func cmdFileContext(args []string) int {
 	}
 
 	candidates := len(results)
-	results = store.SelectFileContext(results, targetPath, *limit)
+	results = memory.SelectFileContext(results, targetPath, *limit)
 	if candidates > len(results) {
 		l.Printf("narrowed %d candidate observation(s) to %d for file=%s (one per session, most specific first)",
 			candidates, len(results), targetPath)
@@ -169,7 +169,7 @@ func cmdFileContext(args []string) int {
 	return 0
 }
 
-func formatFileContext(filePath string, results []store.SearchResult) string {
+func formatFileContext(filePath string, results []memory.SearchResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Prior memory about %s:\n\n", filePath)
 	for _, r := range results {

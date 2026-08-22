@@ -3,19 +3,21 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
 	"github.com/satishbabariya/claude-mem-go/internal/pool"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
 // blockingHandleWithValidType is inflight_test.go's blockingHandle but
-// returning an Observation with a real Type from store.ValidObservationTypes
+// returning an Observation with a real Type from memory.ValidObservationTypes
 // — needed here (unlike blockingHandle's other uses, which only check
 // in-flight counts) because this test confirms the drained turn's
 // observation actually reaches the store, and store.Insert rejects an
@@ -26,7 +28,7 @@ type blockingHandleWithValidType struct {
 
 func (b *blockingHandleWithValidType) Observe(tc transcript.ToolCall) (observer.Turn, error) {
 	<-b.release
-	return observer.Turn{Observation: store.Observation{Type: "discovery", Title: "done"}}, nil
+	return observer.Turn{Observation: memory.Observation{Type: "discovery", Title: "done"}}, nil
 }
 func (b *blockingHandleWithValidType) Close() error { return nil }
 
@@ -50,7 +52,7 @@ func (b *blockingHandleWithValidType) Close() error { return nil }
 // than merely not crashing.
 func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

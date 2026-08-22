@@ -60,7 +60,7 @@ func PostgresPlaceholder(argIndex int) string { return fmt.Sprintf("$%d", argInd
 // of `context`/`file-context`/other hook subcommands) each calling
 // backend.Open — and therefore migrate.Run — independently on the SAME
 // SQLite file, most likely to collide on a brand-new database's very
-// first session. Reproduced directly: five goroutines calling store.Open
+// first session. Reproduced directly: five goroutines calling sqlite.Open
 // concurrently on a fresh file surfaced three DIFFERENT real errors
 // depending on timing — "database is locked" (SQLite's busy_timeout does
 // not cover a losing BEGIN/DDL the way it covers a losing row lock),

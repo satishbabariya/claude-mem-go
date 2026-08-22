@@ -3,14 +3,16 @@ package worker
 import (
 	"bytes"
 	"context"
-	"github.com/satishbabariya/claude-mem-go/internal/pool"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
+	"github.com/satishbabariya/claude-mem-go/internal/pool"
+
 	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
-	"github.com/satishbabariya/claude-mem-go/internal/store"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
@@ -21,7 +23,7 @@ import (
 type relPathHandle struct{}
 
 func (relPathHandle) Observe(tc transcript.ToolCall) (observer.Turn, error) {
-	return observer.Turn{Observation: store.Observation{
+	return observer.Turn{Observation: memory.Observation{
 		Type:      "discovery",
 		Title:     "read the token config",
 		FilesRead: []string{"src/auth/tokens.go"},
@@ -47,7 +49,7 @@ func (relPathHandle) Close() error { return nil }
 // notice if the worker stopped calling it.
 func TestProcessStoresAbsoluteFilePaths(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "w.db")
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

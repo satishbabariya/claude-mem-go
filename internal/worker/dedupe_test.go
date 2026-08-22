@@ -2,9 +2,10 @@ package worker
 
 import (
 	"bytes"
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
 )

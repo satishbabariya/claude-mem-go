@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
-	"github.com/satishbabariya/claude-mem-go/internal/postgres"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/postgres"
 
 	"github.com/pgvector/pgvector-go"
 )

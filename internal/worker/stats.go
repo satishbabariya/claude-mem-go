@@ -3,13 +3,13 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/satishbabariya/claude-mem-go/internal/hook"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/store"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
 // DefaultStatsPath is ~/.claude-mem-go/worker-stats.json — the daemon's
@@ -18,7 +18,7 @@ import (
 // happened on this one event"; this file answers "is the daemon actually
 // healthy right now" without grepping text — the gap `doctor` (and any
 // future dashboard) actually wants closed.
-func DefaultStatsPath() string { return filepath.Join(store.DefaultHome(), "worker-stats.json") }
+func DefaultStatsPath() string { return filepath.Join(memory.DefaultHome(), "worker-stats.json") }
 
 // Stats is a point-in-time snapshot of the daemon's own activity.
 type Stats struct {
@@ -45,7 +45,7 @@ type Stats struct {
 	LastActivityAt string     `json:"last_activity_at,omitempty"` // RFC3339; empty if nothing processed yet
 	UpdatedAt      string     `json:"updated_at"`
 	// Store is the database this daemon is actually writing to, already
-	// redacted (see store.RedactDSN) because a Postgres DSN carries a
+	// redacted (see memory.RedactDSN) because a Postgres DSN carries a
 	// password and this file is world-readable in the user's home.
 	//
 	// The daemon is a long-lived process that opened its store once, at
