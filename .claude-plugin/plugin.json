@@ -1,6 +1,6 @@
 {
   "name": "claude-mem-go",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Go reimplementation of claude-mem's capture-compress-persist-search-recall loop, built on claude-agent-sdk-go instead of the closed-source npm SDK",
   "author": {
     "name": "satishbabariya"
