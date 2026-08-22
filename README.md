@@ -1011,14 +1011,34 @@ Recall is **not** quoted for this run: these vectors are randomly
 generated, and random high-dimensional vectors are near-orthogonal — a
 degenerate case for HNSW, so a figure from them would say nothing about
 real use. It is measured separately, against real embeddings, by
-`bench/recall` (see that directory's README): **95.0% recall@10** at
-pgvector's default `ef_search`, on 3,000 real `nomic-embed-text`
-embeddings, comparing the HNSW result against a forced exact scan over
-the same rows. Raising `ef_search` from 20 to 200 changes nothing at that
-corpus size; only 400 moves it, to 98%. The knob is expected to matter
-more as the graph deepens, which that harness does not measure — anyone
-running materially more data should re-run it rather than trust a
-3,000-row result.
+`bench/recall` (see that directory's README), against a forced exact scan
+over the same rows.
+
+An earlier version of this section quoted **95.0% recall@10** from that
+harness. **That figure was wrong and has been retracted** — the corpus
+could only produce 1,440 distinct sentences regardless of row count, so
+it was mostly duplicate vectors, and recall counted as id overlap was
+really measuring how two query plans broke ties among identical
+distances. Both defects are fixed; `bench/recall/README.md` documents
+them in full rather than quietly deleting the number.
+
+The corrected measurement, on 20,000 distinct real `nomic-embed-text`
+embeddings:
+
+| `hnsw.ef_search` | recall@10 | scoped recall@10 |
+|---|---|---|
+| 40 (pgvector default) | **80.0%** | **71.2%** |
+| 200 | 94.0% | exact (planner skips HNSW) |
+| 400 | 98.0% | exact (planner skips HNSW) |
+
+**pgvector's default is not good enough at this size**, and the
+project-scoped path every hook actually runs is the weaker of the two —
+roughly 71%, meaning about three relevant memories in ten silently
+missing. `-hnsw-ef-search 200` fixes both, for under 4ms p50, and
+`doctor` now flags any store past 10,000 embedded rows still on the
+default. The default itself is deliberately unchanged: one corpus on one
+embedding model is not enough evidence to alter search behaviour for
+every existing store.
 
 Three real problems surfaced only at this size, all now fixed:
 

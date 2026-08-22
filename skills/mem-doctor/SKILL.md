@@ -93,6 +93,17 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   `semantic-search`/`prompt-context` to confirm it's actually what you
   think it is, not a live Postgres session setting, since the override
   only ever applies per query via a transaction-scoped `SET LOCAL`)
+- **a recall warning on large Postgres stores** — past 10,000 embedded
+  rows still on pgvector's default `ef_search`, `doctor` reports that
+  semantic search is measurably missing results: `bench/recall` measures
+  80% recall@10 unscoped and ~71% for the project-scoped searches every
+  hook actually runs, meaning roughly three relevant memories in ten are
+  silently absent. Nothing else surfaces this — the queries succeed, they
+  just return less than the store holds. The remedy is
+  `-hnsw-ef-search 200` on `mcp`/`semantic-search`/`prompt-context`
+  (measured under 4ms p50). Not a failure and not counted as one: it is a
+  tuning finding on a working system, and the default is deliberately
+  left as pgvector ships it.
 - `embedding_dims`/`embedding_dims_consistent` — whether every embedded
   observation shares the same vector dimension. If `false` (SQLite only;
   Postgres can't have this), the embedding model was changed at some

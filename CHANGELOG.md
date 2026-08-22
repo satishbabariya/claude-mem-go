@@ -7,31 +7,58 @@ process (this project doesn't cut tagged releases on a schedule).
 
 ## 0.3.0 — 2026-08-21
 
-- **Measured ANN recall for the first time: 95.0% recall@10 on real
-  embeddings.** "Production-grade ANN vector search" is a claim about
-  *recall*, not just latency, and the earlier 250,000-row scale run
-  deliberately refused to quote one — its vectors were randomly
-  generated, and random high-dimensional vectors are near-orthogonal,
-  which is degenerate for HNSW. `bench/recall` answers it properly, with
-  real `nomic-embed-text` embeddings of real engineering prose and ten
-  queries phrased *differently* from the corpus, so it measures semantic
-  retrieval rather than string overlap. Recall is the overlap between the
-  HNSW top-10 and a forced exact scan over the same rows; forcing both
-  plans is what makes the comparison valid at any size, since below
-  roughly ten thousand rows the planner picks a sequential scan on its
-  own and a "natural" query would silently compare exact against exact
-  and report a meaningless 100%. Result: **95.0% at pgvector's default**,
-  flat from `ef_search` 20 through 200, reaching 98% only at 400. That
-  flatness was checked rather than reported naively — identical recall
-  across a tenfold range looked like a setting that was not applying, and
-  this project has previously caught Postgres accepting `hnsw.ef_search`
-  silently without honoring it, so `SHOW` was used to confirm the value
-  really took effect on a pooled connection. It did; the flatness is
-  real, and the likeliest reading is that a 3,000-node graph is shallow
-  enough that even a narrow search covers most of it. What it does *not*
-  measure is sensitivity at scale, which is stated plainly rather than
-  extrapolated: the harness is committed so anyone with materially more
-  data can re-run it instead of trusting a 3,000-row number.
+- **Measured ANN recall — then found the measurement was wrong, retracted
+  it, and re-measured.** This entry previously reported **95.0%
+  recall@10**. That figure is withdrawn. Two defects combined to produce
+  it: the corpus generator drew from 15 subjects x 8 verbs x 12 objects,
+  a hard ceiling of **1,440 distinct sentences** no row count can exceed,
+  so the corpus was mostly duplicate vectors; and recall was counted as
+  *id overlap*, which on duplicate vectors measures how two query plans
+  break ties among identical distances rather than retrieval quality.
+  What exposed it was a physical impossibility rather than a failing
+  test: enlarging the corpus produced the curve 84 -> 100 -> 81 -> 83 ->
+  85, and recall cannot fall as `ef_search` rises. Notably the `SHOW
+  hnsw.ef_search` verification done at the time was correct and passed —
+  the component that had failed before was re-checked, and the one never
+  questioned was the one that was broken.
+
+  Both defects are fixed independently, so neither alone can bring the
+  failure back: the seeder appends a real `file:line` so every text is
+  unique, and the metric counts ANN results at least as close as the
+  exact k-th *distance*, which is correct even if a future corpus does
+  contain ties. `measure` now **refuses to run** on a corpus under 99%
+  distinct and **fails** if recall drops as `ef_search` rises.
+
+  Corrected, on 20,000 distinct real `nomic-embed-text` embeddings:
+  **80.0% at pgvector's default**, 94% at `ef_search` 200, 98% at 400,
+  all under 4ms p50 — monotonic, and the opposite conclusion from the
+  retracted one. **The default is not good enough at this size.**
+
+- **Scoped recall measured separately — and it is the weaker path.**
+  `bench/recall/scoped` covers project-filtered search, which every hook
+  actually runs, through the real `SemanticSearch` rather than
+  hand-written SQL. The historical post-filter bug is genuinely fixed
+  (zero empty and zero short results across 200 searches), but recall at
+  the default is **71.2%**, worse than unscoped. Raising `ef_search` to
+  100+ returns 100% — though *not* by improving the approximation: the
+  planner abandons HNSW for a bitmap scan over `idx_observations_project`
+  and answers exactly, because pgvector's HNSW cost estimate grows with
+  `ef_search` until the exact path is cheaper. The harness prints the
+  plan beside every figure so that distinction cannot be lost again.
+  `doctor` now flags any store past 10,000 embedded rows still on the
+  default, quoting both figures; the default itself is deliberately
+  unchanged, since one corpus on one embedding model is not enough
+  evidence to alter search behaviour for every existing store.
+
+  Two methodological traps hit and documented: measuring a freshly
+  bulk-`UPDATE`d table (the first scoped run said 100.0%, a rerun 71.2%,
+  because autovacuum ran between them — any measurement taken right after
+  a bulk write is measuring the write), and using a corpus the same size
+  as `hnsw.max_scan_tuples`' default of 20,000, which makes a perfect
+  result unfalsifiable. The latter is escaped by lowering the cap on a
+  fixed corpus instead of embedding 200,000 rows: recall held at 71.2%
+  down to a cap of 1,000, so the ceiling is `ef_search` against the
+  filter, not the scan cap.
 
 - **`CLAUDE_MEM_LOG_LEVEL` worked but was undiscoverable.** It was added,
   wired through every hook and the daemon, and recorded only in this
