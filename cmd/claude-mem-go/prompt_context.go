@@ -58,6 +58,9 @@ func cmdPromptContext(args []string) int {
 		"empty (the default) excludes nothing")
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, notified of this turn's privacy state "+
 		"(best-effort — a hook payload failure here is logged, never surfaced as a Claude Code-visible hook failure)")
+	storePromptsFlag := fs.Bool("store-prompts", false, "persist each submitted prompt's text (after <private> stripping) to the store, "+
+		"searchable via the search_prompts/session_prompts MCP tools; off by default because it stores the user's verbatim words. "+
+		"Also enabled by "+storePromptsEnvVar+"=1")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -100,20 +103,24 @@ func cmdPromptContext(args []string) int {
 		l.Warnf("failed to report privacy state to worker (best-effort, not fatal): %v", err)
 	}
 
-	if *embedModel == "" {
-		l.Printf("skip: semantic prompt injection disabled (-embed-model empty)")
-		fmt.Println("{}")
-		return 0
-	}
 	if private {
 		// Real claude-mem's own session-init route (SessionRoutes.ts) skips
 		// entirely — no embedding call, no injection — when a prompt is
 		// wholly wrapped in a privacy tag, its own documented convention
 		// (real claude-mem's UserPromptSubmit banner tells users exactly
 		// this: wrap a message in <private>...</private> to keep it out of
-		// memory). This hook only ever embeds prompt, never persists it, but
-		// the same guarantee applies here for the same reason.
+		// memory). Checked before EITHER feature below: a wholly-private
+		// prompt is neither embedded nor, when -store-prompts is on,
+		// persisted — the privacy flag has already been reported above,
+		// and that is the only trace of it this hook ever leaves.
 		l.Printf("skip: prompt entirely private after tag-stripping")
+		fmt.Println("{}")
+		return 0
+	}
+	storePrompts := *storePromptsFlag || os.Getenv(storePromptsEnvVar) == "1"
+	embedEnabled := *embedModel != ""
+	if !storePrompts && !embedEnabled {
+		l.Printf("skip: semantic prompt injection disabled (-embed-model empty) and prompt storage not enabled")
 		fmt.Println("{}")
 		return 0
 	}
@@ -125,13 +132,9 @@ func cmdPromptContext(args []string) int {
 		// short window (USER_PROMPT_DEDUPE_WINDOW_MS, 10s) — without this
 		// check, each firing would pay its own Ollama embedding call and
 		// inject its own duplicate "memory relevant to what you just
-		// asked" block in the same turn.
+		// asked" block in the same turn — and, with -store-prompts on,
+		// store the same prompt twice under two prompt_numbers.
 		l.Printf("skip: duplicate prompt for session %s within the dedupe window", in.SessionID)
-		fmt.Println("{}")
-		return 0
-	}
-	if len(prompt) < *minPromptLen {
-		l.Printf("skip: prompt too short to embed meaningfully (%d chars, want >= %d)", len(prompt), *minPromptLen)
 		fmt.Println("{}")
 		return 0
 	}
@@ -145,13 +148,6 @@ func cmdPromptContext(args []string) int {
 
 	ctx, cancel := hookContext(promptContextBudget)
 	defer cancel()
-	vec, err := embed.NewClient(*embedModel).Embed(ctx, prompt)
-	if err != nil {
-		l.Errorf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
-		fmt.Println("{}")
-		return 0
-	}
-
 	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
@@ -159,6 +155,42 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 	defer st.Close()
+
+	if storePrompts {
+		// The write is here and nowhere earlier, deliberately: every
+		// privacy gate above (project exclusion, internal-protocol
+		// payloads, <private> stripping, the wholly-private check) has
+		// already run, so what reaches the store is exactly what a
+		// partially-private prompt has left after stripping — never the
+		// raw text. Stored regardless of the min-prompt-len/embedding
+		// outcome below: "yes" or "continue" is still part of what the
+		// user said, even if it's too short to be worth embedding. Never
+		// fails the hook — a storage error is a Warn, and the injection
+		// half carries on.
+		if id, err := st.InsertPrompt(ctx, in.SessionID, project, prompt); err != nil {
+			l.Warnf("failed to store prompt for session %s (best-effort, not fatal): %v", in.SessionID, err)
+		} else {
+			l.Debugf("stored prompt id=%d for session %s project=%s (%d chars)", id, in.SessionID, project, len(prompt))
+		}
+	}
+
+	if !embedEnabled {
+		l.Debugf("skip: semantic prompt injection disabled (-embed-model empty)")
+		fmt.Println("{}")
+		return 0
+	}
+	if len(prompt) < *minPromptLen {
+		l.Printf("skip: prompt too short to embed meaningfully (%d chars, want >= %d)", len(prompt), *minPromptLen)
+		fmt.Println("{}")
+		return 0
+	}
+
+	vec, err := embed.NewClient(*embedModel).Embed(ctx, prompt)
+	if err != nil {
+		l.Errorf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
+		fmt.Println("{}")
+		return 0
+	}
 
 	matches, err := st.SemanticSearch(ctx, project, vec, *limit)
 	if err != nil {
@@ -194,6 +226,11 @@ func cmdPromptContext(args []string) int {
 	fmt.Println(string(enc))
 	return 0
 }
+
+// storePromptsEnvVar is the environment-variable form of -store-prompts,
+// so the opt-in can be made once in a shell profile rather than edited
+// into the plugin's hooks.json. "1" is the only value that enables it.
+const storePromptsEnvVar = "CLAUDE_MEM_STORE_PROMPTS"
 
 // truncateForLog keeps a real user prompt (which may be long, or contain
 // sensitive-looking text) out of the log file beyond a short preview —
