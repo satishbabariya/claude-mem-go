@@ -1,0 +1,1575 @@
+# Findings: what this port fixed, and how each was verified
+
+The engineering log of this port. The first half records how each subcommand
+and MCP tool was built and verified; the second is every defect found along the
+way, with the measurement or reproduction that proved it real. Hook-specific,
+Postgres-specific, and install-specific material lives in
+[hooks.md](hooks.md), [postgres.md](postgres.md), and
+[plugin-install.md](plugin-install.md) respectively.
+
+## Subcommands and MCP tools, as built and verified
+
+### `ingest`, `search`, and `semantic-search`
+
+- **ingest** — one-shot: read a real transcript file, observe N tool calls,
+  persist them. Useful for backfilling or testing without wiring up hooks.
+- **search** / **semantic-search** — keyword (FTS5) and meaning-based
+  (local embeddings + cosine similarity) search over what's been persisted.
+  `-project` scopes to one project; the default (empty) searches every
+  project in the store, since these are ad-hoc CLI lookups run by a human
+  who may genuinely want that. `search` also takes `-type` to filter to
+  one observation type (`discovery`/`change`/`decision`/`summary`/
+  `manual` — the actual, small, fixed vocabulary the observer itself ever
+  writes) and `-offset`, to page past a prior call's `-limit` — the same
+  `obs_type`/`offset` filters real claude-mem's own search tool has.
+  `-offset` was skipped in an earlier pass on a rationale that never
+  actually applied to it: real claude-mem also has a date-range filter and
+  a sort-order option this project's README used to claim neither
+  mapped onto an existing column without a real schema/query redesign —
+  also false, and since fixed; see below. Offset itself needed no column
+  at all — a plain `LIMIT`/`OFFSET` on the existing query, the same shape
+  `RecentByProject` and every other paginated read here already use for
+  `limit`. Both backends' `Search`
+  now order by rank (bm25/`ts_rank_cd`) THEN `id`, not rank alone: a rank
+  tie between two rows is real (identical term-frequency shape scores
+  identically), and pagination via `LIMIT`/`OFFSET` needs a fully
+  deterministic order or two calls at different offsets could return the
+  same row twice or skip one, depending on whatever arbitrary order the
+  database happens to visit tied rows in. Verified against both real
+  backends (including the live Postgres container) with a dedicated test
+  seeding 5 matching rows and confirming 3 pages of size 2/2/1 are
+  disjoint and together cover every seeded row exactly once — not just
+  "offset changes the result," which a non-deterministic order could also
+  produce by accident.
+  Threading `-type` through both backends (separately from offset, added
+  earlier) found a real latent footgun in the
+  Postgres implementation's placeholder numbering: `project`'s own scope
+  clause hardcoded `$3`, assuming it was always the third argument when
+  present — correct only because there was never a second optional
+  filter to disturb that assumption. Rewritten to build placeholder
+  numbers dynamically as each optional filter is appended, verified with
+  a dedicated test against the live container that applies `project` and
+  `type` together (the exact combination the old scheme couldn't have
+  handled safely if it silently drifted).
+
+### `mcp` — the MCP server and its tools
+
+- **mcp** — an MCP server (stdio, JSON-RPC 2.0) exposing eleven tools any MCP
+  client — including Claude Code itself — can call directly:
+  `search_observations` (now also takes `type` and `offset` — see the CLI
+  `search` entry above) and `semantic_search_observations` (keyword and
+  meaning-based search), `recent_observations`, `session_observations`,
+  and `file_observations` — the same `RecentByProject`/`BySessionID`/
+  `ObservationsForFile` reads `SessionStart`, `Stop`, and the `PreToolUse`
+  file-context hook already push automatically, now reachable on demand
+  instead of only ever happening for you — and `add_observation`, this
+  server's only *write* tool: everything else only ever surfaces what
+  `PostToolUse` already captured automatically from a tool call; this lets
+  Claude explicitly persist something worth remembering that isn't the
+  direct result of one (a decision, a stated preference) — the same real
+  gap real claude-mem's own `observation_add` tool closes. Idempotent the
+  same way automatic capture is: `ContentHash(SessionID, "manual", title,
+  narrative)` means calling it twice with the same title/narrative in the
+  same session is a no-op, not a duplicate. `SessionID` here is generated
+  once per MCP server process (Claude Code spawns one per session, so this
+  is the natural per-session scope an MCP tool call has no other way to
+  carry). Also embeds the new observation the same way automatic capture
+  does (when an embed model is configured) — the first version of this
+  tool didn't, a real gap that made a manually-added observation invisible
+  to `semantic_search_observations` even though `search_observations`
+  found it fine; fixed and locked in with a real Ollama-backed test (skips
+  cleanly when Ollama isn't reachable, the same pattern `postgres_test.go`
+  uses for a missing container). Wire format confirmed against a real
+  `claude` session, not assumed from the spec (see `internal/mcpserver/`'s doc
+  comment); every tool's end-to-end call verified against the real CLI,
+  not just unit-tested — including a live plugin install where a manually
+  added observation was found afterward through `semantic_search_observations`
+  by meaning, not keyword overlap.
+  Scoped to the current project by default (derived from the server
+  process's cwd) — this store is one shared database across every project
+  ever recorded on the machine, so an unscoped search is a real
+  cross-project leak, not just a ranking nuisance; found via a Postgres
+  test flake (accumulated rows from unrelated projects crowded a fixed
+  `LIMIT`), fixed at the `memory.Backend` interface level so both backends
+  and the CLI got it too. Pass `all_projects: true` to a search tool call
+  to search everything on purpose, or `project: "..."` to `recent_observations`/
+  `file_observations` to look at a different single project.
+  Also **`get_observations`** — fetch full details (narrative, facts,
+  concepts, files) for specific observation IDs, e.g. the `[id]` shown in
+  any list-shaped tool's abbreviated output. Every other tool's list format
+  deliberately shows only title/subtitle to keep results short (compared
+  against real claude-mem's own `get_observations`, which exists for the
+  identical reason: theirs is "step 3, fetch full details for filtered
+  IDs" after their `search`/`timeline` steps). Backed by a new
+  `Backend.ByIDs` method in both storage backends — SQLite via a
+  hand-built `IN (?,?,...)` placeholder list (`database/sql` gives it no
+  way to bind a whole slice as one placeholder), Postgres via pgx's native
+  `= ANY($1)` support for a plain `[]int64` argument, verified against the
+  live Docker container. Unknown IDs are silently omitted, not an error.
+  Scoped to the current project the same way `search_observations` is —
+  without that, a caller could read another project's observations just by
+  guessing or iterating IDs, the same cross-project leak class fixed for
+  `Search`/`SemanticSearch` earlier. Verified end to end against a real
+  `claude` CLI session (a live MCP tool call, not just a unit test) that
+  fetched a seeded observation's full narrative/facts/concepts by ID.
+  `ByIDs` is also capped at `store.MaxIDsPerLookup` (100) per call, found
+  the hard way rather than anticipated: a real test against this project's
+  own SQLite driver showed 100,000 IDs failing outright with a raw
+  "too many SQL variables" driver error, since the hand-built
+  `IN (?,?,...)` placeholder list has no cap of its own. Enforced in both
+  backends (Postgres's `= ANY($1)` doesn't hit the same driver limit, but
+  gets the identical bound anyway, for parity), and confirmed at the MCP
+  protocol boundary that an oversized request comes back as a clean
+  `isError` tool result mentioning the limit, not a raw driver error
+  leaking through.
+  Also **`timeline`** — chronological context AROUND one observation
+  (`depth_before`/`depth_after` observations immediately surrounding an
+  anchor), mirroring real claude-mem's own `timeline` tool ("step 2: get
+  context around results"). Answers a different question than
+  `recent_observations`/`session_observations`: not "what's recent" or
+  "what happened this session," but "what surrounds this ONE specific
+  observation" — the read path a search result in isolation can't answer
+  on its own. Give it an `anchor` (an observation ID) directly, or a
+  `query` to resolve one automatically via a single-result keyword search,
+  the same convenience real claude-mem's version offers. New
+  `Backend.Timeline` method in both backends, ordered by `id` (not
+  `created_at_epoch` like every other query) since id increases
+  monotonically with insertion order in both SQLite's rowid and Postgres's
+  `BIGSERIAL` — confirmed true in both, not assumed. Always scoped to the
+  anchor's own project rather than trusting the caller's project argument
+  at face value, closing off the same class of cross-project leak fixed
+  for `Search`/`ByIDs` earlier — verified with a dedicated regression test
+  seeding two projects with numerically-adjacent IDs and confirming the
+  timeline never crosses the boundary. Verified end to end against a real
+  `claude` CLI session for both the direct-anchor and query-resolution
+  paths: seeded a real chronological sequence, asked for context around
+  one specific item, and got back exactly its true neighbors with the
+  anchor correctly marked.
+  `Backend.Timeline` also now clamps `depthBefore`/`depthAfter` to
+  `[0, MaxTimelineDepth]` at the store layer itself, not just in
+  `mcpserver.go`'s own caller — found the hard way that a negative depth
+  isn't just "no results": SQLite's `LIMIT` treats a negative value as
+  *unlimited*, so `Timeline(..., -1, -1)` returned every row before the
+  anchor instead of zero. Postgres fails differently for the identical
+  root cause (`LIMIT must not be negative`, a real driver error) rather
+  than silently returning everything, but both are wrong outcomes for a
+  method whose whole contract is "a bounded window around one row." The
+  live `timeline` MCP tool was never actually exposed to this (its own
+  caller already treats `<=0` as "not specified" and substitutes the
+  default of 3), so this is a defense-in-depth fix for `Backend.Timeline`
+  as a public API — any future caller that skips that substitution and
+  passes a negative depth straight through would otherwise hit this.
+  Verified against both real backends with a dedicated regression test.
+  Also **`observation_context`** — the on-demand form of `prompt_context.go`'s
+  `UserPromptSubmit` hook, matching real claude-mem's own tool of the same
+  name. That hook's semantic recall against the actual submitted prompt
+  was, before this, the last read capability in this project with no
+  on-demand MCP equivalent — every other hook-only read (including
+  `context.go`'s own `SessionStart` dump, via `RecentByProject`) already
+  got a tool this session (`recent_observations`/`session_observations`/
+  `file_observations`). Unlike `semantic_search_observations`, which is
+  closest in shape (same
+  embed-the-query-then-`SemanticSearch` pipeline) but returns a list of
+  results for a caller to interpret, this returns the exact same
+  pre-formatted, ready-to-inject text block the hook produces
+  automatically — a duplicated formatter, not a shared import (`mcpserver`
+  can't import `cmd/claude-mem-go`, which itself imports `mcpserver` for
+  the `mcp` command; importing it back would be a cycle), verified
+  byte-for-byte against a real embedded observation found purely by
+  meaning. Also confirmed end to end against the live Postgres container
+  through the compiled binary itself (`add_observation` then
+  `observation_context` in the same real session), not just the SQLite
+  path `mcpserver_test.go` exercises.
+  Also **`important_workflow`** — matches real claude-mem's own
+  zero-dependency, static-text tool of the same name and shape: it never
+  touches the store at all, existing purely to teach an MCP client the
+  intended `search_observations` → `timeline` → `get_observations`
+  pattern (narrow to a few IDs before ever paying for full detail, not
+  the other way around — real token cost this project's whole
+  abbreviated-list convention exists to protect). Registered first in the
+  tool list, same as real claude-mem's, so its terse description is the
+  first thing a client sees even before calling anything. Verified end to
+  end against the live Postgres container through the compiled binary,
+  not just the unit test.
+  Building this also caught a real, unrelated staleness bug found by hand
+  while checking the live `initialize` response: `serverInfo.version` had
+  been hardcoded to the literal `"0.1.0"` since early in the project and
+  never updated across several real version bumps since — three releases
+  stale by the time this was noticed. Fixed by deriving it from Go's own
+  VCS build info instead (the same source `version`/`doctor` already
+  use), so it can't go stale again the same way. Confirmed live: the
+  compiled binary's `initialize` response now reports the real build
+  commit, matching `git rev-parse HEAD` exactly.
+
+### `doctor`
+
+- **doctor** — an operational health check: is the `claude` CLI on `PATH`,
+  is the worker daemon reachable, is the database reachable, is Ollama
+  reachable with the configured model actually pulled. Distinguishes
+  critical failures (exit 1 — nothing works without these) from
+  informational ones (worker not running is fine, `start` launches it
+  lazily; no Ollama just means no semantic search). Verified against real
+  failures, not just the happy path: a genuinely unreachable Postgres DSN
+  correctly exits 1, and an unpulled Ollama model correctly downgrades to
+  a warning rather than a failure. Also surfaces the worker's own activity
+  (see below) when available, and each backend's own operational details
+  via a new `Backend.HealthDetails()` method: SQLite reports the PRAGMA
+  settings actually in effect on the connection (`journal_mode`,
+  `foreign_keys`, `busy_timeout_ms`) — confirming the WAL/FK fix genuinely
+  took effect, not just that it was requested in the DSN. Postgres reports
+  real connection-pool utilization (confirming the bounded pool actually
+  applies), the pgvector extension's installed version, and whether the
+  HNSW index `SemanticSearch` depends on for real ANN search still
+  exists — a schema drift would otherwise silently degrade every semantic
+  search to a full table scan with nothing here ever saying so. Verified
+  against both real backends, not fabricated values: SQLite showed
+  `journal_mode=wal foreign_keys=1 busy_timeout_ms=5000`; the live Postgres
+  container showed a real `vector_extension=0.8.6` and
+  `hnsw_index_exists=true`.
+  `HealthDetails` also now reports `embedding_dims`/`embedding_dims_consistent`
+  — surfacing a real, previously-silent failure mode: if the configured
+  Ollama embedding model ever changes (different dimension count),
+  `SemanticSearch`'s cosine similarity returns -1 (its theoretical
+  minimum) on any length mismatch rather than erroring, so the *old*
+  embeddings just quietly stop ever matching a new-model query, forever,
+  with nothing anywhere saying so — a `doctor` run is now the one place
+  that actually surfaces it. This is SQLite-specific in practice: Postgres
+  reports the identical key for parity, but its fixed `vector(N)` column
+  type makes a real mismatch structurally impossible (confirmed directly —
+  saving a wrong-dimension vector there fails loudly with a real Postgres
+  error instead). Verified both ways: a real `doctor` run against a
+  deliberately mixed-dimension SQLite database showed
+  `embedding_dims=384:1,768:1 embedding_dims_consistent=false`, and a real
+  attempt to save a mismatched vector into the live Postgres container was
+  rejected outright.
+  `HealthDetails` also now reports `hnsw_ef_search` — a real observability
+  gap once `-hnsw-ef-search` existed with nowhere confirming it was
+  actually configured. `doctor` gained the identical `-hnsw-ef-search`
+  flag so it can be pointed at the same override an operator set on
+  `mcp`/`semantic-search`/`prompt-context`, and reports it back verbatim
+  (or `200 (default)` when unset). Reports this `Store`'s *configured*
+  value, not a live Postgres session setting — there isn't one to read,
+  since `SemanticSearch` applies it per call via a transaction-scoped
+  `SET LOCAL`, not a persistent session GUC. Verified against the live
+  container: a real `doctor -hnsw-ef-search 333` run showed
+  `hnsw_ef_search=333`, and the unset default showed
+  `hnsw_ef_search=200 (default)`.
+
+### `export`, `import`, `prune`, `reembed`, observability, and embedding retries
+
+- **export** / **import** — the store's only backup and migration story;
+  there was no way to get data out of this store at all before this, and
+  no way to move data between the SQLite and Postgres backends. `export`
+  writes every observation as JSON Lines (paginated internally via
+  `Backend.ExportAll`, so a very large store doesn't need to fit in memory
+  at once); `import` reads that file back through `Backend.ImportRow`,
+  preserving each row's original `content_hash` (the same idempotent-dedup
+  guarantee `Insert` provides — importing the same file twice, or restoring
+  on top of data that's already there, skips rows already present instead
+  of duplicating them) and its original timestamp (a restore reflects when
+  things actually happened, not when they were re-imported). Since both
+  backends implement the same `Backend` interface, `export` from one and
+  `import` into the other is the SQLite<->Postgres migration path — verified
+  with real data, not just unit tests: exported this project's own real
+  32-observation dev database, imported it into the live Postgres
+  container, confirmed the rows searchable there, then re-ran the same
+  import and confirmed it correctly skipped all 32 as already present.
+  `ExportRow` also carries each row's embedding, if it had one — the first
+  version didn't, a real gap the same "does every write path do what the
+  others do" check that caught the `add_observation`/`Stop` embedding
+  bugs also caught here: without it, migrating to Postgres for real ANN
+  search at scale would have arrived with nothing left to search. Fixed
+  and verified against this project's own real dev database (38 of 46
+  observations carried an embedding; all 38 survived a round trip into a
+  completely fresh SQLite file) and against the live Postgres container
+  with a real embedding value, not a fabricated one.
+- **prune** — deletes observations older than a cutoff; there was no
+  retention story at all before this, meaning the store only ever grows.
+  Dry-run by default (`-older-than-days N` alone just reports a count);
+  `-yes` is required to actually delete, and `-project` scopes it to one
+  project instead of every project in the store. Finding this gap surfaced
+  a real, previously-latent bug: the FTS5 `observations_ad` trigger used
+  the fts5 "special command" delete syntax, which is only valid for
+  contentless/external-content tables — this table is neither, and the
+  trigger had silently never been exercised because nothing had ever
+  deleted a row before `prune` existed. The first real `DELETE` hit it
+  immediately with a genuine SQL error, reproduced through both the Go
+  driver and the plain `sqlite3` CLI. Fixed via a new numbered migration
+  (not just fixing the schema definition, which would only help brand-new
+  databases) — verified against the exact upgrade scenario: a simulated
+  already-migrated database with the original broken trigger correctly
+  gets fixed on reopen, and `prune` then works against it. Also tested
+  against a live Postgres container (no shadow table there, but still
+  verified the generated `search_vector` and `embedding` columns are
+  genuinely gone after a prune, not just the row). A second, more serious
+  bug shipped in the same original commit and was caught the next
+  iteration: `created_at_epoch` is stamped in **milliseconds**
+  (`now.UnixMilli()`, both backends), but `cmdPrune`'s cutoff was computed
+  in **seconds** (`time.Now().AddDate(...).Unix()`) — a ~1000x mismatch
+  that made `created_at_epoch < cutoff` false for every row that ever
+  existed, so `prune` silently deleted nothing, ever, for any real
+  `-older-than-days` value. Every existing `Prune` unit test had backdated
+  rows by hand to small, unit-agnostic numbers, so none of them could have
+  caught a caller using the wrong unit; the regression test that closes
+  this (`TestPruneCutoffUnitsMatchInsertsRealTimestamp`, both backends)
+  inserts through the real `Insert` path instead, and the CLI fix was
+  re-verified against a real backdated row through the actual binary.
+- **reembed** — the remediation half of `doctor`'s
+  `embedding_dims_consistent` finding: detecting a stale/missing embedding
+  was one thing, but there was no way to actually fix it short of
+  re-ingesting from scratch. Finds every observation with no embedding at
+  all, or one whose stored dimension doesn't match the currently
+  configured model's real dimension (learned via a probe embed call —
+  nothing here maintains a model-name-to-dimension lookup table), and
+  re-embeds it. Dry-run by default like `prune` (real Ollama API cost per
+  row, even though nothing is ever deleted), `-yes` to actually do it,
+  `-project` to scope it. `doctor` itself now does the same probe-and-
+  check: `embedding_dims_consistent=true` alone only catches internal
+  disagreement between *stored* embeddings — a store embedded entirely
+  under a since-replaced model would report "consistent" while every
+  single embedding is silently unsearchable under the model that's
+  actually live right now, which the plain histogram check can't see.
+  Verified end to end with real Ollama calls, not mocked: seeded one
+  observation with a stale 384-dim embedding and one never embedded at
+  all, confirmed `doctor` flagged both the internal-consistency case AND
+  (separately) the live-model mismatch, ran `reembed -yes`, confirmed
+  both fixed, and confirmed via `semantic-search` that the previously
+  stale observation is now actually findable and correctly ranked.
+- **Observability** — the worker daemon's only introspection used to be
+  raw log lines (`worker.log`, and the per-hook logs). It now also writes
+  a small `~/.claude-mem-go/worker-stats.json` snapshot after every
+  processed event: counts of observations persisted / deduped / failed at
+  each stage (observer, insert, embedding), plus live pool utilization
+  (`pool.InFlight()`/`Capacity()`) and cached-session count. `doctor` reads
+  and prints it when present. Verified against a real running daemon, not
+  just unit tests: restarted the worker with the instrumented binary, sent
+  it a real `PostToolUse` payload over its actual Unix socket, and
+  confirmed both the stats file and `doctor`'s output reflected the real
+  persisted observation. The worker also optionally serves the same data
+  in Prometheus text exposition format — `-metrics-addr 127.0.0.1:9090`
+  (passed to `start` too, which forwards it to the worker it spawns)
+  starts an HTTP listener at `http://<addr>/metrics`; empty (the default)
+  disables it entirely, since this is the one thing about this daemon that
+  listens on more than a Unix socket. Verified against a real running
+  daemon: started one with `-metrics-addr` set, curled `/metrics` before
+  and after sending it a real event over its actual socket, and confirmed
+  `claude_mem_go_worker_processed_total` went from 0 to 1.
+- **Embedding retries once on a transient failure** — `classify`/`worker.go`
+  already retry the main observer call once on a transient/rate-limit
+  failure, but `embed.Client.Embed` had no equivalent: a single network
+  hiccup against Ollama (briefly unavailable, momentarily overloaded)
+  failed that observation's embedding permanently. Not catastrophic
+  (`worker.process` already treats embedding failure as additive-only —
+  keyword search on the row still works), but it meant semantic search
+  silently and permanently missed observations on any brief Ollama blip a
+  retry would have recovered from. Now retries once on a network-level
+  error or a 5xx status; does *not* retry a 4xx or a successful-but-empty
+  embedding (the model genuinely isn't pulled, and won't be moments
+  later) — verified against a real Ollama call in addition to the new
+  unit tests.
+
+### Log rotation
+
+Data lives in `~/.claude-mem-go/` — `observations.db`, `worker.sock`,
+and `worker.log` / `start.log` / `hook.log` (hooks run detached from any
+terminal, so these logs are the only way to see what they did). Every log
+file rotates at 5MB, keeping one prior generation (`name.log.1`) — there
+was no cap at all before this, and `worker.log` in particular gets a new
+line on every `PostToolUse` event for as long as the daemon runs, which is
+meant to be months. Verified against a real running daemon, not just unit
+tests: grew a real `worker.log` past the cap by hand, restarted the
+daemon, and confirmed it rotated the oversized file to `worker.log.1` and
+started a fresh one on its very first log line.
+
+## Defects found and fixed, with the evidence
+
+Everything below is a defect found in this port and the evidence that
+it was real — measurements, reproductions, and the break/restore that
+proved each test actually catches its bug. These sections were
+previously nested under "Installing as a Claude Code plugin", where
+they had nothing to do with installing and made that section 1,623
+lines long; they are their own thing and are now filed as such.
+
+### Truncation used to be able to corrupt real tool output mid-character
+
+`transcript.Truncate` (and `Parse`'s internal `truncate`) caps every
+`tool_input`/`tool_response` field at `FieldCap` (1500 bytes) before it
+ever reaches an observer prompt — on the real, live hot path
+`worker.Daemon.process` runs for every single tool call. The cut was a
+plain `s[:max]` byte-offset slice, with no regard for where a multi-byte
+UTF-8 rune actually starts or ends. Confirmed directly: any non-ASCII
+character (an accented file path, an emoji, box-drawing characters from
+`tree`/`ls` output, non-English text) that happens to straddle byte 1500
+gets sliced in half, producing **invalid UTF-8** in the truncated
+result — over the volume of real tool calls a long-running daemon
+processes, "happens to straddle" is an eventual certainty, not a rare
+edge case. Fixed by walking back to the nearest real rune-start byte
+before cutting (at most 3 extra bytes trimmed, since the longest UTF-8
+encoding is 4 bytes) — verified with a unit test confirming the
+truncated result is always valid UTF-8 even when the exact cutoff is
+engineered to land mid-character, and a real end-to-end run through an
+isolated worker daemon: sent a real tool_response with multi-byte
+characters straddling the exact 1500-byte boundary over the daemon's
+actual socket, and confirmed the full real pipeline (truncate → observer
+prompt → real `claude` subprocess → persisted observation) completed
+cleanly with no encoding error anywhere.
+
+### A negative limit, and the bigger gap it exposed: no panic recovery anywhere
+
+Auditing every `Backend` method that takes a `limit` (prompted by
+Timeline's own negative-depth fix, above) found the identical bug in
+`Search`, `RecentByProject`, `BySessionID`, `ObservationsForFile`,
+`ExportAll`, and `ObservationsNeedingEmbedding`: SQLite's `LIMIT` treats a
+negative value as *unlimited*, confirmed by hand against a real seeded
+database returning every row for `limit=-1` instead of zero. `SemanticSearch`
+had a worse version of the same bug — it slices its own results in Go
+(`all[:limit]`) rather than relying on SQL's `LIMIT`, so a negative limit
+didn't return "everything," it **panicked outright** with a real "slice
+bounds out of range" runtime error.
+
+That panic mattered more than it might look: neither the worker daemon
+nor the MCP server had *any* panic recovery anywhere. `SemanticSearch`
+runs inside the worker's per-event goroutine (`handleConn`'s
+`go d.process(...)`) and the MCP server's synchronous request handler —
+an unrecovered panic in either one crashes the **entire process**, not
+just the one call: the worker daemon serving every project on the
+machine, or the whole `claude` session's MCP connection. Neither one was
+actually reachable through the live MCP tool surface today (its own
+caller already substitutes a default before calling any of these, the
+same story as Timeline's fix), but "not reachable today" and "safe" are
+different claims for a public `Backend` method and the two long-lived
+processes built on it.
+
+Fixed both layers: every affected method now clamps a negative limit to
+0 in both backends (`clampNegativeLimit`, `LIMIT 0` already behaves
+correctly — only negative values needed guarding), and — the more
+consequential half — `worker.Daemon.process` and `mcpserver.Server.handle`
+now both recover from a panic instead of letting it crash the process, an
+independent backstop against *any* future bug of this shape, not just
+this one. Verified thoroughly: a dedicated regression test per method
+against both real backends (SQLite confirms zero rows instead of
+unlimited; Postgres confirms a clean clamp instead of surfacing its own
+real "LIMIT must not be negative" driver error), a fault-injection test
+in each of `worker`/`mcpserver` (a fake `Backend` that panics on every
+call, exercised through the real request-handling path, confirming the
+process survives and a real caller gets a clean error instead of a dead
+connection), and a live `claude` CLI session confirming the MCP server
+stays alive and keeps serving requests correctly afterward.
+
+Auditing every other caller-supplied integer while already in this
+territory found one more, in `pool.New` this time: Go's own
+`make(chan T, n)` panics with `"makechan: size out of range"` for a
+negative `n`, so `worker -max-concurrent -1` (a mistyped or computed
+flag) crashed the daemon at **startup**, before it ever bound its
+socket — confirmed by hand against a real running worker process. Zero
+has a quieter but equally real failure mode: a zero-capacity semaphore
+can never be acquired, so every `Acquire` call would block forever
+instead of crashing. `pool.New` now clamps anything below 1 to 1. Also
+fixed a smaller, related observability bug this surfaced: the startup
+log line printed the *raw* `-max-concurrent` flag value, not the pool's
+actual (possibly clamped) capacity — `doctor`'s own `pool=X/Y` stats
+already used the real `pool.Capacity()` and were never wrong, but the
+one log line calling itself `max_concurrent=-1` while the pool was
+really running at capacity 1 was a real, if cosmetic, inconsistency.
+Verified against a real running worker: started one with
+`-max-concurrent -1`, confirmed it stayed alive (rather than crashing)
+and its own startup log correctly reported `max_concurrent=1`.
+
+### The idle-session reaper could close a subprocess mid-turn
+
+`worker.sessionCache` reuses one `claude` subprocess per session across
+tool calls (cost and latency, see the package's own doc comment), torn
+down after `sessionIdleTimeout` (10 minutes) of disuse by a background
+sweep — a resource bound for a daemon meant to run for days. `lastUsed`
+was refreshed when a turn *started* (`getOrCreate`), but nothing bounded
+how long a single turn could *run*, and nothing refreshed `lastUsed` again
+until the *next* turn started. This project has measured a real single
+observation taking 104 seconds under normal load — comfortably enough
+margin, on a busy daemon or a slow model response, for a turn to still be
+genuinely in flight when the idle sweep looked at a now-stale timestamp
+and decided the session was safe to tear down. The original `evictIdle`
+had no awareness of `sessionEntry.mu` at all: it would call `Close()` on
+the handle regardless of whether `worker.Daemon.process` was still
+blocked inside `Observe`, reading that exact subprocess's stdout — a real
+use-after/during-close hazard on the underlying pipes, not just a wasted
+turn. Traced one level deeper into `claude-agent-sdk-go`'s own
+`Session.Close`/`Send`: no synchronization between them either, so this
+really would have raced two goroutines over one subprocess.
+
+Fixed with `entry.mu.TryLock()` (not a blocking `Lock`) before evicting:
+succeeding *proves* no turn is currently running, so it's genuinely safe
+to close; failing means a turn is active right now, and the sweep simply
+skips that session — safe to defer regardless of how long the turn takes,
+since a session with a turn actively in flight isn't meaningfully idle no
+matter what its timestamp claims. It's reconsidered on the next sweep a
+minute later. A second, related fix closes the timestamp's other gap:
+`lastUsed` is now also refreshed when a turn *finishes* (`touch`, called
+from `process` after a successful `Observe`), not just when one starts —
+without it, a session's idle clock was measured from turn-start, not
+real last-activity time, which is exactly what let a long-but-legitimate
+turn look artificially close to the idle window in the first place.
+
+Verified with dedicated concurrency tests, not just logical review: one
+drives `worker.Daemon.process`'s own critical section directly (acquiring
+`entry.mu` and calling a handle whose `Observe` blocks on command) while
+back-dating `lastUsed` to look idle, confirms `evictIdle` leaves the
+in-flight session alone and its handle unclosed, then releases the
+simulated turn and confirms a *later* sweep does evict it — proving the
+fix defers eviction rather than leaking the session forever. Each new
+test passes cleanly under `go test -race`, and each was confirmed as a
+genuine regression test by temporarily reverting to the old unsafe logic
+and watching it fail before restoring the fix. Also verified live against
+the real compiled binary: temporarily shrunk `sessionIdleTimeout` to 3
+seconds and the sweep interval to 1 second, then ran a real `claude`
+session with real Ollama/observer calls — a genuine ~9-second real
+observation spanned several sweep cycles inside the shrunk idle window,
+and the daemon stayed alive with the observation correctly persisted, no
+panic, no crash — the exact race this fix closes, exercised under real
+production-shaped timing rather than only a synthetic unit test.
+
+### The same gap existed on the shutdown path too
+
+`closeAll` (used on daemon shutdown, `defer d.sessions.closeAll()` in
+`Run`) had the identical bug `evictIdle` just had, found by hand on a
+fresh look at the surrounding code: it called `evict` — no `entry.mu`
+awareness at all — on every cached session regardless of whether a turn
+was still genuinely in flight. Same use-after/during-close hazard,
+different trigger (a real `systemd`/`launchd` restart or manual `kill`
+mid-observation, instead of an idle timer).
+
+The fix can't be identical, though: `evictIdle` can always defer an
+in-flight session to the *next* sweep, but shutdown has no next sweep —
+skipping it the same way would leak the subprocess as an orphan with
+nothing left to ever clean it up. `closeAll` now *waits* (a real
+`entry.mu.Lock()`, not a `TryLock`) for each in-flight turn to finish
+naturally, up to a `closeAllGracePeriod` (5s — the same shape as this
+daemon's own metrics HTTP server shutdown, `Run`'s
+`metricsSrv.Shutdown` with an identical bounded `context.WithTimeout`);
+if a turn hasn't finished within that window, it force-closes anyway
+rather than blocking shutdown forever for a runaway turn — the one
+accepted exception to "never close while a turn might be in flight,"
+since the daemon is exiting either way. Every session's wait runs
+concurrently, so total shutdown time stays bounded by the grace period
+regardless of how many sessions are cached, not multiplied by each one.
+
+Deliberately scoped to just this mutex-safety gap, not a full graceful-
+shutdown redesign: a `handleConn`/`process` goroutine already dispatched
+from `Run`'s `Accept` loop before shutdown began could still be racing
+`getOrCreate` for a brand-new session concurrently with `closeAll`'s own
+snapshot — a real, broader "drain in-flight requests before closing
+anything" concern this fix doesn't attempt, documented honestly rather
+than silently ignored or overclaimed as solved.
+
+Verified with dedicated concurrency tests under `go test -race`: one
+confirms `closeAll` doesn't close a handle until *after* a simulated
+in-flight turn's own `Unlock()`, proving it genuinely waited; another
+confirms a turn that outlives a (shrunk, for the test) grace period gets
+force-closed anyway rather than hanging shutdown indefinitely. Both
+confirmed as genuine regression tests by reverting to the old unsafe
+logic and watching them fail before restoring the fix. Also verified
+live against the real compiled binary: started a real detached worker,
+forwarded a real hook payload, sent it a real `SIGTERM` while the
+observation was genuinely in flight (confirmed via the worker's own log
+timestamps), and confirmed the daemon shut down cleanly — no panic, no
+hang, no orphaned process left behind afterward.
+
+### `observations.type` had zero validation anywhere, in either backend
+
+Nothing — not the schema, not the Go code — validated `type` against
+this project's own small, fixed vocabulary (`discovery`/`change`/
+`decision` from the real observer prompt, `summary` from the Stop hook's
+session-summary prompt, `manual` hardcoded in `add_observation`). An
+LLM's `<type>` tag drifting to an unrecognized value, or a corrupted/
+hand-edited import file, would have silently persisted a row invisible
+to any `-type`/`type` filter, with no error anywhere. Found by hand as a
+real schema-completeness gap, not a demonstrated live bug — worth
+checking before assuming it's purely theoretical: queried the actual
+distinct `type` values across 3000+ real rows this project's own testing
+has accumulated in its shared Postgres dev container, and every single
+one already fell within the vocabulary. (While verifying the fix below —
+a real, if minor, reminder that "checked once" isn't "stays true": the
+break/restore verification step for the new tests briefly left two
+rows with an invalid `type` in that same shared container, caught and
+cleaned up immediately, not organic drift.)
+
+Fixed at both real ingestion boundaries — `Insert` and `ImportRow`,
+via their shared `insertRow` — with `store.ValidateObservationType`,
+returning a clear error before either backend's own driver ever sees an
+unrecognized value. For the Postgres backend specifically (the
+production-scale backend this project's "schema completeness" mandate is
+really about), also added a real `CHECK` constraint via a new migration
+— a schema-level guarantee that holds regardless of which code path
+ever writes a row, not just the ones that go through this Go package.
+Since Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, the migration wraps
+it in a `DO` block checking `pg_constraint` first, so it stays idempotent
+the way every migration here must be.
+
+Verified thoroughly: dedicated tests in both backends confirming
+`Insert`/`ImportRow` reject an unrecognized type and persist nothing,
+each confirmed as a genuine regression test by temporarily disabling the
+validation call and watching the test fail before restoring it. The
+Postgres `CHECK` constraint itself was verified independently of the Go
+code — dropped it by hand, confirmed a raw SQL `INSERT` with a bad
+`type` succeeded (proving the drop genuinely took effect and Go-side
+validation alone wasn't masking the test), then restored it and
+confirmed the identical raw `INSERT` now fails with a real Postgres
+constraint-violation error — the actual schema-level guarantee, not just
+the application-level one.
+
+### `add_observation` had no size bound on any of its inputs
+
+Every other external-input surface in this codebase is bounded somewhere:
+`hook.MaxPayloadBytes` caps the hook socket, `store.MaxIDsPerLookup` caps
+`get_observations`' id list, `maxLimit` caps every list tool's `limit`
+argument. `add_observation`'s title/subtitle/narrative/facts/concepts
+were the one exception — they arrive straight from an MCP tool call's
+JSON arguments with no length check at all, and unlike `PostToolUse`'s
+captured fields (already bounded by `transcript.FieldCap` before an
+observation is even built), a manually-added observation's fields went
+straight from the wire into a database row and, when semantic search is
+enabled, an Ollama embedding request. A caller (accidentally or
+otherwise) handing it a multi-megabyte "title" would have been accepted
+exactly like a real one — stored forever and printed in full by every
+list tool's formatter.
+
+Fixed with per-field byte caps (`maxObservationTitleBytes` = 500,
+`maxObservationSubtitleBytes` = 1000, `maxObservationNarrativeBytes` =
+10000) sized several times larger than any real value ever needs —
+matching what `observer.go`'s own prompt already asks a well-behaved
+caller for (title a "short title", subtitle a "one-line detail",
+narrative "one paragraph") — plus count-and-per-item caps on `facts`/
+`concepts` (`maxObservationFactsCount`/`maxObservationConceptsCount` =
+50 items, `maxObservationFactBytes` = 1000, `maxObservationConceptBytes`
+= 200) following the same "no legitimate caller needs more than a page"
+reasoning already governing `store.MaxIDsPerLookup` and
+`store.MaxTimelineDepth` — facts and concepts are meant to be a handful
+of discrete, short items, not an unbounded list. An oversized argument
+gets a clean `isError` tool result naming the limit that was exceeded,
+the same shape `get_observations` already uses for too many ids, rather
+than a silently-accepted row or a raw driver/network error.
+
+Verified with dedicated tests sending real MCP `tools/call` requests
+with oversized title/narrative/facts arguments against a real SQLite
+backend, each confirmed as a genuine regression test by temporarily
+removing the validation call and watching every one of them fail
+(a 501-byte title, a 10001-byte narrative, 51 facts, and a 1001-byte
+single fact all got accepted and stored instead of rejected) before
+restoring the fix and confirming they pass again — plus a non-regression
+test confirming normal-sized fields still succeed, so this is a real
+bound and not an accidental block on legitimate calls.
+
+### File-context injection and session summaries leaked into subagent tool calls
+
+Claude Code's hook payloads carry `agent_id`/`agent_type` only when a
+hook fires from inside a Task-tool subagent invocation rather than the
+main session — absent otherwise. Real claude-mem's own adapter
+(`src/cli/adapters/claude-code.ts`'s `normalizeInput`) reads these same
+two fields off the same payload, and two of its handlers gate real
+behavior on them: `file-context.ts` skips injecting file memory
+entirely when `input.agentId` is set, and `summarize.ts` skips the
+end-of-session summary the same way — a subagent isn't the end user's
+actual session, so it shouldn't see automatically-injected memory or
+trigger a session-level summary of its own.
+
+`claude-agent-sdk-go`'s `HookInput` never modeled either field, so
+neither check was even possible here: `file-context` (this port's
+`PreToolUse`/`Read` hook) unconditionally injected whatever memory
+existed about a file, including into a subagent's own `Read` calls, and
+`stop` had no equivalent guard. Fixed by adding `AgentID`/`AgentType` to
+`HookInput` (`claude-agent-sdk-go` v0.1.2) and wiring the identical skip
+into both `file-context` and `stop`, in the same order real claude-mem
+checks them: project-exclusion first, then the subagent check.
+
+Verified live end to end rather than just by reading the TS source: a
+real `claude` session launched with `--plugin-dir`, one turn doing a
+direct `Read` of a seeded file (no `agent_id` present — `file-context`
+proceeds to its normal lookup) and a second turn dispatching a `Task`
+subagent to `Read` the same file (`agent_id` set, `agent_type` =
+`general-purpose` — `file-context.log` shows the new skip line).
+Confirmed as a genuine fix, not a tautological check, by temporarily
+removing the guard, rebuilding, and rerunning the identical
+subagent-`Read` scenario: without the guard the exact same call fell
+through to the normal "no prior observations" lookup path instead of
+being skipped, before the guard was restored and re-verified.
+
+### `prompt-context` couldn't tell a real prompt apart from an internal Claude Code protocol notification
+
+Claude Code can auto-submit a `<task-notification>...</task-notification>`-
+wrapped payload as a `UserPromptSubmit` "prompt" — a background/subagent
+task-completion notification, not real user text. Real claude-mem's
+`isInternalProtocolPayload` (`src/utils/tag-stripping.ts`) is checked at
+both of its `UserPromptSubmit` capture boundaries — the CLI handler
+(`session-init.ts`, immediately after its project-exclusion check, before
+any privacy check or embedding) and the HTTP session-init route — and
+bails out immediately when it fires.
+
+This port had no equivalent anywhere. `prompt-context` would strip
+privacy tags from a `<task-notification>` payload (a no-op, since it
+isn't a privacy tag), report a non-private state to the worker, and —
+since such payloads are often well past the `-min-prompt-len` floor —
+pay a real Ollama embedding call and inject "Memory relevant to what you
+just asked" context in response to internal plumbing, not anything a
+user actually asked.
+
+Fixed with `privacy.IsInternalProtocolPayload`, ported from
+`tag-stripping.ts`'s own version. That TS regex combines a `\1`
+backreference with a negative lookahead keyed off that same backreference
+(`(?:(?!<\1\b|</\1\b)[\s\S])*`) — Go's RE2 engine can express neither
+half of it, so this is plain string operations instead: verify the whole
+(trimmed) string is exactly one open tag, a body containing no further
+occurrence of the tag name, and the matching close tag — the same shape
+the backreference restricts the TS version to. Wired into
+`prompt-context` in real claude-mem's own check order: right after the
+project-exclusion check, before privacy stripping or the
+`hook.SetSessionPrivate` notification to the worker.
+
+All 12 test cases were ported directly from real claude-mem's own
+`tests/utils/tag-stripping.test.ts` `isInternalProtocolPayload` suite —
+read and ported from the actual test file, not re-derived from prose:
+bare, empty-body, whitespace-surrounded, multiline, and attributed
+blocks (all `true`); an unclosed tag, user text surrounding the block,
+unrelated tags, an over-256KB payload, and two adjacent or
+text-separated blocks (all `false` — the last deliberately, since the
+check is a deny-list per single well-formed block, not concatenations of
+them). Every case passes against this port's plain-string
+implementation. Verified live against the real compiled binary too: a
+real `<task-notification>` payload correctly skipped before ever
+attempting to reach the worker socket (confirmed by pointing at a
+deliberately unreachable socket path and seeing no connection-failure
+log line at all), confirmed as a genuine fix by temporarily removing the
+guard and watching the identical payload instead attempt a real worker
+notification (which then logged the expected connection failure) and
+proceed to a real Ollama embedding call, before restoring it.
+
+### `prompt-context` had no protection against a duplicate `UserPromptSubmit` firing
+
+Claude Code can fire `UserPromptSubmit` more than once for the same
+prompt — a real, previously-shipped bug on the TS side, not a
+theoretical one: real claude-mem's own issue #2515 tracked exactly this,
+and its fix (`findRecentDuplicateUserPrompt`,
+`src/services/sqlite/prompts/get.ts`) checks a session's tag-stripped
+prompt text against `USER_PROMPT_DEDUPE_WINDOW_MS`
+(`src/shared/user-prompts.ts`, 10 seconds) right after its privacy check
+and before saving the prompt or doing semantic injection
+(`SessionRoutes.ts`). Without it, a duplicate firing pays its own
+embedding call and injects its own duplicate "memory relevant to what
+you just asked" block in the same turn.
+
+This port had no equivalent anywhere — no `user_prompts` table to check
+against, and no dedup logic at all. `cmdPromptContext` embedded and
+injected on every single invocation unconditionally, so a duplicate
+`UserPromptSubmit` would pay a second real Ollama round-trip and inject
+the recall block twice in one turn.
+
+Fixed by extending the worker daemon's plain-text socket protocol again
+(the same pattern `PRIVATE`/`ISPRIVATE` and `INFLIGHT` already use) with
+a `DEDUPE <session_id> <hash>` request/response call
+(`hook.CheckDuplicatePrompt`/`hook.ParseDedupeQuery`). The worker keeps a
+per-session `{lastPromptHash, firstSeen}`
+(`sessionCache.checkAndRecordPrompt`, alongside the existing
+privacy-flag state, for the same reason: it must work before any
+`sessionEntry` exists) and reports whether an identical hash was already
+recorded within the window. The window is deliberately measured from
+the *original* prompt's own timestamp, never extended just because
+someone asks again — matching real claude-mem's own semantics precisely:
+`findRecentDuplicateUserPrompt` checks against the original saved row's
+`created_at`, not against whichever check happened most recently, so a
+prompt genuinely repeated by the user after the window elapses is
+correctly treated as new rather than silently swallowed. Wired into
+`prompt-context` right after the privacy check, matching real
+claude-mem's own ordering (privacy first, then duplicate detection).
+
+Verified with new worker-package tests: a wire-format round trip, the
+full check-and-record exchange driven through the real client function
+against a real socket (including the case that matters most — a
+different, later prompt hash supersedes the earlier one, and re-checking
+that now-stale earlier hash correctly reads as NOT a duplicate anymore),
+an explicit window-expiry test, and stale-entry eviction. Verified live
+end to end too: a real worker daemon, the identical `UserPromptSubmit`
+payload sent twice for one session against a real Ollama model — the
+first call reached a real embedding/semantic-search attempt, the second
+was skipped as a duplicate — confirmed as a genuine fix by temporarily
+disabling the check and watching both calls independently reach a real
+embedding call before restoring it.
+
+### `recent_observations` claimed to match `SessionStart`'s output but didn't
+
+`recent_observations`' own description said it uses "the same read path
+SessionStart's automatic context injection already uses" — true of the
+underlying query (`RecentByProject`), but not of the text an MCP caller
+actually got back. `recent_observations` formats through
+`formatSearchResults`: abbreviated `[id] title (project, tool)` lines.
+The real `SessionStart` hook (`cmd/claude-mem-go/context.go`'s
+`formatContext`) produces a completely different shape — no ids, no
+project/tool annotation, prose instead of a list — and defaults to 5
+observations, not 10. An MCP client asking "what would `SessionStart`
+actually show for this project" via `recent_observations` got a
+structurally different answer than what Claude Code really saw at
+session start. This is the identical class of gap `observation_context`
+closed for `UserPromptSubmit` (added specifically because it was "the
+last hook-only read capability without an on-demand equivalent") — just
+missed for `SessionStart`.
+
+Matches real claude-mem's own `session_start_context` tool
+(`src/servers/mcp-server.ts`), whose handler calls the same
+`/api/context/inject` path its own `SessionStart` hook uses to render
+"the same text hooks inject at startup."
+
+Fixed by adding `session_start_context(limit?, project?)`, reusing
+`RecentByProject` — no new store code, only a new MCP surface over a
+read path that already existed. Its own default limit is 5, not the 10
+every other list-shaped tool here defaults to, matching
+`cmdContext`'s real default exactly: the whole point of this tool is
+returning what the real hook would actually inject, not an
+independently-chosen number. `formatSessionStartContext` duplicates
+`context.go`'s `formatContext` byte for byte — the same
+can't-import-`package main`-without-a-cycle constraint
+`formatObservationContext`'s own doc comment explains.
+
+Verified with new tests: byte-for-byte output parity against a seeded
+observation (confirmed as a genuine test, not a tautology, by
+temporarily breaking the formatter's header text and watching it fail
+before restoring it), the 5-vs-10 default-limit distinction (seeded 7
+observations, confirmed exactly 5 returned with no explicit limit), and
+project-scoping/no-project-error/empty-project-message coverage
+mirroring `recent_observations`' own existing tests. Verified live end
+to end too, past the unit tests: a real compiled binary, a real seeded
+observation, the actual `SessionStart` hook's `additionalContext` output
+(captured via the real `context` subcommand) diffed against the new
+tool's output for the same project and database through the real `mcp`
+subcommand — byte-for-byte identical.
+
+### `search` couldn't filter by date range or change sort order — despite this README's own claim that it needed a schema redesign
+
+This README used to excuse skipping real claude-mem's `dateStart`/
+`dateEnd`/`orderBy` search filters with a claim that neither "maps onto
+an existing column without a real schema/query redesign." That was
+false in exactly the same way this same paragraph already proved the
+`-offset` excuse false: real claude-mem's `SessionSearch.ts` implements
+both as plain `WHERE`/`ORDER BY` clauses against `created_at_epoch` — a
+column this schema already has and already indexes
+(`idx_observations_created`, the same one `RecentByProject` already
+queries). No migration, no new column, nothing this port's simpler
+schema lacked.
+
+Fixed by extending `Store.Search`/`postgres.Store.Search` with
+`dateStartMs, dateEndMs int64` (Unix epoch milliseconds, 0 = unbounded)
+and `orderBy string`. Date bounds are a straightforward `AND
+created_at_epoch >= ?`/`<= ?`. `orderBy` mirrors real claude-mem's own
+`SessionSearch.buildOrderClause` precisely: `"relevance"` (also the
+default when empty) ranks by the existing rank-then-id order;
+`"date_desc"`/`"date_asc"` switch to `created_at_epoch`, tied against
+`id` for the same pagination-determinism reason the rank tiebreak
+exists; any other, unrecognized value falls back to `date_desc` —
+matching `buildOrderClause`'s own default case exactly rather than
+silently treating a typo as "relevance."
+
+Wired through the `search_observations` MCP tool (`dateStart`/`dateEnd`
+as RFC3339 or bare `YYYY-MM-DD` strings, `orderBy`, matching real
+claude-mem's own tool schema) and the `search` CLI subcommand
+(`-date-start`/`-date-end`/`-order-by`). Date-string parsing
+(`store.ParseDateArg`) accepts the same two forms real claude-mem's
+`new Date(s).getTime()` does (a bare date is UTC midnight) plus a raw
+epoch-milliseconds string, shared by both call sites so they can't drift
+on what counts as a valid date.
+
+Verified against both real backends, including the live Postgres
+container: seeded rows with distinct, directly-set `created_at_epoch`
+values (not `Insert`'s own `time.Now()`, for exact control) and
+confirmed `dateStart` alone, `dateEnd` alone, and both together isolate
+exactly the expected rows; confirmed `date_desc`/`date_asc` return the
+expected newest-first/oldest-first id order and that an unrecognized
+`orderBy` value produces the identical order `date_desc` does — each
+confirmed as a genuine test, not a tautology, by temporarily removing
+the date-filter clause and watching the date-range test fail before
+restoring it. Verified live end to end too: the real compiled binary, a
+backdated row via direct SQL, a real `search_observations` call through
+the `mcp` subcommand with `dateStart` correctly excluding it, and
+`orderBy=date_asc` correctly ordering it first.
+
+### `search`'s type filter couldn't match more than one observation type at once
+
+Real claude-mem's own `search` tool documents `obs_type` as "Comma-
+separated for multiple" — `SearchManager.ts`/`SearchOrchestrator.ts`
+split it on comma, and `SessionSearch.ts` then builds a `type IN
+(...)` clause instead of a plain equality one when given more than one
+value. This port's `Search` only ever matched a single type exactly
+(`o.type = ?`); there was no split, no `IN` path, and no way to ask for
+"change or decision but not discovery" without two separate calls and
+merging the results by hand — a realistic query shape given the fixed,
+small observation-type vocabulary (`discovery`/`change`/`decision`/
+`summary`/`manual`) this schema already enforces with a CHECK
+constraint.
+
+Fixed with a new `store.SplitCommaList` helper (comma-split, trim, drop
+empties — the same normalization `SearchManager.ts` does) used by both
+backends' `Search`: one matching type still becomes the existing `type
+= ?` equality clause; more than one becomes `type IN (?,?,...)` (the
+Postgres backend's version slots into its existing dynamic
+placeholder-numbering scheme, added for exactly this kind of composable
+filter). No `Backend` interface change was needed — `obsType` stays a
+plain `string`, comma-separated, matching the wire shape
+`search_observations`'s `type` argument and the `search` CLI's `-type`
+flag already had.
+
+Verified against both real backends, including the live Postgres
+container: seeded three observations of three different types, confirmed
+a comma-separated filter (`"discovery,decision"`) returns exactly the
+union of the named types and excludes the third, including a case with
+whitespace around the comma (`"discovery, decision"`) to confirm
+trimming — each confirmed as a genuine test by temporarily reverting to
+single-value-only matching and watching the multi-type test fail before
+restoring the fix. Verified live end to end too: the real compiled
+binary, three seeded observations backed by real distinct types, and a
+real `search_observations` call with `type="discovery,decision"`
+correctly returning exactly those two and excluding the third.
+
+### `timeline`'s default depth was 3, not real claude-mem's actual 10 — and it silently ignored a genuine caller mistake
+
+`timeline`'s `depth_before`/`depth_after` defaulted to 3 when omitted.
+Real claude-mem's own `SearchManager.timeline` defaults both to **10**
+(`depth_before != null ? Number(depth_before) : 10`) — a real
+doc/behavior mismatch inside claude-mem itself, since its own tool
+schema's description text says "default 3," but an actual call that
+omits both arguments gets 10 back. This port's docs and behavior agreed
+with each other, just both at the wrong number: the identical "call
+`timeline` with just an anchor" pattern this port's own
+`important_workflow` text recommends returned under a third of the
+surrounding context a real claude-mem call would.
+
+Separately, real claude-mem's `timeline` explicitly errors when a caller
+provides both `anchor` and `query` ("Cannot provide both... Use one or
+the other") — this port silently preferred `anchor` and ignored `query`
+with no error at all, which could mask a genuine mistake (e.g. a stale
+`query` left over from copy-pasting a different call) instead of
+surfacing it.
+
+Fixed both: the default is now 10 (matching real claude-mem's actual
+runtime behavior, not its own stale doc string — there was no reason to
+deliberately reproduce a bug in claude-mem's own docs into a fresh
+codebase), and providing both `anchor` and `query` now returns a clear
+tool error instead of silently doing something other than what was
+asked. Verified with new tests: seeded 21 observations and confirmed an
+anchor-only call with no depth arguments returns all 21 (10 before + the
+anchor + 10 after), not 7 (3+anchor+3); confirmed a call with both
+`anchor` and `query` set returns `isError`. Each confirmed as a genuine
+test, not a tautology, by temporarily reverting the default back to 3 (or
+removing the dual-argument check) and watching the corresponding test
+fail before restoring the fix. Verified live end to end too: the real
+compiled binary, 21 real seeded observations, and a real `timeline` call
+with only `anchor` given returning exactly all 21 rows.
+
+### The Postgres backend had no statement timeout — a single hung query could wedge the entire connection pool
+
+`postgres.Open` bounds `MaxOpenConns` at 10 — shared by every hook
+process and the worker daemon talking to this backend — but nothing
+bounded how long any single query on those 10 connections could run.
+Real claude-mem's own Postgres pool config sets a real
+`statement_timeout` (`src/storage/postgres/config.ts`'s
+`DEFAULT_STATEMENT_TIMEOUT_MS`, 30 seconds, overridable via
+`CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS`), applied by the `pg` driver
+on every connection it opens (`createPostgresPool`). This backend had no
+equivalent anywhere — confirmed by grep, zero hits for
+`statement_timeout` in the whole Go repo before this fix. A single hung
+query (lock contention from a concurrent `prune`/`reembed`, a
+pathological HNSW query plan, a network stall to Postgres) held its
+connection forever; a handful of them exhausts the entire 10-connection
+pool, and every subsequent caller — every `PostToolUse` hook, every MCP
+tool call — blocks indefinitely with no self-healing short of
+restarting the process.
+
+Fixed by appending a `statement_timeout` query parameter to the DSN
+before `sql.Open`, so pgx applies it as a startup runtime parameter on
+every physical connection — confirmed empirically against a real
+container (not assumed from pgx's own docs) that this actually works:
+a DSN with `statement_timeout=2000` appended, run against a real
+`SELECT pg_sleep(5)`, errored at ~2s with Postgres's own "canceling
+statement due to statement timeout" rather than the parameter being
+silently ignored. Defaults to 30 seconds (matching real claude-mem's own
+default exactly), overridable via the identical
+`CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS` env var name so an operator
+migrating settings between the two systems doesn't need to learn a new
+knob. An operator's own explicit `statement_timeout` already present in
+the DSN is left untouched, and a DSN that fails to parse as a URL is
+also returned unchanged — `sql.Open`/the ping retry fail on their own
+merits shortly after, the same as any other malformed DSN, rather than
+this silently swallowing that error to force a timeout in.
+
+Verified with unit tests covering `withStatementTimeout`'s logic
+(default applied, explicit value preserved, env var override, malformed
+DSN left alone) and, against the real live container: `Open`ing a Store
+with the env var set to a short value, running a real
+`SELECT pg_sleep(10)`, and confirming it errors at ~1.5s (not 10s) with
+the real Postgres timeout error — each confirmed as a genuine test by
+temporarily removing the `withStatementTimeout` call from `Open` and
+watching the test fail (the query ran the full 10 seconds with no
+timeout) before restoring it. Also confirmed the pool actually recovers
+afterward, not just that one query times out: a trivial `SELECT 1`
+immediately after the timed-out query succeeds near-instantly on the
+same `Store`, proving the connection came back to the pool rather than
+staying wedged.
+
+### The initial connection ping had no per-attempt timeout — a firewalled or black-holed Postgres could hang every retry, not just the query timeout above
+
+`pingWithRetry`'s own doc comment claimed a "~7.75s worst case" for the
+initial connection retry loop, "well inside every hook's 10-30s
+timeout." That bound only held if each failed attempt failed *fast*
+(connection refused, DNS failure) — every real caller in this project
+passes an undeadlined context (`context.Background()` or a
+signal-only daemon context), so a single `db.PingContext(ctx)` call
+against a host that completes the TCP handshake but never answers
+(firewalled, black-holed, a dropped route — the realistic "Postgres
+unreachable" case, not just "container still starting") had nothing
+bounding it at all. It could hang for however long the OS's own TCP/read
+timeout is, on **each** of the 6 retry attempts — turning the documented
+~7.75s bound into a potentially much longer hang, the exact outage the
+comment claimed this loop prevented. This is a distinct gap from the
+`statement_timeout` fix above: that one bounds query execution *after*
+a connection exists; this is the connection attempt itself, before any
+query is even possible. Real claude-mem's own
+`connectionTimeoutMillis`/`DEFAULT_CONNECTION_TIMEOUT_MS` (5s,
+overridable via `CLAUDE_MEM_POSTGRES_CONNECTION_TIMEOUT_MS`) is exactly
+this missing knob, passed straight into `pg.Pool` so the driver bounds
+every individual connection attempt regardless of the caller's own
+timeout — the Go port had no equivalent, relying entirely on a
+caller-supplied deadline its own comments admitted never existed.
+
+Fixed by wrapping each individual ping attempt in
+`context.WithTimeout(ctx, connectionTimeout())` rather than passing the
+caller's context straight through — `context.WithTimeout` composes
+correctly with whatever deadline the caller's context might already
+carry (the shorter of the two always wins), so this only ever tightens
+the bound, never loosens a caller's own tighter one. Defaults to 5
+seconds, matching real claude-mem's own default and env var name
+exactly. Verified with a real regression test: a real TCP listener that
+accepts a connection and then goes silent (never answering Postgres's
+startup packet — the same "connected but unresponsive" shape a
+black-holed host produces), confirming `pingWithRetry` against it now
+returns in well under a second instead of hanging — confirmed as a
+genuine test, not a tautology, by temporarily reverting to the caller's
+raw context and watching the same test hang past its own timeout
+entirely (needed an explicit bounded `-timeout` to even fail cleanly)
+before restoring the fix.
+
+### The Postgres pool's size and idle timeout were hardcoded — and the idle timeout was 10x off from real claude-mem's own default
+
+Continuing the same vein as the two connection-robustness fixes just
+above: real claude-mem's `PostgresConfig` has five pool knobs, each
+read from an env var with a fallback default —
+`max`/`CLAUDE_MEM_POSTGRES_POOL_MAX` (default 10),
+`idleTimeoutMillis`/`CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` (default
+30 *seconds*), plus the `connectionTimeoutMillis` and
+`statementTimeoutMillis` knobs already ported. This port's `Open` had
+env-var overrides for the latter two, but `SetMaxOpenConns` and
+`SetConnMaxIdleTime` were still bare literals: `10` (matching real's
+default value, but with no way to override it — an operator sharing one
+Postgres server across many deployments, the exact scenario this pool's
+own doc comment discusses, had no knob to turn) and `5 * time.Minute` —
+a real, found-by-hand **10x mismatch** against real claude-mem's own
+30-*second* default, not just a missing override.
+
+Fixed with `poolMax()`/`idleTimeout()`, mirroring
+`connectionTimeout()`'s exact shape (env var → parse → positive-only
+fallback to default), using the identical env var names
+(`CLAUDE_MEM_POSTGRES_POOL_MAX`, `CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS`)
+so an operator migrating settings between the two systems doesn't need
+to learn new knob names. `SetMaxIdleConns` is left as its existing
+literal — real claude-mem's `pg.Pool` has no separate "minimum idle
+connections" concept, so there's nothing to port parity against there.
+SSL/TLS config (`parseSsl` in `config.ts`) also needed no Go-side
+equivalent: pgx already honors `sslmode`/`PGSSLMODE` natively from the
+DSN/environment per standard libpq conventions, which is exactly why
+`parseSsl` exists on the TS side (node's `pg` needs the help; pgx
+doesn't).
+
+Verified against the real live container: setting
+`CLAUDE_MEM_POSTGRES_POOL_MAX=3` and confirming `Open`'s resulting
+`db.Stats().MaxOpenConnections` is actually 3, not the hardcoded 10 —
+confirmed as a genuine test by temporarily reverting the wiring and
+watching it fail (still reporting 10 despite the env var) before
+restoring the fix — plus unit tests locking in `idleTimeout()`'s
+default now matching real claude-mem's 30-second value exactly (not the
+old 5-minute one) and both helpers' env var override/fallback behavior.
+
+### Worker shutdown could still race a brand-new session's own goroutine, a gap the code itself had already flagged as unaddressed
+
+`sessionCache.closeAll`'s own doc comment named a real gap it deliberately
+didn't attempt to close: "a handleConn/process goroutine already
+dispatched from Run's Accept loop before shutdown began could still be
+racing `getOrCreate` for a BRAND NEW session concurrently with this
+snapshot." Concretely — a `PostToolUse` event for a session never seen
+before, whose connection was accepted a moment before `SIGTERM`, calls
+`getOrCreate` *after* `closeAll` already took its snapshot of the
+session map. `closeAll` returns without ever knowing that goroutine
+exists, `st.Close()` runs right after, and that goroutine's own later
+`Insert`/`SaveEmbedding` call hits an already-closed store — logged as
+a failure and silently dropped, with no retry. Real claude-mem's own
+`performGracefulShutdown` orders this correctly (stop accepting → drain
+all sessions → close the database) — this port had the deadline
+concept (`closeAllGracePeriod`) but the *drain set itself* was a
+snapshot taken too early to cover every dispatched goroutine.
+
+Fixed with a `sync.WaitGroup` (`processWG`) tracking every `process()`
+goroutine from the moment it's dispatched (`dispatchProcess`, replacing
+the bare `go d.process(ctx, raw)` handleConn used before) rather than
+from whenever it happens to register itself in the session map. `Run`
+now waits on this WaitGroup (`waitForProcessDrain`, bounded by the same
+kind of grace period `closeAll` already uses) *before* `closeAll` runs,
+not after — Go's defer LIFO ordering means registering this wait
+immediately after `closeAll`'s own defer makes it execute first, so by
+the time `closeAll` runs, every dispatched turn (known session or brand
+new) has already either finished or been give up on together, not
+`closeAll`'s snapshot leaving some of them permanently invisible to it.
+
+Verified with a real regression test rather than a live SIGTERM race
+(inherently too timing-fragile to hit precisely on demand — the same
+reasoning this codebase's own prior concurrency fixes lean on
+deterministic synchronization primitives for their primary proof): a
+`process()` goroutine is dispatched directly for a session that was
+*never* registered in the session cache at all — the exact "brand new"
+shape this gap describes — using a fake observer handle that blocks
+until released. Confirms `waitForProcessDrain` does not return while
+that turn is still genuinely in flight, and that the observation is
+actually persisted in the store once it completes and the wait returns
+— confirmed as a genuine test, not a tautology, by temporarily reverting
+`dispatchProcess` to the original bare `go d.process(...)` and watching
+the same test fail (the wait returned immediately, before the turn even
+finished) before restoring the fix. A live smoke test (a real worker
+daemon, a real dispatched event, `SIGTERM` sent mid-turn) confirmed no
+regression to the daemon's overall shutdown behavior — clean exit, no
+hang, no panic.
+
+### `doctor` never checked the one thing that makes automatic capture work at all
+
+`doctor` verified the `claude` CLI, the worker socket, the database, and
+Ollama — but never whether this project is actually **installed as a
+Claude Code plugin**. That's the single most consequential thing it could
+check: every automatic capture path (`SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `Stop`) runs *only* because a real plugin
+installation wires `hooks/hooks.json` in. Without it, every other check
+passes — CLI found, database reachable, Ollama serving — while nothing is
+ever captured and the store stays permanently empty. `doctor` would print
+"All critical checks passed" over a completely inert install. Real
+claude-mem's own doctor has exactly this check
+(`src/npx-cli/commands/doctor.ts`'s "Plugin installed") and marks it
+required.
+
+Added a `plugincheck` package that reads Claude Code's own
+`~/.claude/plugins/installed_plugins.json` and reports whether this
+plugin is present, at which scopes and versions. Matching is on the
+plugin-name half of each `"<name>@<marketplace>"` key rather than the
+whole key — the same plugin installed from a GitHub-hosted marketplace
+instead of this repo's local one is still installed, and a check that
+only recognized one marketplace name would report a false negative for a
+working setup. A missing or unparseable manifest reads as "not
+installed" rather than an error: a machine that has never installed any
+plugin simply has no such file, which is a real answer, not a failure to
+answer.
+
+Reported prominently but **not** as a critical failure — a deliberate
+divergence from real claude-mem's `required: true`, documented at the
+call site. There, an installed plugin is the only way the product runs at
+all; here, the CLI subcommands (`search`/`export`/`prune`) and the MCP
+server are genuinely first-class without it, and `--plugin-dir` runs the
+hooks for real without ever touching the installed-plugins manifest.
+Hard-failing would report a broken install for setups working exactly as
+intended, so the message names the real consequence ("automatic capture
+is inactive: no hooks fire, so nothing is being recorded") and the
+legitimate exceptions instead.
+
+Verified against real Claude Code state, both directions, not fixtures:
+with the plugin genuinely not installed, the real compiled `doctor`
+reported it missing; the plugin was then really installed
+(`claude plugin marketplace add` + `claude plugin install --scope local`),
+and the same binary reported `✔ plugin "claude-mem-go" installed
+(scope=local version=0.3.0)` — reading the real scope and version Claude
+Code itself had written. That round trip also confirmed the assumption
+the whole check rests on: the key Claude Code actually writes is exactly
+`claude-mem-go@claude-mem-go-local`, matching the parsing shape. The
+plugin and marketplace were then uninstalled and the machine's plugin
+state confirmed byte-identical to before (matching MD5s, zero residue).
+Unit tests cover marketplace-independent matching, multi-scope installs,
+absent/corrupt/missing manifests, and a `TestPluginNameMatchesManifest`
+drift guard that reads the *real* `.claude-plugin/plugin.json` and fails
+if the Go constant ever diverges from it — the exact silent-staleness
+shape this project already found once in the MCP server's hardcoded
+`serverInfo.version`. Each confirmed genuine by break/restore: breaking
+the name matching failed the marketplace-independence and multi-scope
+tests, and staling the constant failed the drift guard.
+
+Also fixed a stale comment this surfaced: `sessionCache.closeAll`'s doc
+comment still described the "drain in-flight requests before closing
+anything" gap as deliberately unaddressed, which stopped being true when
+the previous fix closed it. It now points at `processWG`/
+`waitForProcessDrain` and explains the ordering instead.
+
+### …and "installed" turned out not to mean "able to run" — the check above could affirm an install that cannot execute
+
+The plugin check above closed a real gap, and immediately opened a
+sharper one: it reports a plugin *installed* without ever verifying the
+install contains a working copy of the binary every hook actually
+invokes. That made the previous state of affairs strictly worse in one
+respect — `doctor` now affirmatively vouched for installs that cannot
+run.
+
+Every capture path resolves `"$CLAUDE_PLUGIN_ROOT/claude-mem-go"` — all
+five events in `hooks/hooks.json`, plus `.mcp.json` — and that binary is
+gitignored, built separately with `go build`, and copied into the plugin
+cache in whatever state the source tree happened to be in at install
+time. Install from a fresh clone without building first, or unpack a
+release archive for the wrong architecture, and the install is present
+and perfectly well-formed while every hook silently fails to execute.
+Real claude-mem checks the equivalent (`doctor.ts`'s "Marketplace
+runtime" stats the install's actual runtime payload, and its Bun check
+*executes* `bun --version` rather than trusting mere presence).
+
+Confirmed by hand against a real install rather than reasoned about:
+removing the binary from the real `installPath` left a plugin Claude
+Code still considers installed, whose hook command cannot run at all.
+`plugincheck.Install.InstallPath` was already being parsed from the real
+manifest and was dead in every non-test path — the data needed was
+already in hand, just unused.
+
+Added `plugincheck.BinaryStatus`, which joins `InstallPath` +
+`PluginName`, requires a regular file with an execute bit, and then
+**executes** it (`version`, under a bounded timeout) rather than only
+stat-ing — deliberately, because a wrong-architecture or truncated
+binary stats perfectly and fails only when run, which is exactly what a
+health check should catch before a real session does. Reported as
+critical **only when the plugin is installed**, matching real
+claude-mem's own `required: installed`: that preserves the deliberate
+carve-out for `--plugin-dir` and CLI/MCP-only users (who never had an
+install for this to be true of) while hard-failing the case where
+someone has installed and it genuinely cannot work. A rebuilt-but-not-
+reinstalled tree — an easy state to reach, since the cache holds a copy
+that `go build` alone never updates — is reported as an informational
+version-skew note rather than a failure, since a stale binary still runs.
+
+Verified against real Claude Code state across all three outcomes, with
+the plugin genuinely installed each time: a working binary reported
+`↳ binary OK (scope=local): claude-mem-go ac46ddcd2bff (...)` and exit
+0; deleting that binary produced `✘ plugin binary unusable ...` naming
+the exact path and remediation, **exit 1**; `chmod -x` on it produced
+`is not executable (mode -rw-r--r--)`, exit 1; restoring it returned to
+exit 0. The version-skew note also fired correctly and unprompted during
+this run, against a `-dirty` local build. Machine plugin state was
+confirmed byte-identical afterward (matching MD5s, zero residue). Unit
+tests cover a real compiled binary, a missing one, a non-executable one,
+a corrupt-but-executable one, a directory in its place, and an empty
+install path — each confirmed genuine by break/restore: reducing the
+check to stat-only failed both the real-build and corrupt-binary tests,
+the latter asserting in as many words that "a stat-only check would have
+passed this."
+
+### Postgres keyword search silently ignored `facts` and `concepts` — a measured cross-backend divergence
+
+The SQLite backend's FTS5 table has always covered five columns —
+`title, subtitle, narrative, facts, concepts`. The Postgres backend's
+generated `search_vector` covered only three, leaving `facts` and
+`concepts` unreachable by keyword search entirely. Two `memory.Backend`
+implementations returning different results for the same query against
+the same data, which is exactly the contract that interface exists to
+guarantee. Real claude-mem covers them on both its engines (its SQLite
+`fts5(...)` lists `facts`/`concepts` explicitly; its Postgres
+`content_search` tsvectors the entire observation content).
+
+Not theoretical — measured against this project's own accumulated dev
+container (6,210 real rows): **536 of 567 fact strings and 200 of 289
+concept tags could not be found by a search for their own text.**
+Reproduced end-to-end with the compiled binary on a byte-identical row,
+exported from Postgres and imported into a fresh SQLite file:
+
+```
+SQLite:   search "multi-agent system" → [1] claude-mem project structure examined
+Postgres: search "multi-agent system" → no matches
+```
+
+The row's `narrative` contains "multi-agent" but "system" appears *only*
+in `concepts` — and `plainto_tsquery` ANDs its terms, so the whole query
+missed.
+
+Fixed by extending `search_vector` to also cover `facts` and `concepts`
+at weight `'D'`, in both `schemaSQL` (so fresh databases are correct) and
+a new **migration version 3** (so existing ones are repaired). A
+generated column's expression can't be `ALTER`ed in place, so the column
+is dropped and re-added — which is also what backfills every existing
+row, since Postgres recomputes a generated column for the whole table on
+`ADD COLUMN`. Every statement is `IF EXISTS`/`IF NOT EXISTS`, so a
+partially-applied run re-runs cleanly as `migrate.Run` requires.
+
+Two assumptions were verified against a real Postgres 16 rather than
+assumed, since both could have sunk the approach: that `jsonb::text` is
+immutable enough for a `STORED` generated column (Postgres rejects
+non-immutable expressions there outright), and that JSON's own brackets
+and quotes tokenize away harmlessly — a probe on `'["multi-agent
+system"]'` yielded `'agent':3 'multi':2 'multi-ag':1 'system':4` and
+matched correctly. Weight `'D'` keeps `ts_rank_cd` ordering preferring a
+title or narrative hit over a tag hit.
+
+Verified against the live container end to end: the migration applied in
+about a second across all 6,210 rows, after which **`facts_unsearchable`
+dropped 536 → 0 and `concepts_unsearchable` 200 → 0** with every row
+intact, the original reproduction now returns the same row on both
+backends, and `EXPLAIN` confirms the rebuilt GIN index is still chosen
+(`Bitmap Index Scan on idx_observations_search_vector`). New regression
+tests cover a facts-only term, a concepts-only term, and the `'D'`-weight
+ranking guarantee, with a mirrored SQLite test making the parity contract
+explicit on both sides — the SQLite behavior was always correct but never
+asserted, which is precisely how Postgres was able to drift away from it
+unnoticed. Confirmed genuine by rebuilding the live column back to three
+columns and watching both Postgres tests fail, then re-applying the real
+migration (which also proved it re-runs cleanly).
+
+### Boolean search operators worked on SQLite and silently broke on Postgres
+
+`sanitizeFTSQuery` deliberately preserves uppercase `AND`/`OR`/`NOT`
+unquoted so FTS5 treats them as real operators — a documented, intentional
+feature of the SQLite backend. The Postgres backend used
+`plainto_tsquery`, which ANDs every token and treats `OR`/`NOT` as
+ordinary words (English stopwords, so they vanish entirely). Same
+`memory.Backend` interface, same data, different answers.
+
+Measured against three identical rows seeded into both backends:
+
+```
+query "alpha OR beta"   sqlite=[only-alpha only-beta both]  postgres=[both]
+query "alpha NOT beta"  sqlite=[only-alpha]                 postgres=[both]
+query "alpha"           sqlite=[only-alpha both]            postgres=[only-alpha both]
+query "alpha beta"      sqlite=[both]                       postgres=[both]
+```
+
+`OR` silently lost two of three results. `NOT` was worse than lossy: it
+returned **exactly the row the user asked to exclude** and dropped the one
+they wanted — no error, no warning.
+
+Real claude-mem already uses `websearch_to_tsquery` for its own Postgres
+search (`src/storage/postgres/observations.ts`), which is also the only
+tsquery parser Postgres documents as never raising a syntax error on
+arbitrary user input — confirmed by hand against unbalanced quotes, stray
+`&`/`|`/`!`, and a bare `NOT`, none of which error.
+
+Swapping the parser alone wasn't enough, and checking rather than assuming
+turned up two things:
+
+- `websearch_to_tsquery` does **not** honor a bare uppercase `NOT` — it
+  yields `'alpha' & 'beta'`, silently ANDing the very term the user meant
+  to exclude, which is the original bug again. Negation has to be spelled
+  `-term`, so `websearchQuery` rewrites `NOT term` → `-term`.
+- `websearch_to_tsquery` **does** honor *lowercase* `or`/`not` as
+  operators, while FTS5 (and `sanitizeFTSQuery`, deliberately) only honors
+  uppercase. Left alone, a literal search for "cats or dogs" would OR on
+  one backend and AND on the other — the same divergence class, pointing
+  the other way. Quoting every non-operator token neutralizes it.
+
+One residual difference is deliberately **not** papered over: Postgres's
+`english` config strips stopwords and FTS5 doesn't, so a query made
+entirely of stopwords can still match differently. That's a fundamental
+engine difference predating this fix and affecting every query — claiming
+otherwise would be overstating the parity actually achieved.
+
+Verified against the live container and a real SQLite file with the
+compiled binary: all five queries above now return identical result sets
+on both backends, and the hyphen case that motivated `sanitizeFTSQuery` in
+the first place still matches through the new quoted path — as do
+`key:value` and `(parens)`. New tests cover the translation table and the
+OR/NOT/AND/hyphen behaviors end to end, confirmed genuine by reverting to
+`plainto_tsquery` and watching the OR and NOT subtests fail.
+
+### A corrupt backup imported "successfully" into SQLite and silently made the store un-migratable
+
+The Postgres backend has always parsed `CreatedAt` as RFC3339 on import —
+its column is `TIMESTAMPTZ`, so it had no choice. The SQLite backend
+passed the string straight into a `TEXT` column that accepts anything.
+`ImportRow` is the only door for a non-RFC3339 value, since the normal
+write path hard-codes `now.Format(time.RFC3339)` — so this only bites a
+corrupt or hand-edited backup, which is exactly the moment you least want
+a silent failure.
+
+Measured, with a three-row backup containing one bad date and one empty
+date:
+
+```
+$ claude-mem-go import -db ./sq.db -in bad.jsonl
+Imported 3 observation(s), skipped 0 already present.
+
+$ sqlite3 sq.db "select content_hash, quote(created_at) from observations"
+h_baddate    |'not-a-date'
+h_emptydate  |''
+```
+
+A clean success message over a poisoned column. But the damage doesn't
+stop there, and that's what makes this worth a hard error rather than a
+lenient coercion — `ExportAll` re-emits the bad value verbatim, so the
+documented SQLite→Postgres migration path then dies on it:
+
+```
+$ claude-mem-go export -db ./sq.db -out roundtrip.jsonl
+Exported 3 observation(s)
+$ claude-mem-go import -db postgres://… -in roundtrip.jsonl
+FAILED importing row (content_hash=h_baddate): parse CreatedAt "not-a-date"
+```
+
+`cmdImport` has no transaction, so that failure lands half-restored. A
+restore that *reported success* quietly renders the store un-migratable,
+and nobody finds out until cutover.
+
+Fixed with a shared `store.ParseExportCreatedAt` that **both** backends'
+`ImportRow` now call. Sharing it is the actual point rather than a
+convenience: the two disagreeing was itself the bug, so one definition of
+"valid timestamp" is what stops them drifting again. The SQLite side keeps
+storing the original string rather than a re-formatted parse, so
+well-formed rows round-trip byte-identically and a repeated import stays
+the genuine no-op `ImportRow`'s idempotency guarantee promises — both
+verified by dedicated tests.
+
+Verified end to end with the compiled binary: the same bad backup now
+fails on row 1 with the identical message Postgres gives and writes **zero**
+rows, while a good-only file still imports, stores `created_at`
+byte-for-byte, and re-imports as a no-op. Table-driven tests run the same
+six cases (malformed, empty, impossible date, space-instead-of-T, and two
+valid forms) against both backends, confirmed genuine by removing the
+SQLite validation and watching all four rejection cases fail.
+
+Worth recording what this survey *didn't* find, since it bounds the
+concern: five other candidate divergences in the same import path were
+checked against both backends and all matched — negative `cost_usd`,
+negative `created_at_epoch`, empty `session_id`/`project`/`content_hash`,
+duplicate `content_hash` within one file, and invalid observation `type`
+(already shared via `store.ValidateObservationType`). Malformed JSON
+arrays can't reach either column, since `ExportRow.Observation` is typed
+and `encoding/json` rejects them first.
+
+### The Postgres backend's project filter could make semantic search return **zero** results
+
+`SemanticSearch`'s project predicate was a **post**-filter on the HNSW
+scan: pgvector walks `hnsw.ef_search` (default 40) globally-nearest
+candidates and only *then* drops the ones whose `project` doesn't match.
+When a project's rows aren't among the global nearest, every candidate is
+discarded and the result is empty — no error, no warning. The SQLite
+backend pre-filters, so it always returns `min(limit, project rows)`.
+
+This turns the Postgres backend's entire reason for existing — one shared
+database serving many projects — into silence, and it feeds the
+`UserPromptSubmit` hook and the semantic MCP tools, so memory just stops
+answering.
+
+Reproduced through the real Go API, against a real container, with the
+real schema and **every index in place**: 60,000 embedded rows in the
+queried project, 20,000 in another project whose vectors sat nearer the
+query.
+
+```
+project="target"  (60,000 embedded rows)  ->  0 rows returned
+project="noise"                           -> 10 rows returned
+project=""        (unscoped)              -> 10 rows returned
+```
+
+`EXPLAIN`: `Index Scan using idx_observations_embedding_hnsw … Rows
+Removed by Filter: 40 … actual rows=0`.
+
+Two things made this hard to catch, and both are worth recording. The bug
+is **planner-dependent**: at small row counts Postgres picks a plain btree
+pre-filter and returns correct results, so no small-scale test could have
+found it — at 4,000 rows it worked, at 60,000 it silently broke. And the
+port's existing `-hnsw-ef-search` knob does *not* rescue it; raising
+`ef_search` just walks more global candidates that still belong to the
+wrong project.
+
+Fixed with pgvector 0.8's `hnsw.iterative_scan`, which is purpose-built
+for filtered ANN — the scan keeps going until enough rows survive the
+filter. Measured on the same 60k reproduction: **~26ms**, correct results.
+`strict_order` rather than `relaxed_order`, because callers present these
+as ranked results and `relaxed_order` explicitly abandons ordering
+guarantees.
+
+A materialized-CTE pre-filter also fixes it and is exact, but measured
+**2.7 seconds** on that same data versus ~26ms — it discards the ANN
+property this backend exists to provide. So it's kept only as the
+fallback for pgvector older than 0.8, where slow-and-right still beats
+fast-and-silently-empty. That fallback isn't optional politeness: an
+unsupported `hnsw.*` GUC doesn't degrade quietly, it **errors** on any
+connection that has already touched a vector operation, which would take
+`SemanticSearch` down entirely — the same cold-vs-warm connection quirk
+this package already documents for `ef_search`. So the capability is
+detected once at `Open` from `pg_extension`, and anything uncertain reads
+as unsupported.
+
+The regression test asserts the **routing decision**, not a row count, and
+that choice is deliberate: a row-count assertion at test scale passes
+whether or not the guard exists, which is exactly how this survived. What
+must hold at every scale is that a scoped search is never issued as a bare
+HNSW post-filter. Confirmed genuine by reverting the routing and watching
+it fail. A separate test exercises the CTE fallback directly, since the
+container under test supports iterative scan and would otherwise never run
+that path.
+
+### The Postgres backend was hard-wired to 768-dimension embeddings, and said so in a comment that was wrong
+
+`postgres.Open` takes an `embedDims` parameter, but **no caller ever
+passes a nonzero value** — all 14 call sites pass `0`, which maps to
+`DefaultEmbedDims = 768`. Meanwhile `-embed-model` is a documented flag on
+nine commands. So any model that isn't 768-dimensional (`all-minilm` is
+384, `mxbai-embed-large` is 1024) simply could not be used with the
+Postgres backend, with no override anywhere.
+
+Worse, the failure was quiet in the place it mattered most. On the
+migration path, `import` aborts on the first bad row and leaves a
+**partially populated** database. On the worker path the same error is only
+logged and counted, so ingestion proceeds forever with zero embeddings —
+semantic search dead, nothing visible outside a log line.
+
+And `internal/memory/postgres/reembed.go` asserted that "a genuine dimension mismatch
+can't actually occur here." That was measured false: calling
+`ObservationsNeedingEmbedding` with a mismatched `expectedDims` returns
+*every* embedded row as needing work, and `SaveEmbedding` then rejects each
+one — so `reembed`, the designated remediation path, is a dead end
+precisely when it's needed. The column being fixed-width is what *causes*
+that, not what prevents it. Comment corrected rather than left to mislead
+the next reader.
+
+Three changes:
+
+- **`CLAUDE_MEM_POSTGRES_EMBED_DIMS`** sizes the column when a store is
+  *created*. An env var rather than a flag, deliberately: this is a
+  storage-layer knob in the same family as the four pool settings already
+  ported, every one configured this way, and threading a new flag through
+  all nine `-embed-model` commands would put the setting in nine places
+  instead of one. It deliberately does **not** apply to an existing store —
+  a pgvector column's width is fixed at creation, so re-sizing means
+  rewriting every vector, which is a deliberate migration, not something a
+  startup flag should do silently.
+- **`Open` reads the column's real width from the catalog** rather than
+  assuming the requested one. They genuinely diverge whenever a store
+  predates the current configuration, and every check downstream has to be
+  against what the column will actually accept.
+- **`SaveEmbedding` fails honestly.** It now names both numbers and the
+  remedy instead of surfacing pgvector's bare `expected 768 dimensions, not
+  384`, which says nothing about why they differ or what to do.
+
+A separate cross-backend divergence fixed alongside it: `SaveEmbedding` for
+a **nonexistent observation** returned `nil` on Postgres — an `UPDATE`
+matching zero rows — while SQLite raised a foreign-key violation. The
+caller was told an embedding had been saved when nothing was written.
+Measured, then fixed with a `RowsAffected` check so both backends agree.
+
+`doctor` now also reports `embedding_column_dims`, distinct from the
+histogram of dimensions actually stored. It's the number that decides
+whether a given model can write to the store at all — the single most
+useful fact when semantic search stops working after someone switches
+models — and it was previously invisible.
+
+Verified against a real container throughout: a scratch store created with
+`CLAUDE_MEM_POSTGRES_EMBED_DIMS=384` really has a `vector(384)` column,
+accepts a 384-dim embedding, and rejects a 768-dim one with the actionable
+message; `doctor` reports `embedding_column_dims=384` for it and `768` for
+the real dev store. Both guards confirmed genuine by break/restore — with
+them removed, the dimension test fails showing exactly the bare pgvector
+error this replaces.
+
+Also recorded, since it bounds the search: a systematic cross-backend diff
+of `Timeline`, `ByIDs`, `ObservationsForFile`, `CountByProject`,
+`RecentByProject`, `BySessionID` and `Prune` measured **identical**
+behavior on both backends — ordering and tiebreakers, cross-project anchor
+rejection, missing-anchor errors, depth and limit clamping at `0`/`-1`/
+`-5`/`1000`, prune's `<` cutoff, and no orphaned vector rows on either.
+That part of the vein is dry.
