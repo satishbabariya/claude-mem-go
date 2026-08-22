@@ -92,6 +92,13 @@ var migrations = []migrate.Migration{
 		// CASCADE, which actually fires because the DSN sets
 		// _foreign_keys=on — see sqliteDSNParams, where that is already
 		// load-bearing for observation_vectors.
+		//
+		// The backfill below indexes whatever strings already sit in
+		// files_read/files_modified. It does NOT canonicalize them: rows
+		// written before memory.NormalizeFilePath existed keep their
+		// relative paths and stay unfindable by ObservationsForFile. A
+		// re-normalizing backfill would need each row's original cwd,
+		// which was never stored.
 		Version: 6,
 		Name:    "index observation file paths for the file-context read",
 		Apply: func(ctx context.Context, db *sql.DB) error {
