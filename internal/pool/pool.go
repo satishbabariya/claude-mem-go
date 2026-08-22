@@ -1,7 +1,8 @@
 // Package pool bounds how many observer sessions run at once — the Go
 // analog of src/supervisor/process-registry.ts's waitForSlot()/
 // SlotReservation, called from ClaudeProvider.ts with maxConcurrent :=
-// CLAUDE_MEM_MAX_CONCURRENT_AGENTS (default 2). Deliberately not part of
+// CLAUDE_MEM_MAX_CONCURRENT_AGENTS (default 2 there; 4 here, see
+// worker.DefaultMaxConcurrent). Deliberately not part of
 // claude-agent-sdk-go: a Session is one subprocess: how many run
 // concurrently is this application's policy, not the SDK's concern.
 package pool

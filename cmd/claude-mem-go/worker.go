@@ -23,7 +23,7 @@ func cmdWorker(args []string) int {
 	// one stats file, and `doctor -stats` (which can be pointed anywhere)
 	// had nothing to point AT.
 	statsPath := fs.String("stats", worker.DefaultStatsPath(), "file to write stats snapshots to")
-	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
+	maxConcurrent := fs.Int("max-concurrent", worker.DefaultMaxConcurrent, "observer sessions kept cached at once; a session arriving past this evicts the idlest cached one")
 	metricsAddr := fs.String("metrics-addr", "", "if set, serve Prometheus metrics at http://<addr>/metrics (e.g. 127.0.0.1:9090); empty disables it")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a project whose path or directory name matches one is never observed automatically, the real claude-mem "+
