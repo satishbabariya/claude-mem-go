@@ -381,7 +381,19 @@ func ParseRecallReport(raw []byte) (source RecallSource, results int, ok bool) {
 //
 // Fire-and-forget, and deliberately so: recall is what the user is
 // waiting on, and instrumentation that can delay or fail an injection is
-// worse than no instrumentation. Every error here is swallowed by the
+// worse than no instrumentation.
+//
+// The cost was measured rather than assumed, because RecallFile runs on
+// EVERY Read tool call — the hottest hook path in the system. Against a
+// warmed store, 25 calls per variant: 20.0ms per call with no daemon
+// (connect fails instantly with ENOENT) and 22.4ms with one running, so
+// the report itself costs about 2.4ms against a ~20ms baseline that is
+// dominated by process startup and opening the store. Re-measuring the
+// no-daemon case afterwards reproduced 20.4ms, confirming the difference
+// is the telemetry and not ordering. An earlier version of this
+// measurement showed the opposite — no daemon appearing SLOWER — which
+// was an artifact of the first variant paying for creating and migrating
+// a fresh SQLite file. Every error here is swallowed by the
 // caller — a daemon that is not running simply means no metric, which is
 // the correct tradeoff for a telemetry write on a latency path.
 func ReportRecall(socketPath string, source RecallSource, results int) error {
