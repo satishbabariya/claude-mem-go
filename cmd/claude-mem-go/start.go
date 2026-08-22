@@ -24,7 +24,7 @@ func cmdStart(args []string) int {
 	// doctor's own -stats flags: all three must be able to name the same
 	// file, or they end up describing different daemons.
 	statsPath := fs.String("stats", worker.DefaultStatsPath(), "worker stats file (forwarded to the spawned worker, and read to detect a stale one)")
-	maxConcurrent := fs.Int("max-concurrent", 2, "max concurrent observer sessions")
+	maxConcurrent := fs.Int("max-concurrent", worker.DefaultMaxConcurrent, "observer sessions kept cached at once; a session arriving past this evicts the idlest cached one")
 	metricsAddr := fs.String("metrics-addr", "", "if set, the spawned worker serves Prometheus metrics at http://<addr>/metrics")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns forwarded to the spawned worker's "+
 		"-excluded-projects (see `worker`'s own flag help); empty (the default) excludes nothing")

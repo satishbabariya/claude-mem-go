@@ -42,6 +42,17 @@ import (
 )
 
 // DefaultSocketPath is ~/.claude-mem-go/worker.sock.
+// DefaultMaxConcurrent is how many observer sessions the daemon caches at
+// once when -max-concurrent is not given. Real claude-mem's
+// CLAUDE_MEM_MAX_CONCURRENT_AGENTS defaults to 2; this is 4 because of a
+// measured soak with three real concurrent Claude Code windows: at 2,
+// every third tool call evicted an idle session and respawned its
+// observer (~1-2s each, 3 evictions for 9 events). Nothing was lost —
+// that is what the eviction guarantees — but a cache that thrashes under
+// the most ordinary multi-window use is the wrong default. Each cached
+// session is one idle `claude` subprocess, so 4 is cheap.
+const DefaultMaxConcurrent = 4
+
 func DefaultSocketPath() string { return filepath.Join(memory.DefaultHome(), "worker.sock") }
 
 // idleEvictInterval is how often the background sweep checks for sessions
@@ -57,7 +68,7 @@ type Daemon struct {
 	EmbedModel    string // Ollama model for semantic-search embeddings; empty disables
 	DBPath        string
 	SocketPath    string
-	MaxConcurrent int // mirrors CLAUDE_MEM_MAX_CONCURRENT_AGENTS's default of 2
+	MaxConcurrent int // see DefaultMaxConcurrent
 	Log           *logging.Logger
 	// Version is the build string of the binary running this daemon,
 	// supplied by the caller (cmd/worker) because runtime/debug's build
