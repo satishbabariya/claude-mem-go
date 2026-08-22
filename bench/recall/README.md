@@ -33,38 +33,100 @@ and report a meaningless 100%.
 ```sh
 docker compose up -d
 createdb ... # any throwaway database
-go run ./bench/recall/seed    "postgres://…/throwaway?sslmode=disable" 3000
+go run ./bench/recall/seed    "postgres://…/throwaway?sslmode=disable" 20000
 go run ./bench/recall/measure "postgres://…/throwaway?sslmode=disable"
 ```
 
-Seeding is bounded by Ollama, measured here at ~28 embeddings/second, so
-3,000 rows takes under two minutes.
+Seeding is bounded by Ollama, measured here at ~30 embeddings/second, so
+20,000 rows takes about eleven minutes.
+
+## A retracted result, and why it was wrong
+
+**The first version of this harness reported 95.0% recall@10 at 3,000
+rows. That number was wrong and has been withdrawn.** It is documented
+here rather than quietly deleted, because the failure is the kind that
+produces a confident, plausible, completely meaningless figure.
+
+Two defects combined:
+
+1. **The corpus could not be unique.** The generator drew from 15
+   subjects x 8 verbs x 12 objects — a hard ceiling of 1,440 distinct
+   sentences regardless of row count. A 20,000-row corpus held 1,440
+   distinct vectors, each repeated about fourteen times.
+2. **Recall was counted as id overlap.** When the nearest text appears
+   fourteen times, the exact top-10 is ten copies of ONE vector at an
+   identical distance. Which ten ids come back is arbitrary, and the
+   sequential scan and the HNSW walk break that tie differently. The
+   metric was reporting tie-break agreement, not retrieval quality.
+
+What exposed it was a physical impossibility rather than a failing test:
+at 20,000 rows the curve read 84 -> **100** -> 81 -> 83 -> 85. Recall
+cannot fall as `ef_search` rises, because a larger candidate list
+explores strictly more of the graph. The 3,000-row corpus was duplicated
+too (1,252 distinct across 3,000), just mildly enough that the resulting
+curve looked flat and believable instead of obviously broken.
+
+Both defects are now fixed independently, so neither alone can bring the
+failure back: the seeder appends a real `file:line` detail that makes
+every text unique, and `recallAt` counts how many ANN results are at
+least as close as the exact k-th distance — a definition that is correct
+even if some future corpus does contain ties. `measure` additionally
+**refuses to run** when the corpus is under 99% distinct, and **fails**
+if recall ever drops as `ef_search` rises, rather than printing a number
+no one can tell is broken.
 
 ## Measured
 
-3,000 real `nomic-embed-text` embeddings (768 dimensions), pgvector
-0.8.6, cosine distance:
+20,000 real `nomic-embed-text` embeddings (768 dimensions), all distinct,
+pgvector 0.8.6, cosine distance. Recall is distance-based, not id
+overlap.
 
-| `hnsw.ef_search` | recall@10 |
-|---|---|
-| 20 | 95.0% |
-| 40 (pgvector default) | **95.0%** |
-| 100 | 95.0% |
-| 200 | 95.0% |
-| 400 | 98.0% |
+| `hnsw.ef_search` | recall@10 | p50 query |
+|---|---|---|
+| 20 | 71.0% | 1.5ms |
+| 40 (pgvector default) | **80.0%** | 2.2ms |
+| 100 | 82.0% | 2.0ms |
+| 200 | 94.0% | 3.9ms |
+| 400 | 98.0% | 3.9ms |
 
-**At this corpus size the knob barely matters.** Recall is flat across a
-ten-fold range and only moves at 400. That flatness was checked rather
-than assumed: `SET LOCAL hnsw.ef_search` was confirmed to actually take
-effect on a pooled connection (`SHOW` returns the requested value), since
-this project has previously found Postgres accepting that GUC silently
-without applying it. The likeliest reading is that a 3,000-node graph is
-shallow enough that even a narrow search explores most of it, and the
-five misses are near-ties in distance that only a much wider search
-separates.
+The curve is now monotonic, which is the first thing to check: recall
+cannot fall as `ef_search` rises.
 
-**What this does not measure**: sensitivity at scale. `ef_search` is
-expected to matter more as the graph deepens, and demonstrating that
-needs a corpus large enough to be slow to embed. The honest summary is
-that the default is fine here, and that anyone running materially more
-data should re-run this rather than trust a 3,000-row result.
+**The headline is that pgvector's default is not good enough here.** At
+20,000 rows it returns 80% of what an exact scan would — one relevant
+memory in five missing, with no error and nothing in any output to
+suggest anything went wrong. `-hnsw-ef-search 200` buys 94% and `400`
+buys 98%, and the whole range stayed under 4ms p50, so the cost of
+fixing it is roughly a millisecond and a half.
+
+Two honest caveats on those timings. The p50 differences between
+adjacent rows are near the noise floor for ten samples — the defensible
+reading is "the entire range is a few milliseconds", not that 100 is
+genuinely faster than 40. And latency here excludes embedding the query,
+which is measured separately at ~33ms against local Ollama and dominates
+every figure in this table.
+
+`doctor` now reports this: a store past 10,000 embedded rows still on the
+default prints the measured recall and the flag that fixes it. The
+default itself is deliberately unchanged — see `efSearchRecallFloor` in
+`cmd/claude-mem-go/doctor.go` for why one corpus on one embedding model
+is not enough evidence to silently change search behaviour for every
+existing store.
+
+`SET LOCAL hnsw.ef_search` was confirmed to actually take effect on a
+pooled connection (`SHOW` returns the requested value), since this
+project has previously found Postgres accepting that GUC silently
+without applying it.
+
+At 20,000 rows the planner also chooses the HNSW index *on its own* —
+verified with `EXPLAIN` — whereas at 3,000 rows it still prefers a
+sequential scan. Forcing both plans is what makes the comparison valid at
+either size; without that, a "natural" query below the crossover
+silently compares exact against exact and reports a meaningless 100%.
+
+**What this does not measure**: behaviour past 20,000 rows, and recall
+for filtered queries (project-scoped searches combine the vector index
+with a predicate, which changes the traversal). Anyone running materially
+more data should re-run this rather than trust this number — the harness
+now fails loudly instead of flattering itself, which is the point of
+keeping it in the tree.

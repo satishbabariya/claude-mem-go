@@ -266,8 +266,10 @@ func cmdDoctor(args []string) int {
 		// has never recorded anything while the plugin IS installed, so
 		// capture is configured and demonstrably not working — is called
 		// out as a real problem.
+		var embeddedRows int
 		if st != nil {
 			if sst, serr := st.Stats(); serr == nil {
+				embeddedRows = sst.Embedded
 				if sst.Observations == 0 {
 					if installed {
 						fmt.Println("✘ the store is EMPTY, but the plugin is installed — capture is configured and not working")
@@ -292,6 +294,7 @@ func cmdDoctor(args []string) int {
 		// hnsw_index_exists=false is a real problem worth surfacing, but
 		// it's a degraded-performance signal, not "nothing works."
 		if details, herr := st.HealthDetails(); herr == nil {
+			reportEfSearchRecall(details, embeddedRows)
 			keys := make([]string, 0, len(details))
 			for k := range details {
 				keys = append(keys, k)
@@ -339,4 +342,43 @@ func cmdDoctor(args []string) int {
 	}
 	fmt.Println("All critical checks passed.")
 	return 0
+}
+
+// efSearchRecallFloor is the corpus size at which pgvector's default
+// hnsw.ef_search stops being good enough, and it is a measured number
+// rather than a guessed one.
+//
+// bench/recall measures recall@10 against a forced exact scan on real
+// nomic-embed-text embeddings. On 20,000 distinct vectors the default
+// ef_search of 40 returns 80% — one relevant memory in five simply
+// missing, with no error and no way for the operator to notice, which is
+// the same silent-degradation shape as the project post-filter bug
+// SemanticSearch already documents. Raising the knob fixes it cheaply:
+// 200 gives 94% and 400 gives 98%, and the p50 query cost across that
+// whole range stayed under 4ms on the same corpus.
+//
+// The threshold is set at 10,000 because that is also, measured with
+// EXPLAIN on the same data, roughly where the planner starts choosing the
+// HNSW index over a sequential scan at all. Below it the scan is exact
+// and ef_search is irrelevant; above it the approximation is live and
+// unmeasured by anything the operator can see.
+//
+// Deliberately a WARNING and not a changed default. The measurement
+// covers one embedding model on one corpus, and silently altering search
+// behaviour for every existing store on that evidence would be a bigger
+// claim than the evidence supports. Telling the operator the number, and
+// the flag that fixes it, is the honest version.
+const efSearchRecallFloor = 10000
+
+// reportEfSearchRecall warns when a store is large enough for the ANN
+// approximation to matter while still running pgvector's default.
+func reportEfSearchRecall(details map[string]string, embedded int) {
+	if details["hnsw_ef_search"] != "default (40)" {
+		return // an override is configured; the operator has already chosen
+	}
+	if embedded < efSearchRecallFloor {
+		return
+	}
+	fmt.Printf("… %d embedded rows with hnsw.ef_search at pgvector's default (40) — measured at ~80%% recall@10\n", embedded)
+	fmt.Println("  ↳ -hnsw-ef-search 200 measured ~94%, 400 ~98%, all under 4ms p50 (see bench/recall)")
 }
