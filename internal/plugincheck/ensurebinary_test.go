@@ -358,7 +358,11 @@ func TestRunHookDetachesStopAndStillDeliversThePayload(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("wrapper failed: %v\n%s", err, out)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	// 1.5s, not 1s: the fixture's blocking path is a 2s sleep, so anything
+	// under that proves the detach; the headroom absorbs bash startup plus
+	// the wrapper's version probe under a loaded -race run of the whole
+	// suite, where 1s flaked at 1.17s.
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
 		t.Fatalf("the wrapper took %s to return; `stop` must detach, not block — blocking is "+
 			"precisely what gets killed when a -p session exits", elapsed)
 	}
