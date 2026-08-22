@@ -75,6 +75,15 @@ type Backend interface {
 	// anything. This is the store's retention story — without it, the
 	// store only ever grows.
 	Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error)
+	// RepairFilePaths removes RELATIVE entries from files_read and
+	// files_modified — rows written before NormalizeFilePath existed, which
+	// ObservationsForFile can never match because Claude Code sends absolute
+	// paths. The observations stay; only the unmatchable path entries go.
+	// They cannot be made absolute instead: the cwd they were relative to
+	// was never stored, and a guessed absolute path would make the row match
+	// the WRONG file. Scoped to one project when non-empty. Returns the
+	// number of observations touched; dryRun counts without writing.
+	RepairFilePaths(ctx context.Context, project string, dryRun bool) (int64, error)
 	// ExportAll returns up to limit observations with id > afterID, oldest
 	// first — call repeatedly with the previous page's last ID until a
 	// page comes back with fewer than limit rows. This backend's only

@@ -53,6 +53,9 @@ func (panickingBackend) ObservationsNeedingEmbedding(context.Context, string, in
 func (panickingBackend) Prune(context.Context, string, int64, bool) (int64, error) {
 	panic("panickingBackend: Prune")
 }
+func (panickingBackend) RepairFilePaths(context.Context, string, bool) (int64, error) {
+	panic("panickingBackend: RepairFilePaths")
+}
 func (panickingBackend) ExportAll(context.Context, int64, int) ([]memory.ExportRow, error) {
 	panic("panickingBackend: ExportAll")
 }

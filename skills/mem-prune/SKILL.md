@@ -31,6 +31,10 @@ they may not have known how many observations that actually covers.
 
 # Step 2 — only after the user confirms the count is what they want:
 "$CLAUDE_PLUGIN_ROOT/claude-mem-go" prune -older-than-days 90 -yes
+
+# report, then strip, relative file paths file-context can never match
+"$CLAUDE_PLUGIN_ROOT/claude-mem-go" prune -relative-paths
+"$CLAUDE_PLUGIN_ROOT/claude-mem-go" prune -relative-paths -yes
 ```
 
 (Fall back to `claude-mem-go prune ...` on `PATH` if `$CLAUDE_PLUGIN_ROOT`
@@ -62,6 +66,14 @@ it is then not the store their hooks are writing to.
 
 - `-older-than-days N` — required; there is no default (an unset cutoff
   refuses to run rather than guessing).
+- `-relative-paths` — a different mode, mutually exclusive with
+  `-older-than-days`: strips RELATIVE entries from `files_read`/
+  `files_modified` on observations written before file paths were
+  canonicalized. The `PreToolUse` file-context lookup can never match
+  those (Claude Code sends absolute paths), and they cannot be made
+  absolute — the cwd they were relative to was never stored, and a guess
+  would make the row match the wrong file. The observations are kept;
+  only the unmatchable path entries go. Dry-run without `-yes`.
 - `-db <path-or-DSN>` — the store to prune. Defaults to `$CLAUDE_MEM_DB`
   if set, else the local SQLite file. See the section above.
 - `-project name` — scope to one project instead of every project in the
