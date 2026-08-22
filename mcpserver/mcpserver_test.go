@@ -1099,12 +1099,16 @@ func TestToolsCallObservationContextRequiresAQuery(t *testing.T) {
 // TestToolsCallSessionStartContextReturnsTheContextHookFormat is
 // session_start_context's counterpart to
 // TestToolsCallObservationContextReturnsThePromptContextHookFormat: locks
-// in that this tool's output is byte-for-byte identical to what
-// cmd/claude-mem-go/context.go's formatContext produces for the real
-// SessionStart hook, not merely similar to it — formatSessionStartContext
-// is a duplicate, not a shared import (see its own doc comment for why),
-// so a future divergence between the two formatters would be caught here
-// rather than silently drifting.
+// in that this tool's output is byte-for-byte identical to what the real
+// SessionStart hook injects, not merely similar to it.
+//
+// Both now call contextfmt.SessionStart, so identical shape is true by
+// construction rather than by this test's vigilance — which is the point,
+// because the previous arrangement (two copies kept in step by this test
+// alone) DID drift the moment a field was added that this fixture did not
+// contain. What this test still earns is the wiring: that the tool's own
+// query loads the fields the shared formatter renders. See
+// TestToolsCallSessionStartContextIncludesNextSteps.
 func TestToolsCallSessionStartContextReturnsTheContextHookFormat(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -1246,5 +1250,40 @@ func TestToolsCallObservationContextDisabledWithoutEmbedModel(t *testing.T) {
 	})
 	if !toolCallIsError(t, resp[0]) {
 		t.Fatalf("observation_context with no embed model configured: want isError=true, got %v", resp[0])
+	}
+}
+
+// TestToolsCallSessionStartContextIncludesNextSteps is the wiring half:
+// sharing a formatter guarantees the two callers render identically, but
+// it cannot guarantee this tool's QUERY actually loads next_steps. A
+// SELECT that omitted the column would produce a perfectly formatted
+// block with the unfinished-work section silently missing — which is the
+// same silent-omission shape the original drift had.
+func TestToolsCallSessionStartContextIncludesNextSteps(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	o := store.Observation{
+		Type:      "summary",
+		Title:     "session summary",
+		NextSteps: []string{"finish the backfill"},
+	}
+	if _, err := st.Insert("s1", "proj", "SessionSummary", store.ContentHash("s1", "SessionSummary", "ns", ""), o, 0); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_start_context","arguments":{}}}`,
+	})
+	got := toolCallText(t, resp[0])
+	if !strings.Contains(got, "Unfinished from the last session in this project:") {
+		t.Errorf("session_start_context omits the unfinished-work block:\n%s", got)
+	}
+	if !strings.Contains(got, "- finish the backfill") {
+		t.Errorf("session_start_context omits the next step itself:\n%s", got)
 	}
 }

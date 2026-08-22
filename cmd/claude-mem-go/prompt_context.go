@@ -8,11 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"claude-mem-go/backend"
+	"claude-mem-go/contextfmt"
 	"claude-mem-go/embed"
 	"claude-mem-go/excludeproject"
 	"claude-mem-go/hook"
@@ -214,15 +214,8 @@ func promptHash(prompt string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// formatPromptContext delegates to contextfmt so this hook and the
+// observation_context MCP tool share one implementation.
 func formatPromptContext(matches []store.VectorMatch) string {
-	var b strings.Builder
-	b.WriteString("Memory relevant to what you just asked:\n\n")
-	for _, m := range matches {
-		fmt.Fprintf(&b, "- %s", m.Observation.Title)
-		if m.Observation.Subtitle != "" {
-			fmt.Fprintf(&b, " — %s", m.Observation.Subtitle)
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return contextfmt.PromptContext(matches)
 }

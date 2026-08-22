@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
 	"claude-mem-go/backend"
+	"claude-mem-go/contextfmt"
 	"claude-mem-go/excludeproject"
 	"claude-mem-go/hook"
 	"claude-mem-go/store"
@@ -113,48 +113,12 @@ func cmdContext(args []string) int {
 	fmt.Println(string(enc))
 	return 0
 }
-func formatContext(recent []store.SearchResult) string {
-	var b strings.Builder
-	// Unfinished work goes FIRST and separately, because it is the one
-	// thing here that is not merely context. Everything below this block
-	// records what happened; these are the things that had not happened
-	// yet when the last session ended, which is what a new session most
-	// needs to know before deciding what to do.
-	//
-	// Taken from the most recent observation that carries any — in
-	// practice the newest session summary, since only the summary prompt
-	// asks for them. Deliberately not merged across sessions: next steps
-	// from three sessions ago were most likely done, and presenting stale
-	// intentions as current is worse than omitting them.
-	if steps := latestNextSteps(recent); len(steps) > 0 {
-		b.WriteString("Unfinished from the last session in this project:\n\n")
-		for _, st := range steps {
-			fmt.Fprintf(&b, "- %s\n", st)
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("Relevant memory from previous sessions in this project:\n\n")
-	for _, r := range recent {
-		fmt.Fprintf(&b, "- %s", r.Observation.Title)
-		if r.Observation.Subtitle != "" {
-			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
 
-// latestNextSteps returns the next steps from the newest observation that
-// has any. recent is already newest-first, so the first hit is the most
-// recent — and only that one is used, rather than accumulating every
-// session's leftovers into a growing list of things probably long done.
-func latestNextSteps(recent []store.SearchResult) []string {
-	for _, r := range recent {
-		if len(r.Observation.NextSteps) > 0 {
-			return r.Observation.NextSteps
-		}
-	}
-	return nil
+// formatContext delegates to contextfmt so the SessionStart hook and the
+// session_start_context MCP tool cannot drift apart — they used to be
+// separate copies, and they did drift.
+func formatContext(recent []store.SearchResult) string {
+	return contextfmt.SessionStart(recent)
 }
 
 // recentAcrossProjects returns the newest `limit` observations across

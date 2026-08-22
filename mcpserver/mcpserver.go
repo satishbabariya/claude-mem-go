@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"claude-mem-go/backend"
+	"claude-mem-go/contextfmt"
 	"claude-mem-go/embed"
 	"claude-mem-go/store"
 )
@@ -1015,16 +1016,7 @@ func formatFullObservations(results []store.SearchResult) string {
 // shape that hook already produces automatically, not a fresh format
 // only coincidentally similar to it.
 func formatObservationContext(matches []store.VectorMatch) string {
-	var b strings.Builder
-	b.WriteString("Memory relevant to what you just asked:\n\n")
-	for _, m := range matches {
-		fmt.Fprintf(&b, "- %s", m.Observation.Title)
-		if m.Observation.Subtitle != "" {
-			fmt.Fprintf(&b, " — %s", m.Observation.Subtitle)
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return contextfmt.PromptContext(matches)
 }
 
 // formatSessionStartContext mirrors cmd/claude-mem-go/context.go's
@@ -1035,16 +1027,7 @@ func formatObservationContext(matches []store.VectorMatch) string {
 // returning the identical text the real SessionStart hook injects, not a
 // fresh format only coincidentally similar to it.
 func formatSessionStartContext(recent []store.SearchResult) string {
-	var b strings.Builder
-	b.WriteString("Relevant memory from previous sessions in this project:\n\n")
-	for _, r := range recent {
-		fmt.Fprintf(&b, "- %s", r.Observation.Title)
-		if r.Observation.Subtitle != "" {
-			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return contextfmt.SessionStart(recent)
 }
 
 func formatVectorMatches(matches []store.VectorMatch) string {
