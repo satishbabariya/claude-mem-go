@@ -167,7 +167,7 @@ func cmdPromptContext(args []string) int {
 	// all. Errors are logged at debug and never affect this hook: the
 	// daemon may legitimately not be running, and a telemetry write must
 	// not delay or fail the injection the user is waiting on.
-	if err := hook.ReportRecall(*socketPath, len(matches)); err != nil {
+	if err := hook.ReportRecall(*socketPath, hook.RecallPrompt, len(matches)); err != nil {
 		l.Debugf("skip: could not report recall outcome to the worker: %v", err)
 	}
 	if len(matches) == 0 {

@@ -23,9 +23,17 @@ func TestReportRecallReachesTheDaemonOverARealSocket(t *testing.T) {
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{}, pool: pool.New(2)}
 	socketPath := newTestSocket(t, d)
 
-	for _, n := range []int{5, 0, 3, 0} {
-		if err := hook.ReportRecall(socketPath, n); err != nil {
-			t.Fatalf("ReportRecall(%d): %v", n, err)
+	reports := []struct {
+		src hook.RecallSource
+		n   int
+	}{
+		{hook.RecallPrompt, 5}, {hook.RecallPrompt, 0},
+		{hook.RecallSession, 3}, {hook.RecallSession, 0},
+		{hook.RecallFile, 0}, {hook.RecallFile, 0},
+	}
+	for _, r := range reports {
+		if err := hook.ReportRecall(socketPath, r.src, r.n); err != nil {
+			t.Fatalf("ReportRecall(%s, %d): %v", r.src, r.n, err)
 		}
 	}
 
@@ -36,16 +44,46 @@ func TestReportRecallReachesTheDaemonOverARealSocket(t *testing.T) {
 	// without the wait. Polling matches how the privacy-marker test
 	// handles the same property of the same socket.
 	deadline := time.Now().Add(2 * time.Second)
-	for d.counters.recallSearches.Load() < 4 && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		if all, _ := d.counters.snapshot(0, 0, 0).RecallTotals(); all == int64(len(reports)) {
+			break
+		}
 		time.Sleep(time.Millisecond)
 	}
 
 	got := d.counters.snapshot(0, 0, 0)
-	if got.RecallSearches != 4 {
-		t.Errorf("RecallSearches = %d, want 4 — every reported recall should count", got.RecallSearches)
+	for _, want := range []struct {
+		src             string
+		searches, empty int64
+	}{
+		{"prompt", 2, 1},
+		{"session", 2, 1},
+		{"file", 2, 2},
+	} {
+		var found bool
+		for _, nr := range got.RecallAll() {
+			if nr.Source != want.src {
+				continue
+			}
+			found = true
+			if nr.Stat.Searches != want.searches || nr.Stat.Empty != want.empty {
+				t.Errorf("recall[%s] = %+v, want searches=%d empty=%d", want.src, nr.Stat, want.searches, want.empty)
+			}
+		}
+		if !found {
+			t.Errorf("RecallAll() never reported source %q — a read path that reports nowhere is unobservable", want.src)
+		}
 	}
-	if got.RecallEmpty != 2 {
-		t.Errorf("RecallEmpty = %d, want 2 — only the zero-result reports should count as empty", got.RecallEmpty)
+
+	// The file path must NOT feed the alarming rate: it is legitimately
+	// empty most of the time, and averaging it in would make the doctor
+	// warning fire on healthy installs.
+	alarmAll, alarmEmpty := got.RecallAlarming()
+	if alarmAll != 4 || alarmEmpty != 2 {
+		t.Errorf("RecallAlarming() = (%d, %d), want (4, 2) — file-context must be excluded", alarmAll, alarmEmpty)
+	}
+	if all, empty := got.RecallTotals(); all != 6 || empty != 4 {
+		t.Errorf("RecallTotals() = (%d, %d), want (6, 4)", all, empty)
 	}
 }
 
@@ -62,7 +100,7 @@ func TestRecallReportDoesNotTouchLastActivity(t *testing.T) {
 	if before := d.counters.snapshot(0, 0, 0).LastActivityAt; before != "" {
 		t.Fatalf("LastActivityAt = %q before anything happened, want empty", before)
 	}
-	if err := hook.ReportRecall(socketPath, 4); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallPrompt, 4); err != nil {
 		t.Fatalf("ReportRecall: %v", err)
 	}
 	// Wait for the report to actually be COUNTED before asserting what it
@@ -70,10 +108,10 @@ func TestRecallReportDoesNotTouchLastActivity(t *testing.T) {
 	// the report simply hadn't been processed yet — which is the classic
 	// way a negative assertion becomes a tautology.
 	deadline := time.Now().Add(2 * time.Second)
-	for d.counters.recallSearches.Load() == 0 && time.Now().Before(deadline) {
+	for d.counters.recallPrompt.searches.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if d.counters.recallSearches.Load() == 0 {
+	if d.counters.recallPrompt.searches.Load() == 0 {
 		t.Fatal("the recall report was never processed — the negative assertion below would be meaningless")
 	}
 	if after := d.counters.snapshot(0, 0, 0).LastActivityAt; after != "" {
@@ -87,13 +125,23 @@ func TestRecallReportDoesNotTouchLastActivity(t *testing.T) {
 // observable, which was the entire point of adding it.
 func TestRecallCountersAppearInPrometheusOutput(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteMetrics(&buf, Stats{RecallSearches: 9, RecallEmpty: 2}); err != nil {
+	if err := WriteMetrics(&buf, Stats{
+		RecallPrompt:  RecallStat{Searches: 9, Empty: 2},
+		RecallSession: RecallStat{Searches: 4, Empty: 0},
+		RecallFile:    RecallStat{Searches: 7, Empty: 6},
+	}); err != nil {
 		t.Fatalf("WriteMetrics: %v", err)
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"claude_mem_go_recall_searches_total 9",
-		"claude_mem_go_recall_empty_total 2",
+		`claude_mem_go_recall_searches_total{source="prompt"} 9`,
+		`claude_mem_go_recall_empty_total{source="prompt"} 2`,
+		`claude_mem_go_recall_searches_total{source="session"} 4`,
+		`claude_mem_go_recall_empty_total{source="file"} 6`,
+		// One HELP/TYPE pair per metric NAME, not per series — emitting
+		// them per label value is malformed exposition that scrapers
+		// reject.
+		"# TYPE claude_mem_go_recall_searches_total counter",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics output missing %q:\n%s", want, out)
@@ -114,16 +162,16 @@ func TestRecallReportReachesTheStatsFile(t *testing.T) {
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{}, pool: pool.New(2)}
 	socketPath := newTestSocket(t, d)
 
-	if err := hook.ReportRecall(socketPath, 0); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallSession, 0); err != nil {
 		t.Fatalf("ReportRecall: %v", err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		s, err := ReadStatsFile(statsPath)
-		if err == nil && s.RecallSearches == 1 {
-			if s.RecallEmpty != 1 {
-				t.Fatalf("stats file RecallEmpty = %d, want 1", s.RecallEmpty)
+		if err == nil && s.RecallSession.Searches == 1 {
+			if got := s.RecallSession.Empty; got != 1 {
+				t.Fatalf("stats file recall[session].Empty = %d, want 1", got)
 			}
 			return
 		}
@@ -153,14 +201,14 @@ func TestHandleConnSurvivesAPanicInDispatch(t *testing.T) {
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{}}
 	socketPath := newTestSocket(t, d)
 
-	if err := hook.ReportRecall(socketPath, 0); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallPrompt, 0); err != nil {
 		t.Fatalf("ReportRecall: %v", err)
 	}
 	// Give the panicking handler time to run and be recovered.
 	time.Sleep(50 * time.Millisecond)
 
 	// The daemon must still be serving. A crashed one fails this.
-	if err := hook.ReportRecall(socketPath, 1); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallPrompt, 1); err != nil {
 		t.Fatalf("daemon stopped serving after a panic in handleConn: %v", err)
 	}
 }

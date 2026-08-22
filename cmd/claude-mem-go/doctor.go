@@ -153,10 +153,12 @@ func cmdDoctor(args []string) int {
 		} else {
 			fmt.Print("… last worker activity before it stopped: ")
 		}
+		recallAll, recallEmptyAll := stats.RecallTotals()
+		recallHit := recallAll - recallEmptyAll
 		fmt.Printf("processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d recall=%d/%d",
 			stats.Processed, stats.Duplicates, stats.ObserverErrors, stats.InsertErrors, stats.EmbedErrors,
 			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions,
-			stats.RecallSearches-stats.RecallEmpty, stats.RecallSearches)
+			recallHit, recallAll)
 		if stats.LastActivityAt != "" {
 			fmt.Printf(" last_activity=%s", stats.LastActivityAt)
 		}
@@ -169,9 +171,25 @@ func cmdDoctor(args []string) int {
 		// against 60,000 observations) that would have shown up here and
 		// nowhere else. Reported, never critical: on a young store,
 		// empty recalls are simply correct.
-		if stats.RecallSearches >= minRecallsToJudge && stats.RecallEmpty*2 > stats.RecallSearches {
-			fmt.Printf("  ↳ %d of %d semantic recalls returned NOTHING — expected on a nearly-empty store, but if it has content, semantic search is finding none of it\n",
-				stats.RecallEmpty, stats.RecallSearches)
+		// Judged on the prompt and session paths only. The file-context
+		// lookup legitimately finds nothing most of the time — most files
+		// have never been touched before — so including it would push the
+		// rate high on a perfectly healthy install and train the operator
+		// to ignore this line.
+		if alarmAll, alarmEmpty := stats.RecallAlarming(); alarmAll >= minRecallsToJudge && alarmEmpty*2 > alarmAll {
+			fmt.Printf("  ↳ %d of %d prompt/session recalls returned NOTHING — expected on a nearly-empty store, but if it has content, memory is reaching none of it\n",
+				alarmEmpty, alarmAll)
+		}
+		// Printed unconditionally when anything has been recalled at all:
+		// the breakdown is what any actual diagnosis needs, and the file
+		// path's own rate is meaningful to a reader even though it is not
+		// alarming on its own.
+		if recallAll > 0 {
+			for _, nr := range stats.RecallAll() {
+				if nr.Stat.Searches > 0 {
+					fmt.Printf("  ↳ recall[%s]: %d of %d returned results\n", nr.Source, nr.Stat.Searches-nr.Stat.Empty, nr.Stat.Searches)
+				}
+			}
 		}
 
 		// The daemon opened its store once, at start, and nothing

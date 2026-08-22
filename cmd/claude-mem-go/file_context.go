@@ -13,7 +13,9 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/excludeproject"
+	"claude-mem-go/hook"
 	"claude-mem-go/store"
+	"claude-mem-go/worker"
 )
 
 // cmdFileContext is the PreToolUse hook (matcher "Read"): injects whatever
@@ -30,6 +32,8 @@ func cmdFileContext(args []string) int {
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic file-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
 		"empty (the default) excludes nothing")
+	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, told how many observations this "+
+		"recall returned so the read path is observable (best-effort — never affects this hook's output)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -96,6 +100,13 @@ func cmdFileContext(args []string) int {
 		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
 		return 0
+	}
+	// Counted separately from the prompt and session paths, and never
+	// alarming on its own: most files genuinely have no prior
+	// observations, so this path's empty rate is high on a perfectly
+	// healthy install.
+	if err := hook.ReportRecall(*socketPath, hook.RecallFile, len(results)); err != nil {
+		l.Debugf("skip: could not report recall outcome to the worker: %v", err)
 	}
 	if len(results) == 0 {
 		l.Printf("no prior observations for file=%s project=%s", targetPath, project)

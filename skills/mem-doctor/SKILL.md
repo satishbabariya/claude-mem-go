@@ -93,6 +93,25 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   `semantic-search`/`prompt-context` to confirm it's actually what you
   think it is, not a live Postgres session setting, since the override
   only ever applies per query via a transaction-scoped `SET LOCAL`)
+- **`recall[...]` lines — whether memory is actually being FOUND.** Every
+  other counter here describes writes. These describe reads, broken down
+  by which hook did the reading, because an empty result means opposite
+  things depending on where it came from:
+  - `recall[session]` — SessionStart's context injection. Persistently
+    empty means sessions are starting with **no memory at all**, the most
+    consequential silent failure this system has.
+  - `recall[prompt]` — UserPromptSubmit's semantic recall. Persistently
+    empty on a project that HAS observations means semantic search is
+    reaching none of them (a missing embedding model, unembedded rows, or
+    an `ef_search` too low — see the next bullet).
+  - `recall[file]` — the PreToolUse file lookup. **Mostly empty is
+    normal** here: most files have no prior observations. It is reported
+    for completeness and deliberately excluded from the warning below.
+
+  `doctor` warns only when a majority of at least 10 *session/prompt*
+  recalls came back empty. On a young store that is simply correct and
+  not a fault; on a store with real content it means memory is not
+  reaching it.
 - **a recall warning on large Postgres stores** — past 10,000 embedded
   rows still on pgvector's default `ef_search`, `doctor` reports that
   semantic search is measurably missing results: `bench/recall` measures

@@ -13,7 +13,9 @@ import (
 
 	"claude-mem-go/backend"
 	"claude-mem-go/excludeproject"
+	"claude-mem-go/hook"
 	"claude-mem-go/store"
+	"claude-mem-go/worker"
 )
 
 // cmdContext is the SessionStart hook that makes this project actually
@@ -34,6 +36,8 @@ func cmdContext(args []string) int {
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
 		"empty (the default) excludes nothing")
+	socketPath := fs.String("socket", worker.DefaultSocketPath(), "worker daemon's unix socket, told how many observations this "+
+		"recall returned so the read path is observable (best-effort — never affects this hook's output)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 5, 100)
 
@@ -81,6 +85,12 @@ func cmdContext(args []string) int {
 		l.Errorf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
 		fmt.Println("{}")
 		return 0
+	}
+	// The most consequential recall outcome in the system: an empty result
+	// here means the session began with no memory at all. Best-effort and
+	// never surfaced — see hook.ReportRecall.
+	if err := hook.ReportRecall(*socketPath, hook.RecallSession, len(recent)); err != nil {
+		l.Debugf("skip: could not report recall outcome to the worker: %v", err)
 	}
 	if len(recent) == 0 {
 		l.Printf("no prior observations for project=%s, nothing to inject", project)

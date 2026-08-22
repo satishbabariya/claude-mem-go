@@ -28,8 +28,6 @@ func WriteMetrics(w io.Writer, s Stats) error {
 		{"claude_mem_go_worker_observer_errors_total", "Observer turns that failed.", "counter", float64(s.ObserverErrors)},
 		{"claude_mem_go_worker_insert_errors_total", "Observations produced but the DB insert failed.", "counter", float64(s.InsertErrors)},
 		{"claude_mem_go_worker_embed_errors_total", "Inserts that succeeded but embedding failed.", "counter", float64(s.EmbedErrors)},
-		{"claude_mem_go_recall_searches_total", "Semantic recalls that ran (read path).", "counter", float64(s.RecallSearches)},
-		{"claude_mem_go_recall_empty_total", "Semantic recalls that returned no results at all.", "counter", float64(s.RecallEmpty)},
 		{"claude_mem_go_worker_cached_sessions", "Observer sessions currently cached.", "gauge", float64(s.CachedSessions)},
 		{"claude_mem_go_worker_pool_in_flight", "Pool slots currently held.", "gauge", float64(s.PoolInFlight)},
 		{"claude_mem_go_worker_pool_capacity", "Pool's maximum concurrent slots.", "gauge", float64(s.PoolCapacity)},
@@ -49,6 +47,31 @@ func WriteMetrics(w io.Writer, s Stats) error {
 				"# TYPE claude_mem_go_worker_info gauge\n"+
 				"claude_mem_go_worker_info{store=%q} 1\n", s.Store); err != nil {
 			return err
+		}
+	}
+
+	// Per-source recall, as labelled series under one metric name — the
+	// idiomatic shape, and the necessary one: an empty file-context lookup
+	// is ordinary while an empty session-start injection is the worst
+	// failure this system has, so a single undifferentiated counter would
+	// be unusable for alerting. Sources are sorted so the output is
+	// deterministic (map iteration order is not).
+	if all, _ := s.RecallTotals(); all >= 0 {
+		for _, m := range []struct {
+			name, help string
+			pick       func(RecallStat) int64
+		}{
+			{"claude_mem_go_recall_searches_total", "Recalls that ran, by read path.", func(v RecallStat) int64 { return v.Searches }},
+			{"claude_mem_go_recall_empty_total", "Recalls that returned no results at all, by read path.", func(v RecallStat) int64 { return v.Empty }},
+		} {
+			if _, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", m.name, m.help, m.name); err != nil {
+				return err
+			}
+			for _, nr := range s.RecallAll() {
+				if _, err := fmt.Fprintf(w, "%s{source=%q} %d\n", m.name, nr.Source, m.pick(nr.Stat)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 

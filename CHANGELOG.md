@@ -34,6 +34,35 @@ process (this project doesn't cut tagged releases on a schedule).
   all under 4ms p50 — monotonic, and the opposite conclusion from the
   retracted one. **The default is not good enough at this size.**
 
+- **The read path is now instrumented at all.** Every metric this project
+  exposed described writes — observations persisted, duplicates, insert
+  and embed errors — and reads have the worse failure mode: a recall that
+  returns nothing raises no error and looks exactly like "nothing was
+  relevant." This project has shipped that failure twice (a cross-project
+  search leak; a project post-filter returning zero rows against 60,000
+  observations) with every counter green throughout. All three hook read
+  paths — SessionStart's injection, UserPromptSubmit's semantic recall,
+  and the PreToolUse file lookup — now report their result count to the
+  daemon over its existing plain-text socket protocol, exposed as
+  Prometheus counters labelled by source, in the stats file, and in
+  `doctor`. Counted **per source** rather than as one total, because an
+  empty file-context lookup is ordinary while an empty session start is
+  the worst failure this system has; averaging them would have destroyed
+  the signal instead of broadening it, so `doctor`'s warning judges only
+  the session and prompt paths. Fire-and-forget with every error
+  swallowed: recall is a latency path the user is waiting on.
+
+  Two defects found by running it end to end, both invisible to unit
+  tests that all passed: `recordStats()` was only called by the capture
+  path, so recall counters reached the metrics endpoint but never the
+  stats file that `doctor` actually reads (on a read-heavy, write-idle
+  machine it would have reported zero forever); and `handleConn` ran as a
+  bare goroutine off the accept loop with no panic recovery, while
+  `process()` — called from inside it — has had one for a while, so any
+  panic in the protocol dispatch would have taken down the daemon and
+  every project on the machine, silently, since these messages get no
+  reply.
+
 - **Scoped recall measured separately — and it is the weaker path.**
   `bench/recall/scoped` covers project-filtered search, which every hook
   actually runs, through the real `SemanticSearch` rather than

@@ -345,10 +345,10 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		_, _ = conn.Write([]byte(reply))
 		return
 	}
-	if results, ok := hook.ParseRecallReport(raw); ok {
+	if source, results, ok := hook.ParseRecallReport(raw); ok {
 		// One-way, like the privacy marker above: no reply, because the
 		// caller is on a latency path the user is waiting on.
-		d.counters.recordRecall(results)
+		d.counters.recordRecall(source, results)
 		// Persist immediately. Every other counter here is written by the
 		// capture path's own deferred recordStats, so without this a
 		// recall counter would only ever reach the stats file when some

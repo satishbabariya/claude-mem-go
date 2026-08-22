@@ -309,6 +309,33 @@ func CheckDuplicatePrompt(socketPath, sessionID, promptHash string) (bool, error
 	}
 }
 
+// RecallSource names which read path a recall report came from. It is a
+// closed set on purpose: the counters behind it are fixed fields rather
+// than a map, and an unrecognized source is rejected at parse time rather
+// than silently folded into another bucket, where it would corrupt the
+// one signal these counters exist to provide.
+type RecallSource string
+
+const (
+	// RecallPrompt is UserPromptSubmit's semantic recall against the
+	// prompt just submitted. An empty result here is genuinely suspicious
+	// on a project that has any content at all.
+	RecallPrompt RecallSource = "prompt"
+	// RecallSession is SessionStart's context injection. Empty means the
+	// session began with no memory whatsoever, which is the single most
+	// consequential silent failure this system has.
+	RecallSession RecallSource = "session"
+	// RecallFile is the PreToolUse file-context lookup. Empty is ORDINARY
+	// here — most files have never been touched before — which is exactly
+	// why it is counted separately instead of being averaged in with the
+	// two above and destroying their signal.
+	RecallFile RecallSource = "file"
+)
+
+func validRecallSource(s RecallSource) bool {
+	return s == RecallPrompt || s == RecallSession || s == RecallFile
+}
+
 // recallPrefix opens ReportRecall's one-way protocol, distinct from every
 // other prefix this package defines so handleConn can tell them apart on
 // the shared socket.
@@ -318,20 +345,24 @@ const recallPrefix = "RECALL "
 // sent by ReportRecall) rather than a hook payload or another message
 // kind, and if so how many results the search returned. Called by the
 // worker daemon's handleConn.
-func ParseRecallReport(raw []byte) (results int, ok bool) {
+func ParseRecallReport(raw []byte) (source RecallSource, results int, ok bool) {
 	s := string(raw)
 	if !strings.HasPrefix(s, recallPrefix) {
-		return 0, false
+		return "", 0, false
 	}
 	fields := strings.Fields(strings.TrimPrefix(s, recallPrefix))
-	if len(fields) != 1 {
-		return 0, false
+	if len(fields) != 2 {
+		return "", 0, false
 	}
-	n, err := strconv.Atoi(fields[0])
+	src := RecallSource(fields[0])
+	if !validRecallSource(src) {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(fields[1])
 	if err != nil || n < 0 {
-		return 0, false
+		return "", 0, false
 	}
-	return n, true
+	return src, n, true
 }
 
 // ReportRecall tells the worker daemon that a semantic recall ran and how
@@ -353,13 +384,16 @@ func ParseRecallReport(raw []byte) (results int, ok bool) {
 // worse than no instrumentation. Every error here is swallowed by the
 // caller — a daemon that is not running simply means no metric, which is
 // the correct tradeoff for a telemetry write on a latency path.
-func ReportRecall(socketPath string, results int) error {
+func ReportRecall(socketPath string, source RecallSource, results int) error {
+	if !validRecallSource(source) {
+		return fmt.Errorf("unknown recall source %q", source)
+	}
 	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(DialTimeout))
-	_, err = conn.Write([]byte(fmt.Sprintf("%s%d", recallPrefix, results)))
+	_, err = conn.Write([]byte(fmt.Sprintf("%s%s %d", recallPrefix, source, results)))
 	return err
 }
