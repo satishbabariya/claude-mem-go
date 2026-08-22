@@ -301,6 +301,44 @@ plugin install, to avoid writing test rows into this machine's real,
 shared production database (the same discipline applied throughout this
 project's live-verification history).
 
+### Persisting prompts (opt-in)
+
+Real claude-mem stores every prompt the user submits in a
+`user_prompts` table; this port, until now, kept only a SHA-256 of each
+prompt in daemon memory for the 10-second dedupe window and discarded it
+(issue #1). The table now exists on both backends — SQLite migration v8
+(`user_prompts` plus a `user_prompts_fts` FTS5 index), Postgres migration
+v6 (a generated `tsvector` under a GIN index) — with the same columns as
+the reference (`session_id`, `project`, `prompt_text`, `prompt_number`,
+`created_at`, `created_at_epoch`).
+
+**Writing to it is off by default**, because this is the one kind of row
+that stores the user's *verbatim words* rather than a model's summary of
+them. Enable it with `-store-prompts` on the `prompt-context` hook, or
+`CLAUDE_MEM_STORE_PROMPTS=1` in the environment the hook runs in. Nothing
+else changes: the hook still prints `{}` and never fails on a storage
+error (logged at `WARN`).
+
+What is stored, and what never is: the write sits *after* every privacy
+gate the hook already applies, in order — the excluded-projects list, the
+internal-protocol-payload check (a `<task-notification>` is not user
+text), `<private>…</private>` stripping, and the wholly-private check. A
+prompt that is entirely private is not stored at all; a prompt with
+private spans stores only the stripped text. Prompts shorter than
+`-min-prompt-len` are stored even though they are not embedded — "yes" is
+still part of what was said. The 10-second duplicate-firing guard applies,
+so a doubled `UserPromptSubmit` does not store the prompt twice.
+
+Reading it back: the `search_prompts` (keyword, or enumerate newest-first
+with no query) and `session_prompts` (one session, in `prompt_number`
+order) MCP tools, both scoped to the current project like their
+observation counterparts. `stats` reports a `prompts` line once any
+exist; `prune -older-than-days` deletes prompts past the cutoff in the
+same scope as observations (its count stays observations-only); `export`
+writes prompt rows after the observation rows tagged `"kind":"prompt"`,
+and `import` dispatches on that tag — rows without one are observations,
+so older export files still import unchanged.
+
 ## Excluding a project from automatic capture — a real feature gap this port had until now
 
 Real claude-mem lets a user opt specific projects out of automatic

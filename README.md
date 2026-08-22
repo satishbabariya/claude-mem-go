@@ -127,6 +127,7 @@ enforces that).
 | `CLAUDE_MEM_POSTGRES_POOL_MAX` | Postgres connection-pool size (default 10). |
 | `CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` | How long an idle pooled Postgres connection is kept (default 30000, matching real claude-mem). |
 | `CLAUDE_MEM_POSTGRES_EMBED_DIMS` | Vector column dimension for the Postgres backend (default 768, must match the embedding model). |
+| `CLAUDE_MEM_STORE_PROMPTS` | `1` makes the `UserPromptSubmit` hook persist each prompt's text (after `<private>` stripping); off by default because it stores the user's verbatim words. Same as `-store-prompts`. See [docs/hooks.md](docs/hooks.md#persisting-prompts-opt-in). |
 | `CLAUDE_MEM_EXCLUDED_PROJECTS` | Real claude-mem's variable; this port takes the same patterns via `-excluded-projects` — see [docs/hooks.md](docs/hooks.md#excluding-a-project-from-automatic-capture--a-real-feature-gap-this-port-had-until-now). |
 | `CLAUDE_MEM_GO_TEST_POSTGRES_DSN` | Test-only: the throwaway database the Postgres tests write to. See [Testing](#testing). |
 
@@ -214,8 +215,10 @@ did). Every log file rotates at 5MB, keeping one prior generation
   as tools: `search_observations`, `semantic_search_observations`,
   `recent_observations`, `session_observations`, `session_start_context`,
   `file_observations`, `get_observations`, `timeline`,
-  `observation_context`, `important_workflow`, and the one write tool,
-  `add_observation`.
+  `observation_context`, `important_workflow`, the one write tool,
+  `add_observation`, and — only once prompt persistence is opted into —
+  `search_prompts` and `session_prompts` over the user's own stored prompts
+  (see [Persisting prompts](docs/hooks.md#persisting-prompts-opt-in)).
 - **`export` / `import`** — JSON Lines backup and restore, and the
   SQLite-to-Postgres migration path: `export` from one backend, `import` into
   the other. Import is idempotent (rows are deduped by `content_hash`) and
@@ -277,44 +280,6 @@ that outgrow a linear scan. `docker-compose.yml` brings up
   observed not to fire under `claude -p`, so `scripts/run-hook.sh` also
   announces a missing/broken binary on SessionStart rather than relying
   on Setup alone.
-
-### Persisting prompts (opt-in)
-
-Real claude-mem stores every prompt the user submits in a
-`user_prompts` table; this port, until now, kept only a SHA-256 of each
-prompt in daemon memory for the 10-second dedupe window and discarded it
-(issue #1). The table now exists on both backends — SQLite migration v8
-(`user_prompts` plus a `user_prompts_fts` FTS5 index), Postgres migration
-v6 (a generated `tsvector` under a GIN index) — with the same columns as
-the reference (`session_id`, `project`, `prompt_text`, `prompt_number`,
-`created_at`, `created_at_epoch`).
-
-**Writing to it is off by default**, because this is the one kind of row
-that stores the user's *verbatim words* rather than a model's summary of
-them. Enable it with `-store-prompts` on the `prompt-context` hook, or
-`CLAUDE_MEM_STORE_PROMPTS=1` in the environment the hook runs in. Nothing
-else changes: the hook still prints `{}` and never fails on a storage
-error (logged at `WARN`).
-
-What is stored, and what never is: the write sits *after* every privacy
-gate the hook already applies, in order — the excluded-projects list, the
-internal-protocol-payload check (a `<task-notification>` is not user
-text), `<private>…</private>` stripping, and the wholly-private check. A
-prompt that is entirely private is not stored at all; a prompt with
-private spans stores only the stripped text. Prompts shorter than
-`-min-prompt-len` are stored even though they are not embedded — "yes" is
-still part of what was said. The 10-second duplicate-firing guard applies,
-so a doubled `UserPromptSubmit` does not store the prompt twice.
-
-Reading it back: the `search_prompts` (keyword, or enumerate newest-first
-with no query) and `session_prompts` (one session, in `prompt_number`
-order) MCP tools, both scoped to the current project like their
-observation counterparts. `stats` reports a `prompts` line once any
-exist; `prune -older-than-days` deletes prompts past the cutoff in the
-same scope as observations (its count stays observations-only); `export`
-writes prompt rows after the observation rows tagged `"kind":"prompt"`,
-and `import` dispatches on that tag — rows without one are observations,
-so older export files still import unchanged.
 
 ## Security
 
