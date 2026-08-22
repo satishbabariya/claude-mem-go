@@ -142,3 +142,11 @@ func TestStopDoesNotSkipAFreshSession(t *testing.T) {
 			"that would disable session summaries outright. Log:\n%s", logOut)
 	}
 }
+
+func TestPruneRequiresExactlyOneMode(t *testing.T) {
+	for _, args := range [][]string{{}, {"-older-than-days", "3", "-relative-paths"}} {
+		if rc := cmdPrune(append([]string{"-db", t.TempDir() + "/x.db"}, args...)); rc != 2 {
+			t.Errorf("prune %v exited %d, want 2 (usage)", args, rc)
+		}
+	}
+}

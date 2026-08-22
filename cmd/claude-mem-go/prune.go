@@ -21,11 +21,17 @@ func cmdPrune(args []string) int {
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	olderThanDays := fs.Int("older-than-days", 0, "delete observations older than this many days (required, must be > 0)")
 	yes := fs.Bool("yes", false, "actually delete — without this, prune only reports how many rows WOULD be deleted")
+	relPaths := fs.Bool("relative-paths", false, "instead of deleting observations, strip RELATIVE entries from files_read/"+
+		"files_modified (rows from before paths were canonicalized; file-context can never match them). "+
+		"Observations are kept. Dry-run without -yes.")
 	fs.Parse(args)
 
-	if *olderThanDays <= 0 {
-		fmt.Fprintln(os.Stderr, "usage: claude-mem-go prune -older-than-days N [-project name] [-yes]")
+	if *relPaths == (*olderThanDays > 0) {
+		fmt.Fprintln(os.Stderr, "usage: claude-mem-go prune (-older-than-days N | -relative-paths) [-project name] [-yes]")
 		return 2
+	}
+	if *relPaths {
+		return pruneRelativePaths(*dbPath, *project, *yes)
 	}
 
 	// created_at_epoch is stored in MILLISECONDS (see sqlite/store.go's and postgres/postgres.go's
@@ -61,6 +67,39 @@ func cmdPrune(args []string) int {
 		fmt.Printf("Deleted %d observation(s) older than %d days (%s).\n", n, *olderThanDays, scope)
 	} else {
 		fmt.Printf("%d observation(s) older than %d days (%s) would be deleted. Re-run with -yes to actually delete them.\n", n, *olderThanDays, scope)
+	}
+	return 0
+}
+
+// pruneRelativePaths is `prune -relative-paths`: the remediation for
+// observations written before memory.NormalizeFilePath existed, whose
+// relative file paths the PreToolUse file-context lookup can never match.
+// See memory.Backend.RepairFilePaths for why the entries are dropped rather
+// than guessed into absolute paths.
+func pruneRelativePaths(dbPath, project string, yes bool) int {
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, dbPath, 0, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
+		return 1
+	}
+	defer st.Close()
+
+	n, err := st.RepairFilePaths(ctx, project, !yes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAILED repairing file paths: %v\n", err)
+		return 1
+	}
+	scope := "every project"
+	if project != "" {
+		scope = fmt.Sprintf("project %q", project)
+	}
+	if yes {
+		fmt.Printf("Stripped relative file paths from %d observation(s) (%s); the observations themselves were kept.\n", n, scope)
+	} else {
+		fmt.Printf("%d observation(s) (%s) carry relative file paths that file-context cannot match. "+
+			"Re-run with -yes to strip those entries (the observations are kept).\n", n, scope)
 	}
 	return 0
 }
