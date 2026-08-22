@@ -1,20 +1,19 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/embed"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 func cmdSemanticSearch(args []string) int {
 	fs := flag.NewFlagSet("semantic-search", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
+	dbPath := cli.DBFlag(fs)
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embeddings "+
 		"(must match the model used when ingesting, or scores will be meaningless)")
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
@@ -29,20 +28,22 @@ func cmdSemanticSearch(args []string) int {
 	}
 	query := fs.Arg(0)
 
-	queryVec, err := embed.NewClient(*embedModel).Embed(query)
+	ctx, cancel := cliContext()
+	defer cancel()
+	queryVec, err := embed.NewClient(*embedModel).Embed(ctx, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to embed query: %v\n", err)
 		return 1
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
+	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	results, err := st.SemanticSearch(*project, queryVec, *limit)
+	results, err := st.SemanticSearch(ctx, *project, queryVec, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED semantic search: %v\n", err)
 		return 1

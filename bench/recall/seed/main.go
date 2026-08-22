@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/embed"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // Real, varied engineering prose — the kind of text this store actually
@@ -52,6 +52,7 @@ var sites = []string{"worker/sessions.go", "store/filepath.go", "postgres/search
 	"hooks/pretooluse.go", "embed/client.go", "cmd/claude-mem-go/doctor.go"}
 
 func main() {
+	ctx := context.Background()
 	dsn, n := os.Args[1], 0
 	fmt.Sscanf(os.Args[2], "%d", &n)
 	st, err := backend.Open(context.Background(), dsn, 0, 0)
@@ -68,17 +69,17 @@ func main() {
 			verbs[rng.Intn(len(verbs))], objects[rng.Intn(len(objects))],
 			sites[rng.Intn(len(sites))], i+1)
 		title := strings.ToUpper(text[:1]) + text[1:]
-		res, err := st.Insert("s-recall", "recall-proj", "Bash",
-			store.ContentHash("s-recall", "Bash", title, fmt.Sprint(i)),
-			store.Observation{Type: "discovery", Title: title, Narrative: text}, 0)
+		res, err := st.Insert(ctx, "s-recall", "recall-proj", "Bash",
+			memory.ContentHash("s-recall", "Bash", title, fmt.Sprint(i)),
+			memory.Observation{Type: "discovery", Title: title, Narrative: text}, 0)
 		if err != nil {
 			panic(err)
 		}
-		vec, err := cl.Embed(embed.ObservationText(title, "", text, nil))
+		vec, err := cl.Embed(ctx, embed.ObservationText(title, "", text, nil))
 		if err != nil {
 			panic(err)
 		}
-		if err := st.SaveEmbedding(res.ID, vec); err != nil {
+		if err := st.SaveEmbedding(ctx, res.ID, vec); err != nil {
 			panic(err)
 		}
 		if (i+1)%500 == 0 {

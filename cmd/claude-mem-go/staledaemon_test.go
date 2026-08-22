@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 func writeStats(t *testing.T, s worker.Stats) string {

@@ -1,15 +1,15 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // cmdStats reports what the store actually CONTAINS.
@@ -29,23 +29,25 @@ import (
 // sync.
 func cmdStats(args []string) int {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	fs.Parse(args)
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FAILED opening store at %s: %v\n", store.RedactDSN(*dbPath), err)
+		fmt.Fprintf(os.Stderr, "FAILED opening store at %s: %v\n", memory.RedactDSN(*dbPath), err)
 		return 1
 	}
 	defer st.Close()
 
-	s, err := st.Stats()
+	s, err := st.Stats(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED reading stats: %v\n", err)
 		return 1
 	}
 
-	fmt.Printf("store: %s\n\n", store.RedactDSN(*dbPath))
+	fmt.Printf("store: %s\n\n", memory.RedactDSN(*dbPath))
 	if s.Observations == 0 {
 		fmt.Println("  The store is EMPTY — nothing has ever been recorded.")
 		fmt.Println("  If the plugin is installed, capture is not working; run `doctor`.")

@@ -1,14 +1,13 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"time"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // cmdPrune deletes observations older than a cutoff — this store had no
@@ -18,7 +17,7 @@ import (
 // delete anything.
 func cmdPrune(args []string) int {
 	fs := flag.NewFlagSet("prune", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	olderThanDays := fs.Int("older-than-days", 0, "delete observations older than this many days (required, must be > 0)")
 	yes := fs.Bool("yes", false, "actually delete — without this, prune only reports how many rows WOULD be deleted")
@@ -29,7 +28,7 @@ func cmdPrune(args []string) int {
 		return 2
 	}
 
-	// created_at_epoch is stored in MILLISECONDS (see store.go's/postgres.go's
+	// created_at_epoch is stored in MILLISECONDS (see sqlite/store.go's and postgres/postgres.go's
 	// Insert — both stamp now.UnixMilli(), not now.Unix()). A seconds-based
 	// cutoff here would be ~1000x smaller than any real row's timestamp,
 	// making created_at_epoch < cutoff false for every row that ever
@@ -39,14 +38,16 @@ func cmdPrune(args []string) int {
 	// (which were unit-agnostic and couldn't have caught this).
 	cutoff := time.Now().AddDate(0, 0, -*olderThanDays).UnixMilli()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	n, err := st.Prune(*project, cutoff, !*yes)
+	n, err := st.Prune(ctx, *project, cutoff, !*yes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED prune: %v\n", err)
 		return 1

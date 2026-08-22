@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // runDoctor runs cmdDoctor with stdout captured, against a socket that is

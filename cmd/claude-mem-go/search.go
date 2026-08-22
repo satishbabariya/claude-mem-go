@@ -1,18 +1,18 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 func cmdSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual. Comma-separated for multiple (default: every type)")
@@ -33,25 +33,27 @@ func cmdSearch(args []string) int {
 	}
 	query := fs.Arg(0)
 
-	dateStartMs, err := store.ParseDateArg(*dateStart)
+	dateStartMs, err := memory.ParseDateArg(*dateStart)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED parsing -date-start: %v\n", err)
 		return 2
 	}
-	dateEndMs, err := store.ParseDateArg(*dateEnd)
+	dateEndMs, err := memory.ParseDateArg(*dateEnd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED parsing -date-end: %v\n", err)
 		return 2
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	results, err := st.Search(*project, query, *obsType, *limit, *offset, dateStartMs, dateEndMs, *orderBy)
+	results, err := st.Search(ctx, *project, query, *obsType, *limit, *offset, dateStartMs, dateEndMs, *orderBy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1

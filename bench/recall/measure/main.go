@@ -1,15 +1,16 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"sort"
 	"time"
 
-	"claude-mem-go/embed"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pgvector/pgvector-go"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
 )
 
 // Queries phrased differently from how the corpus is worded, so this
@@ -164,7 +165,7 @@ func main() {
 	// milliseconds actually being compared.
 	vecs := make([]pgvector.Vector, len(queries))
 	for i, q := range queries {
-		v, err := cl.Embed(q)
+		v, err := cl.Embed(context.Background(), q)
 		if err != nil {
 			panic(err)
 		}

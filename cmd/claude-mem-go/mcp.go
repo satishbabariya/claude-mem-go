@@ -4,8 +4,9 @@ import (
 	"flag"
 	"os"
 
-	"claude-mem-go/mcpserver"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/mcpserver"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
 
 // cmdMCP runs the MCP stdio server. Diagnostics go to a log file, never
@@ -13,8 +14,8 @@ import (
 // line there would corrupt the stream for whatever real client is reading it.
 func cmdMCP(args []string) int {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for "+
+	dbPath := cli.DBFlag(fs)
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for "+
 		"semantic_search_observations (empty disables that tool)")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
 		"query-time recall/speed tradeoff for semantic_search_observations/observation_context, "+
@@ -24,7 +25,7 @@ func cmdMCP(args []string) int {
 	l := openLog("mcp.log")
 	project := ""
 	if cwd, err := os.Getwd(); err == nil {
-		project = store.ProjectFor(cwd)
+		project = memory.ProjectFor(cwd)
 		if project == "." {
 			project = ""
 		}

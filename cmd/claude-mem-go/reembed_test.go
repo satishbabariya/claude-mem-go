@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"claude-mem-go/embed"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/sqlite"
 )
 
 // fakeOllama stands in for a real Ollama server. Every reembed test below
@@ -71,16 +73,16 @@ func (f *fakeOllama) calls() int {
 func seedRowsNeedingEmbedding(t *testing.T, n int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "reembed.db")
-	st, err := store.Open(path)
+	st, err := sqlite.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("observation %d", i)
-		if _, err := st.Insert("s1", "reembed-proj", "Bash",
-			store.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
-			store.Observation{Type: "discovery", Title: title}, 0); err != nil {
+		if _, err := st.Insert(context.Background(), "s1", "reembed-proj", "Bash",
+			memory.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
+			memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
 	}
@@ -138,12 +140,12 @@ func TestReembedBreakerResetsOnSuccess(t *testing.T) {
 	dbPath := seedRowsNeedingEmbedding(t, seeded)
 	rc := cmdReembed([]string{"-db", dbPath, "-yes"})
 
-	st, err := store.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
-	remaining, err := st.ObservationsNeedingEmbedding("", 768, 0, 1000)
+	remaining, err := st.ObservationsNeedingEmbedding(context.Background(), "", 768, 0, 1000)
 	if err != nil {
 		t.Fatalf("ObservationsNeedingEmbedding: %v", err)
 	}

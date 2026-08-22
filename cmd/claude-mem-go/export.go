@@ -1,14 +1,14 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/store"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 // exportPageSize bounds how many rows ExportAll fetches per page — keeps
@@ -23,11 +23,13 @@ const exportPageSize = 500
 // cleanly into either).
 func cmdExport(args []string) int {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	out := fs.String("out", "", "output file (JSON Lines, one observation per line); defaults to stdout")
 	fs.Parse(args)
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -49,7 +51,7 @@ func cmdExport(args []string) int {
 	afterID := int64(0)
 	total := 0
 	for {
-		rows, err := st.ExportAll(afterID, exportPageSize)
+		rows, err := st.ExportAll(ctx, afterID, exportPageSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED export: %v\n", err)
 			return 1
@@ -80,7 +82,7 @@ func cmdExport(args []string) int {
 // duplicating them.
 func cmdImport(args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	in := fs.String("in", "", "input file written by `export` (JSON Lines); required")
 	fs.Parse(args)
 
@@ -96,7 +98,9 @@ func cmdImport(args []string) int {
 	}
 	defer f.Close()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -106,12 +110,12 @@ func cmdImport(args []string) int {
 	dec := json.NewDecoder(f)
 	imported, skipped := 0, 0
 	for dec.More() {
-		var row store.ExportRow
+		var row memory.ExportRow
 		if err := dec.Decode(&row); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED decoding row from %s: %v\n", *in, err)
 			return 1
 		}
-		res, err := st.ImportRow(row)
+		res, err := st.ImportRow(ctx, row)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED importing row (content_hash=%s): %v\n", row.ContentHash, err)
 			return 1

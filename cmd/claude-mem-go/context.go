@@ -10,12 +10,13 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/contextfmt"
-	"claude-mem-go/excludeproject"
-	"claude-mem-go/hook"
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
+	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // cmdContext is the SessionStart hook that makes this project actually
@@ -31,7 +32,7 @@ import (
 // exactly like cmdMCP's stdout constraint.
 func cmdContext(args []string) int {
 	fs := flag.NewFlagSet("context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 5, "how many recent observations to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
@@ -55,7 +56,7 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	pc := store.ProjectContextFor(in.Cwd)
+	pc := memory.ProjectContextFor(in.Cwd)
 	project := pc.Primary
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
@@ -63,9 +64,11 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := hookContext(sessionStartBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -80,7 +83,7 @@ func cmdContext(args []string) int {
 	// composite name, so the two stay distinguishable — this only widens
 	// the read. Real claude-mem does the same (context.ts injects over
 	// getProjectContext(cwd).allProjects, not .primary).
-	recent, err := recentAcrossProjects(st, pc.AllProjects, *limit)
+	recent, err := recentAcrossProjects(ctx, st, pc.AllProjects, *limit)
 	if err != nil {
 		l.Errorf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
 		fmt.Println("{}")
@@ -98,10 +101,10 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	ctx := formatContext(recent)
+	injected := formatContext(recent)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "SessionStart",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
@@ -109,7 +112,7 @@ func cmdContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
-	l.Printf("injected %d recent observations for project=%s (%d bytes)", len(recent), project, len(ctx))
+	l.Printf("injected %d recent observations for project=%s (%d bytes)", len(recent), project, len(injected))
 	fmt.Println(string(enc))
 	return 0
 }
@@ -117,7 +120,7 @@ func cmdContext(args []string) int {
 // formatContext delegates to contextfmt so the SessionStart hook and the
 // session_start_context MCP tool cannot drift apart — they used to be
 // separate copies, and they did drift.
-func formatContext(recent []store.SearchResult) string {
+func formatContext(recent []memory.SearchResult) string {
 	return contextfmt.SessionStart(recent)
 }
 
@@ -134,18 +137,18 @@ func formatContext(recent []store.SearchResult) string {
 // worktree with plenty of its own history is not forced to give up half
 // its slots to the parent — the newest observations win regardless of
 // which project they came from.
-func recentAcrossProjects(st store.Backend, projects []string, limit int) ([]store.SearchResult, error) {
+func recentAcrossProjects(ctx context.Context, st memory.Backend, projects []string, limit int) ([]memory.SearchResult, error) {
 	if len(projects) <= 1 {
 		p := ""
 		if len(projects) == 1 {
 			p = projects[0]
 		}
-		return st.RecentByProject(p, limit)
+		return st.RecentByProject(ctx, p, limit)
 	}
-	var all []store.SearchResult
+	var all []memory.SearchResult
 	seen := make(map[int64]bool)
 	for _, p := range projects {
-		rs, err := st.RecentByProject(p, limit)
+		rs, err := st.RecentByProject(ctx, p, limit)
 		if err != nil {
 			return nil, err
 		}

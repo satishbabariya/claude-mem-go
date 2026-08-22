@@ -9,11 +9,17 @@
   counterpart, not required for normal use).
 
   Install (replace /path/to/claude-mem-go below with your actual binary
-  path — `which claude-mem-go` or wherever you built it):
+  path — `which claude-mem-go` or wherever you built it — and replace
+  CHANGEME in the two log paths at the bottom with your macOS username;
+  launchd does not expand ~ or $HOME, so they must be absolute and should
+  live under your own home rather than world-shared /tmp, where another
+  local user could pre-create or read them):
 
     mkdir -p ~/Library/LaunchAgents
     cp deploy/launchd/com.claude-mem-go.worker.plist ~/Library/LaunchAgents/
-    # edit the ProgramArguments path below to point at your real binary
+    # edit the ProgramArguments path below to point at your real binary,
+    # and the StandardOutPath/StandardErrorPath CHANGEME placeholders
+    mkdir -p ~/.claude-mem-go
     launchctl load -w ~/Library/LaunchAgents/com.claude-mem-go.worker.plist
     launchctl list | grep claude-mem-go
 
@@ -46,8 +52,8 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/tmp/claude-mem-go-worker.stdout.log</string>
+	<string>/Users/CHANGEME/.claude-mem-go/worker.launchd.stdout.log</string>
 	<key>StandardErrorPath</key>
-	<string>/tmp/claude-mem-go-worker.stderr.log</string>
+	<string>/Users/CHANGEME/.claude-mem-go/worker.launchd.stderr.log</string>
 </dict>
 </plist>

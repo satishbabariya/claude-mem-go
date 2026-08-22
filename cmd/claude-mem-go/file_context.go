@@ -11,11 +11,13 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/excludeproject"
-	"claude-mem-go/hook"
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // cmdFileContext is the PreToolUse hook (matcher "Read"): injects whatever
@@ -27,7 +29,7 @@ import (
 // an actual Read tool call, before writing any of this.
 func cmdFileContext(args []string) int {
 	fs := flag.NewFlagSet("file-context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 5, "how many prior observations about this file to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic file-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+
@@ -73,14 +75,16 @@ func cmdFileContext(args []string) int {
 		return 0
 	}
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := hookContext(fileContextBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
@@ -93,44 +97,67 @@ func cmdFileContext(args []string) int {
 	// a payload ever carries a relative path. Claude Code sends absolute
 	// today, which is exactly why relative rows written by the observer
 	// never matched.
-	targetPath := store.NormalizeFilePath(in.Cwd, toolInput.FilePath)
+	targetPath := memory.NormalizeFilePath(in.Cwd, toolInput.FilePath)
 
-	results, err := st.ObservationsForFile(project, targetPath, store.FileContextCandidateLimit(*limit))
+	results, ok := fetchFileObservations(ctx, l, st, project, targetPath, *limit, *socketPath)
+	if !ok {
+		return 0
+	}
+	results, ok = filterFileObservations(l, in.Cwd, targetPath, results, *limit)
+	if !ok {
+		return 0
+	}
+	return emitFileContext(l, targetPath, project, results)
+}
+
+// fetchFileObservations is the read step: the candidate rows for
+// targetPath, with the recall outcome reported. Returns false when there
+// is nothing to inject (error or no rows) — "{}" has already been printed.
+func fetchFileObservations(ctx context.Context, l *logging.Logger, st memory.Backend, project, targetPath string, limit int, socketPath string) ([]memory.SearchResult, bool) {
+	results, err := st.ObservationsForFile(ctx, project, targetPath, memory.FileContextCandidateLimit(limit))
 	if err != nil {
 		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
-		return 0
+		return nil, false
 	}
 	// Counted separately from the prompt and session paths, and never
 	// alarming on its own: most files genuinely have no prior
 	// observations, so this path's empty rate is high on a perfectly
 	// healthy install.
-	if err := hook.ReportRecall(*socketPath, hook.RecallFile, len(results)); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallFile, len(results)); err != nil {
 		l.Debugf("skip: could not report recall outcome to the worker: %v", err)
 	}
 	if len(results) == 0 {
 		l.Printf("no prior observations for file=%s project=%s", targetPath, project)
 		fmt.Println("{}")
-		return 0
+		return nil, false
 	}
+	return results, true
+}
 
-	// Don't inject memory that predates the file's current contents.
-	//
-	// This hook fires immediately before Claude reads a file, and says
-	// "here's what we already know about it." If the file has been
-	// rewritten since the newest of those observations was recorded, then
-	// everything being injected describes a version that no longer
-	// exists — and it is being asserted as current, right at the moment
-	// Claude is about to form an impression of the file. Stale memory
-	// presented confidently is worse than no memory: Claude is about to
-	// read the real contents anyway, so suppressing this costs nothing
-	// and injecting it can actively mislead.
-	//
-	// Real claude-mem's own file-context handler makes exactly this
-	// comparison (buildFileContextTimeline: "File modified since last
-	// observation, skipping context injection"). This port had no way to
-	// even ask — SearchResult carried no timestamp until now.
-	if mtimeMs, ok := fileMtimeMs(in.Cwd, targetPath); ok {
+// filterFileObservations is the selection step: drop everything when the
+// file has changed since the newest observation, otherwise narrow the
+// candidates to the limit. Returns false when nothing should be injected
+// — "{}" has already been printed.
+//
+// Don't inject memory that predates the file's current contents.
+//
+// This hook fires immediately before Claude reads a file, and says
+// "here's what we already know about it." If the file has been
+// rewritten since the newest of those observations was recorded, then
+// everything being injected describes a version that no longer
+// exists — and it is being asserted as current, right at the moment
+// Claude is about to form an impression of the file. Stale memory
+// presented confidently is worse than no memory: Claude is about to
+// read the real contents anyway, so suppressing this costs nothing
+// and injecting it can actively mislead.
+//
+// Real claude-mem's own file-context handler makes exactly this
+// comparison (buildFileContextTimeline: "File modified since last
+// observation, skipping context injection"). This port had no way to
+// even ask — SearchResult carried no timestamp until now.
+func filterFileObservations(l *logging.Logger, cwd, targetPath string, results []memory.SearchResult, limit int) ([]memory.SearchResult, bool) {
+	if mtimeMs, ok := fileMtimeMs(cwd, targetPath); ok {
 		newest := int64(0)
 		for _, r := range results {
 			if r.CreatedAtEpoch > newest {
@@ -142,21 +169,26 @@ func cmdFileContext(args []string) int {
 				"what we remember describes an older version of this file",
 				targetPath, mtimeMs, len(results), newest)
 			fmt.Println("{}")
-			return 0
+			return nil, false
 		}
 	}
 
 	candidates := len(results)
-	results = store.SelectFileContext(results, targetPath, *limit)
+	results = memory.SelectFileContext(results, targetPath, limit)
 	if candidates > len(results) {
 		l.Printf("narrowed %d candidate observation(s) to %d for file=%s (one per session, most specific first)",
 			candidates, len(results), targetPath)
 	}
+	return results, true
+}
 
-	ctx := formatFileContext(targetPath, results)
+// emitFileContext is the output step: format the selected rows and print
+// the PreToolUse hook JSON.
+func emitFileContext(l *logging.Logger, targetPath, project string, results []memory.SearchResult) int {
+	injected := formatFileContext(targetPath, results)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
@@ -169,7 +201,7 @@ func cmdFileContext(args []string) int {
 	return 0
 }
 
-func formatFileContext(filePath string, results []store.SearchResult) string {
+func formatFileContext(filePath string, results []memory.SearchResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Prior memory about %s:\n\n", filePath)
 	for _, r := range results {

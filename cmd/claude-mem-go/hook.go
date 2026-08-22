@@ -4,8 +4,8 @@ import (
 	"flag"
 	"os"
 
-	"claude-mem-go/hook"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 func cmdHook(args []string) int {

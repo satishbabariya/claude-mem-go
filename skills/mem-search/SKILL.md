@@ -96,7 +96,7 @@ timeline(anchor=42, depth_before=3, depth_after=3)
 timeline(query="added rate limiting")   -- finds the anchor for you
 ```
 
-Depths default to 3 each side, capped at 100. Use this when the user asks
+Depths default to 10 each side, capped at 100. Use this when the user asks
 "what led up to X" or "what did we do right after Y," not when they just
 want to know what X or Y was — `get_observations` answers that.
 

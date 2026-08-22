@@ -1,24 +1,25 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"unicode/utf8"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
-	"claude-mem-go/backend"
-	"claude-mem-go/contextfmt"
-	"claude-mem-go/embed"
-	"claude-mem-go/excludeproject"
-	"claude-mem-go/hook"
-	"claude-mem-go/privacy"
-	"claude-mem-go/store"
-	"claude-mem-go/worker"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
+	"github.com/satishbabariya/claude-mem-go/internal/embed"
+	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
+	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
+	"github.com/satishbabariya/claude-mem-go/internal/privacy"
+	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 // cmdPromptContext is the UserPromptSubmit hook — real claude-mem's own
@@ -46,8 +47,8 @@ import (
 // every single message for no benefit.
 func cmdPromptContext(args []string) int {
 	fs := flag.NewFlagSet("prompt-context", flag.ExitOnError)
-	dbPath := fs.String("db", store.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embedding the prompt (empty disables this hook)")
+	dbPath := cli.DBFlag(fs)
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embedding the prompt (empty disables this hook)")
 	limit := fs.Int("limit", 5, "how many semantically relevant observations to inject")
 	minPromptLen := fs.Int("min-prompt-len", 20, "prompts shorter than this are skipped, not embedded")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
@@ -135,29 +136,31 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	project := store.ProjectFor(in.Cwd)
+	project := memory.ProjectFor(in.Cwd)
 	if project == "" || project == "." {
 		l.Printf("no usable project from cwd=%q, skipping", in.Cwd)
 		fmt.Println("{}")
 		return 0
 	}
 
-	vec, err := embed.NewClient(*embedModel).Embed(prompt)
+	ctx, cancel := hookContext(promptContextBudget)
+	defer cancel()
+	vec, err := embed.NewClient(*embedModel).Embed(ctx, prompt)
 	if err != nil {
 		l.Errorf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
 		fmt.Println("{}")
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
+	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", store.RedactDSN(*dbPath), err)
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
 		return 0
 	}
 	defer st.Close()
 
-	matches, err := st.SemanticSearch(project, vec, *limit)
+	matches, err := st.SemanticSearch(ctx, project, vec, *limit)
 	if err != nil {
 		l.Errorf("FAILED SemanticSearch for project=%s: %v", project, err)
 		fmt.Println("{}")
@@ -176,10 +179,10 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	ctx := formatPromptContext(matches)
+	injected := formatPromptContext(matches)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "UserPromptSubmit",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
@@ -195,13 +198,20 @@ func cmdPromptContext(args []string) int {
 // truncateForLog keeps a real user prompt (which may be long, or contain
 // sensitive-looking text) out of the log file beyond a short preview —
 // this hook's log line exists to debug "why didn't it inject," not to
-// duplicate the transcript.
+// duplicate the transcript. Cuts on a rune boundary, the same way
+// transcript's truncate does: a byte slice through the middle of a
+// multi-byte character (non-English prompts, emoji) leaves invalid UTF-8
+// in the log, and %q then renders it as escaped garbage.
 func truncateForLog(s string) string {
 	const max = 80
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // promptHash hashes the (already tag-stripped) prompt text for the
@@ -216,6 +226,6 @@ func promptHash(prompt string) string {
 
 // formatPromptContext delegates to contextfmt so this hook and the
 // observation_context MCP tool share one implementation.
-func formatPromptContext(matches []store.VectorMatch) string {
+func formatPromptContext(matches []memory.VectorMatch) string {
 	return contextfmt.PromptContext(matches)
 }
