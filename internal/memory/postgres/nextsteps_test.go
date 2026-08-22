@@ -29,13 +29,13 @@ func TestNextStepsRoundTripPostgres(t *testing.T) {
 	hash := memory.ContentHash(project, "SessionSummary", "np-summary", "")
 
 	want := []string{"finish the pgvector migration", "re-run the scoped benchmark"}
-	res, err := st.Insert("s1", project, "SessionSummary", hash,
+	res, err := st.Insert(context.Background(), "s1", project, "SessionSummary", hash,
 		memory.Observation{Type: "summary", Title: "session summary", NextSteps: want}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	recent, err := st.RecentByProject(project, 10)
+	recent, err := st.RecentByProject(context.Background(), project, 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestNextStepsRoundTripPostgres(t *testing.T) {
 	// Export from just before this row's own id. ExportAll pages by id
 	// ascending, so asking from 0 on a shared database with thousands of
 	// prior rows would never reach this one.
-	rows, err := st.ExportAll(res.ID-1, 5)
+	rows, err := st.ExportAll(context.Background(), res.ID-1, 5)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestNextStepsMigrationOnPreexistingPostgresStore(t *testing.T) {
 	st, dsn := openThrowawayStore(t)
 	project := uniqueProject(t)
 
-	if _, err := st.Insert("s-old", project, "Bash",
+	if _, err := st.Insert(context.Background(), "s-old", project, "Bash",
 		memory.ContentHash(project, "Bash", "np-old-row", ""),
 		memory.Observation{Type: "discovery", Title: "written before next_steps existed"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -102,7 +102,7 @@ func TestNextStepsMigrationOnPreexistingPostgresStore(t *testing.T) {
 	st.Close()
 
 	reopened := openStoreAt(t, dsn)
-	recent, err := reopened.RecentByProject(project, 10)
+	recent, err := reopened.RecentByProject(context.Background(), project, 10)
 	if err != nil {
 		t.Fatalf("RecentByProject after migration: %v — the column was not restored", err)
 	}

@@ -22,7 +22,7 @@ func TestOpenDispatchesToSQLiteForAPlainPath(t *testing.T) {
 	// Prove it's actually the SQLite backend doing real work, not just that
 	// something satisfying the interface came back.
 	hash := memory.ContentHash("s1", "Bash", "a", "b")
-	res, err := be.Insert("s1", "proj", "Bash", hash, memory.Observation{Type: "discovery", Title: "x"}, 0)
+	res, err := be.Insert(context.Background(), "s1", "proj", "Bash", hash, memory.Observation{Type: "discovery", Title: "x"}, 0)
 	if err != nil {
 		t.Fatalf("Insert through dispatched backend: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestOpenDispatchesToSQLiteForAPlainPath(t *testing.T) {
 		t.Fatal("first Insert: want Inserted=true")
 	}
 
-	count, err := be.CountByProject("proj")
+	count, err := be.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestOpenRecognizesBothPostgresSchemes(t *testing.T) {
 			// Reachable: confirm this is a genuinely functioning Postgres
 			// backend, not a coincidental non-nil return.
 			hash := memory.ContentHash("s1", "Bash", "backend-dispatch-check", dsn)
-			if _, err := be.Insert("s1", "backend-dispatch-test", "Bash", hash, memory.Observation{Type: "discovery", Title: "x"}, 0); err != nil {
+			if _, err := be.Insert(context.Background(), "s1", "backend-dispatch-test", "Bash", hash, memory.Observation{Type: "discovery", Title: "x"}, 0); err != nil {
 				t.Fatalf("Insert through the dispatched postgres backend: %v", err)
 			}
 		})

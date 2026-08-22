@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ import (
 // it could report "All critical checks passed" while capture had been
 // dead for weeks. Nothing measured whether anything was being remembered.
 func TestStatsDescribesWhatTheStoreContains(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -23,7 +24,7 @@ func TestStatsDescribesWhatTheStoreContains(t *testing.T) {
 	types := []string{"discovery", "change", "decision", "summary"}
 	for i := 0; i < 8; i++ {
 		title := fmt.Sprintf("row %d", i)
-		if _, err := st.Insert(fmt.Sprintf("sess-%d", i%3), fmt.Sprintf("proj-%d", i%2), "Bash",
+		if _, err := st.Insert(context.Background(), fmt.Sprintf("sess-%d", i%3), fmt.Sprintf("proj-%d", i%2), "Bash",
 			memory.ContentHash("s", "Bash", title, fmt.Sprint(i)),
 			memory.Observation{Type: types[i%4], Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
@@ -36,7 +37,7 @@ func TestStatsDescribesWhatTheStoreContains(t *testing.T) {
 	// plain `WHERE project = ?`, so an empty string matches nothing —
 	// a documented asymmetry between the two, and one this test tripped
 	// over on the first run.
-	rows, err := st.RecentByProject("proj-0", 3)
+	rows, err := st.RecentByProject(context.Background(), "proj-0", 3)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -44,12 +45,12 @@ func TestStatsDescribesWhatTheStoreContains(t *testing.T) {
 		t.Fatalf("seeding embeddings: got %d rows, want 3", len(rows))
 	}
 	for _, r := range rows {
-		if err := st.SaveEmbedding(r.ID, make([]float32, 768)); err != nil {
+		if err := st.SaveEmbedding(context.Background(), r.ID, make([]float32, 768)); err != nil {
 			t.Fatalf("SaveEmbedding: %v", err)
 		}
 	}
 
-	s, err := st.Stats()
+	s, err := st.Stats(context.Background())
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
@@ -84,13 +85,13 @@ func TestStatsDescribesWhatTheStoreContains(t *testing.T) {
 // no rows is SQL NULL, and scanning that into an int64 without care
 // yields 0, which formats as 1970-01-01 and reads as a corrupt store.
 func TestStatsOnAnEmptyStoreReportsZeroNotEpochZero(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "empty.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "empty.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	s, err := st.Stats()
+	s, err := st.Stats(context.Background())
 	if err != nil {
 		t.Fatalf("Stats on an empty store: %v", err)
 	}

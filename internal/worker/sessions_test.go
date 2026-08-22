@@ -415,7 +415,7 @@ func (h *slowFakeHandle) Close() error { return nil }
 // that delay from the call's own start time.
 func TestProcessTouchesSessionAfterSuccessfulTurn(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

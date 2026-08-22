@@ -73,7 +73,7 @@ func TestInFlightQueryReflectsARealInProgressEvent(t *testing.T) {
 	entry := &sessionEntry{handle: &blockingHandle{release: release}, lastUsed: time.Now()}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

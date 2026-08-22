@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -44,14 +43,16 @@ func cmdSearch(args []string) int {
 		return 2
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	results, err := st.Search(*project, query, *obsType, *limit, *offset, dateStartMs, dateEndMs, *orderBy)
+	results, err := st.Search(ctx, *project, query, *obsType, *limit, *offset, dateStartMs, dateEndMs, *orderBy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED search: %v\n", err)
 		return 1

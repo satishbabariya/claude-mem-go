@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -39,14 +38,16 @@ func cmdPrune(args []string) int {
 	// (which were unit-agnostic and couldn't have caught this).
 	cutoff := time.Now().AddDate(0, 0, -*olderThanDays).UnixMilli()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	n, err := st.Prune(*project, cutoff, !*yes)
+	n, err := st.Prune(ctx, *project, cutoff, !*yes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED prune: %v\n", err)
 		return 1

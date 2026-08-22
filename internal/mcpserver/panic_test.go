@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -16,49 +17,51 @@ import (
 // rather than crashing the process.
 type panickingBackend struct{}
 
-func (panickingBackend) Insert(string, string, string, string, memory.Observation, float64) (memory.InsertResult, error) {
+func (panickingBackend) Insert(context.Context, string, string, string, string, memory.Observation, float64) (memory.InsertResult, error) {
 	panic("panickingBackend: Insert")
 }
-func (panickingBackend) CountByProject(string) (int, error) {
+func (panickingBackend) CountByProject(context.Context, string) (int, error) {
 	panic("panickingBackend: CountByProject")
 }
-func (panickingBackend) Search(string, string, string, int, int, int64, int64, string) ([]memory.SearchResult, error) {
+func (panickingBackend) Search(context.Context, string, string, string, int, int, int64, int64, string) ([]memory.SearchResult, error) {
 	panic("panickingBackend: Search")
 }
-func (panickingBackend) SaveEmbedding(int64, []float32) error {
+func (panickingBackend) SaveEmbedding(context.Context, int64, []float32) error {
 	panic("panickingBackend: SaveEmbedding")
 }
-func (panickingBackend) SemanticSearch(string, []float32, int) ([]memory.VectorMatch, error) {
+func (panickingBackend) SemanticSearch(context.Context, string, []float32, int) ([]memory.VectorMatch, error) {
 	panic("panickingBackend: SemanticSearch")
 }
-func (panickingBackend) RecentByProject(string, int) ([]memory.SearchResult, error) {
+func (panickingBackend) RecentByProject(context.Context, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: RecentByProject")
 }
-func (panickingBackend) BySessionID(string, int) ([]memory.SearchResult, error) {
+func (panickingBackend) BySessionID(context.Context, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: BySessionID")
 }
-func (panickingBackend) ObservationsForFile(string, string, int) ([]memory.SearchResult, error) {
+func (panickingBackend) ObservationsForFile(context.Context, string, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ObservationsForFile")
 }
-func (panickingBackend) ByIDs([]int64) ([]memory.SearchResult, error) {
+func (panickingBackend) ByIDs(context.Context, []int64) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ByIDs")
 }
-func (panickingBackend) Timeline(string, int64, int, int) ([]memory.SearchResult, error) {
+func (panickingBackend) Timeline(context.Context, string, int64, int, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: Timeline")
 }
-func (panickingBackend) ObservationsNeedingEmbedding(string, int64, int64, int) ([]memory.SearchResult, error) {
+func (panickingBackend) ObservationsNeedingEmbedding(context.Context, string, int64, int64, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: ObservationsNeedingEmbedding")
 }
-func (panickingBackend) Prune(string, int64, bool) (int64, error) { panic("panickingBackend: Prune") }
-func (panickingBackend) ExportAll(int64, int) ([]memory.ExportRow, error) {
+func (panickingBackend) Prune(context.Context, string, int64, bool) (int64, error) {
+	panic("panickingBackend: Prune")
+}
+func (panickingBackend) ExportAll(context.Context, int64, int) ([]memory.ExportRow, error) {
 	panic("panickingBackend: ExportAll")
 }
-func (panickingBackend) ImportRow(memory.ExportRow) (memory.InsertResult, error) {
+func (panickingBackend) ImportRow(context.Context, memory.ExportRow) (memory.InsertResult, error) {
 	panic("panickingBackend: ImportRow")
 }
-func (panickingBackend) Stats() (memory.StoreStats, error) { panic("boom") }
+func (panickingBackend) Stats(ctx context.Context) (memory.StoreStats, error) { panic("boom") }
 
-func (panickingBackend) HealthDetails() (map[string]string, error) {
+func (panickingBackend) HealthDetails(ctx context.Context) (map[string]string, error) {
 	panic("panickingBackend: HealthDetails")
 }
 func (panickingBackend) Close() error { panic("panickingBackend: Close") }

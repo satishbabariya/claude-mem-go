@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,7 +79,7 @@ func TestNormalizeFilePathsHandlesLists(t *testing.T) {
 // bug: store what a model would have emitted, then look it up the way the
 // hook does.
 func TestNormalizedPathsMakeTheLookupMatch(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "fp.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "fp.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -89,12 +90,12 @@ func TestNormalizedPathsMakeTheLookupMatch(t *testing.T) {
 	// The observer emitted a relative path; the write path normalizes it.
 	obs := memory.Observation{Type: "discovery", Title: "read tokens",
 		FilesRead: memory.NormalizeFilePaths(cwd, []string{"tokens.go"})}
-	if _, err := st.Insert("s1", "repo", "Read", memory.ContentHash("s1", "Read", "t", "1"), obs, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "repo", "Read", memory.ContentHash("s1", "Read", "t", "1"), obs, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
 	// The hook queries the absolute path from the payload.
-	got, err := st.ObservationsForFile("repo", abs, 10)
+	got, err := st.ObservationsForFile(context.Background(), "repo", abs, 10)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}

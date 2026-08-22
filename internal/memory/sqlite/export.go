@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -15,12 +16,12 @@ import (
 // first. There was no way to get data out of this store at all before
 // this — no backup story, no way to move data between the SQLite and
 // Postgres backends.
-func (s *Store) ExportAll(afterID int64, limit int) ([]memory.ExportRow, error) {
+func (s *Store) ExportAll(ctx context.Context, afterID int64, limit int) ([]memory.ExportRow, error) {
 	limit = clampNegativeLimit(limit)
 	// LEFT JOIN, not INNER: most observations have no row in
 	// observation_vectors at all (never embedded), and that must not
 	// exclude them from the export.
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.next_steps,
 		       o.cost_usd, o.created_at, o.created_at_epoch, o.content_hash,
@@ -72,8 +73,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]memory.ExportRow, error) 
 // CreatedAt/CreatedAtEpoch, and its embedding, if it had one — a restore
 // should be a full restore, not one that quietly leaves every observation
 // unsearchable by meaning.
-func (s *Store) ImportRow(row memory.ExportRow) (memory.InsertResult, error) {
-	// Validated but deliberately not used: this column is TEXT, so the
+func (s *Store) ImportRow(ctx context.Context, row memory.ExportRow) (memory.InsertResult, error) { // Validated but deliberately not used: this column is TEXT, so the
 	// original string is what gets stored (see memory.ParseExportCreatedAt for
 	// why that matters for byte-identical round trips). The call is here
 	// purely so a malformed timestamp is rejected on this backend exactly
@@ -81,13 +81,13 @@ func (s *Store) ImportRow(row memory.ExportRow) (memory.InsertResult, error) {
 	if _, err := memory.ParseExportCreatedAt(row.CreatedAt); err != nil {
 		return memory.InsertResult{}, err
 	}
-	res, err := s.insertRow(row.SessionID, row.Project, row.ToolName, row.ContentHash,
+	res, err := s.insertRow(ctx, row.SessionID, row.Project, row.ToolName, row.ContentHash,
 		row.Observation, row.CostUSD, row.CreatedAt, row.CreatedAtEpoch)
 	if err != nil {
 		return res, err
 	}
 	if res.Inserted && len(row.Embedding) > 0 {
-		if err := s.SaveEmbedding(res.ID, row.Embedding); err != nil {
+		if err := s.SaveEmbedding(ctx, res.ID, row.Embedding); err != nil {
 			return res, fmt.Errorf("import observation %d: save embedding: %w", res.ID, err)
 		}
 	}

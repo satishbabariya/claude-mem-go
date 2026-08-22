@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,13 +26,13 @@ import (
 // up here.
 func TestPruneCutoffUnitsMatchInsertsRealTimestamp(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "inserted with a real timestamp"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -43,7 +44,7 @@ func TestPruneCutoffUnitsMatchInsertsRealTimestamp(t *testing.T) {
 	// too small and the row below would never be found.
 	cutoff := time.Now().AddDate(0, 0, 1).UnixMilli()
 
-	n, err := st.Prune("", cutoff, true)
+	n, err := st.Prune(context.Background(), "", cutoff, true)
 	if err != nil {
 		t.Fatalf("Prune (dry run): %v", err)
 	}

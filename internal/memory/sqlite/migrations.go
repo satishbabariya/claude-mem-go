@@ -152,6 +152,6 @@ var migrations = []migrate.Migration{
 	},
 }
 
-func runMigrations(db *sql.DB) error {
-	return migrate.Run(context.Background(), db, migrate.SQLitePlaceholder, migrations)
+func runMigrations(ctx context.Context, db *sql.DB) error {
+	return migrate.Run(ctx, db, migrate.SQLitePlaceholder, migrations)
 }

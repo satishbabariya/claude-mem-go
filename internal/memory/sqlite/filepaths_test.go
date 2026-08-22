@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 func openTempStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fp.db")
-	st, err := Open(path)
+	st, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -37,7 +38,7 @@ func countPaths(t *testing.T, st *Store) int {
 func TestObservationFilesTriggerPopulatesOnInsert(t *testing.T) {
 	st, _ := openTempStore(t)
 
-	if _, err := st.Insert("s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
+	if _, err := st.Insert(context.Background(), "s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
 		memory.Observation{Type: "change", Title: "a",
 			FilesRead:     []string{"/x.go", "/y.go"},
 			FilesModified: []string{"/y.go", "/z.go"}}, 0); err != nil {
@@ -51,7 +52,7 @@ func TestObservationFilesTriggerPopulatesOnInsert(t *testing.T) {
 		t.Fatalf("indexed %d paths, want 3 (/x.go, /y.go, /z.go — y deduped across both lists)", got)
 	}
 
-	got, err := st.ObservationsForFile("p", "/y.go", 10)
+	got, err := st.ObservationsForFile(context.Background(), "p", "/y.go", 10)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}
@@ -70,7 +71,7 @@ func TestObservationFilesIgnoresADuplicateInsert(t *testing.T) {
 	hash := memory.ContentHash("s1", "Read", "a", "1")
 
 	for i := 0; i < 3; i++ {
-		if _, err := st.Insert("s1", "p", "Read", hash, obs, 0); err != nil {
+		if _, err := st.Insert(context.Background(), "s1", "p", "Read", hash, obs, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
 	}
@@ -86,7 +87,7 @@ func TestObservationFilesIgnoresADuplicateInsert(t *testing.T) {
 // quietly disagrees with the table.
 func TestObservationFilesCascadesOnDelete(t *testing.T) {
 	st, _ := openTempStore(t)
-	res, err := st.Insert("s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
+	res, err := st.Insert(context.Background(), "s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
 		memory.Observation{Type: "change", Title: "a", FilesRead: []string{"/x.go"}}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -113,13 +114,13 @@ func TestObservationFilesBackfillsExistingRows(t *testing.T) {
 
 	// Build a store, then simulate "created before migration 6" by
 	// dropping the table and trigger and rewinding the version.
-	st, err := Open(path)
+	st, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	for i := 0; i < 20; i++ {
 		title := fmt.Sprintf("row %d", i)
-		if _, err := st.Insert("s1", "p", "Read", memory.ContentHash("s1", "Read", title, "x"),
+		if _, err := st.Insert(context.Background(), "s1", "p", "Read", memory.ContentHash("s1", "Read", title, "x"),
 			memory.Observation{Type: "change", Title: title,
 				FilesRead: []string{fmt.Sprintf("/f%d.go", i%4)}}, 0); err != nil {
 			t.Fatalf("Insert: %v", err)
@@ -134,7 +135,7 @@ func TestObservationFilesBackfillsExistingRows(t *testing.T) {
 	st.Close()
 
 	// Reopening must re-run migration 6 and backfill.
-	st2, err := Open(path)
+	st2, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestObservationFilesBackfillsExistingRows(t *testing.T) {
 	if distinct != 4 {
 		t.Fatalf("backfill indexed %d distinct paths, want 4", distinct)
 	}
-	found, err := st2.ObservationsForFile("p", "/f2.go", 50)
+	found, err := st2.ObservationsForFile(context.Background(), "p", "/f2.go", 50)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestObservationFilesBackfillsExistingRows(t *testing.T) {
 // corrupt the index rather than merely waste time.
 func TestObservationFilesBackfillIsIdempotent(t *testing.T) {
 	st, path := openTempStore(t)
-	if _, err := st.Insert("s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
+	if _, err := st.Insert(context.Background(), "s1", "p", "Read", memory.ContentHash("s1", "Read", "a", "1"),
 		memory.Observation{Type: "change", Title: "a", FilesRead: []string{"/x.go", "/y.go"}}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestObservationFilesBackfillIsIdempotent(t *testing.T) {
 		if _, err := st.db.Exec("DELETE FROM schema_migrations WHERE version = 6"); err != nil {
 			t.Fatalf("rewind: %v", err)
 		}
-		if err := runMigrations(st.db); err != nil {
+		if err := runMigrations(context.Background(), st.db); err != nil {
 			t.Fatalf("re-run migrations: %v", err)
 		}
 	}
@@ -202,11 +203,11 @@ func TestObservationFilesBackfillIsIdempotent(t *testing.T) {
 func TestImportRebuildsTheFilePathIndex(t *testing.T) {
 	src, srcPath := openTempStore(t)
 	target := "/repo/src/auth/tokens.go"
-	if _, err := src.Insert("s1", "repo", "Read", memory.ContentHash("s1", "Read", "a", "1"),
+	if _, err := src.Insert(context.Background(), "s1", "repo", "Read", memory.ContentHash("s1", "Read", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "read tokens", FilesRead: []string{target}}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	rows, err := src.ExportAll(0, 100)
+	rows, err := src.ExportAll(context.Background(), 0, 100)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestImportRebuildsTheFilePathIndex(t *testing.T) {
 	_ = srcPath
 
 	dst, _ := openTempStore(t)
-	if _, err := dst.ImportRow(rows[0]); err != nil {
+	if _, err := dst.ImportRow(context.Background(), rows[0]); err != nil {
 		t.Fatalf("ImportRow: %v", err)
 	}
 
@@ -224,7 +225,7 @@ func TestImportRebuildsTheFilePathIndex(t *testing.T) {
 		t.Fatalf("the migrated store has %d indexed paths, want 1 — the trigger did not fire on "+
 			"the import path, so file-context would find nothing for every file", got)
 	}
-	found, err := dst.ObservationsForFile("repo", target, 10)
+	found, err := dst.ObservationsForFile(context.Background(), "repo", target, 10)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestImportRebuildsTheFilePathIndex(t *testing.T) {
 
 	// Re-importing is documented as safe; it must not duplicate index rows
 	// either, which a trigger firing on a no-op insert could have caused.
-	if _, err := dst.ImportRow(rows[0]); err != nil {
+	if _, err := dst.ImportRow(context.Background(), rows[0]); err != nil {
 		t.Fatalf("re-import: %v", err)
 	}
 	if got := countPaths(t, dst); got != 1 {

@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -9,26 +10,26 @@ import (
 
 func TestRecentByProjectOrdersNewestFirstAndScopesToProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	older, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "1", "1"), memory.Observation{Type: "discovery", Title: "older"}, 0)
+	older, err := st.Insert(context.Background(), "s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "1", "1"), memory.Observation{Type: "discovery", Title: "older"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	newer, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "2", "2"), memory.Observation{Type: "discovery", Title: "newer"}, 0)
+	newer, err := st.Insert(context.Background(), "s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "2", "2"), memory.Observation{Type: "discovery", Title: "newer"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	// A different project must never leak into proj-a's recent list.
-	if _, err := st.Insert("s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "3", "3"), memory.Observation{Type: "discovery", Title: "other project"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "3", "3"), memory.Observation{Type: "discovery", Title: "other project"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.RecentByProject("proj-a", 10)
+	results, err := st.RecentByProject(context.Background(), "proj-a", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -43,18 +44,18 @@ func TestRecentByProjectOrdersNewestFirstAndScopesToProject(t *testing.T) {
 
 func TestRecentByProjectRespectsLimit(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	for i := 0; i < 5; i++ {
-		if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", string(rune('a'+i)), "x"), memory.Observation{Type: "discovery", Title: "x"}, 0); err != nil {
+		if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", string(rune('a'+i)), "x"), memory.Observation{Type: "discovery", Title: "x"}, 0); err != nil {
 			t.Fatalf("Insert: %v", err)
 		}
 	}
-	results, err := st.RecentByProject("proj", 3)
+	results, err := st.RecentByProject(context.Background(), "proj", 3)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestRecentByProjectRespectsLimit(t *testing.T) {
 // least an empty string), but the schema permits it regardless.
 func TestRecentByProjectHandlesNullNarrative(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestRecentByProjectHandlesNullNarrative(t *testing.T) {
 		t.Fatalf("insert row with NULL narrative/subtitle: %v", err)
 	}
 
-	results, err := st.RecentByProject("proj", 10)
+	results, err := st.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject with a NULL narrative row: %v", err)
 	}
@@ -102,26 +103,26 @@ func TestRecentByProjectHandlesNullNarrative(t *testing.T) {
 
 func TestBySessionIDOrdersOldestFirstAndScopesToSession(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	first, err := st.Insert("session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "1", "1"), memory.Observation{Type: "discovery", Title: "first thing"}, 0)
+	first, err := st.Insert(context.Background(), "session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "1", "1"), memory.Observation{Type: "discovery", Title: "first thing"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	second, err := st.Insert("session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "2", "2"), memory.Observation{Type: "discovery", Title: "second thing"}, 0)
+	second, err := st.Insert(context.Background(), "session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "2", "2"), memory.Observation{Type: "discovery", Title: "second thing"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	// A different session must never leak into session-a's history.
-	if _, err := st.Insert("session-b", "proj", "Bash", memory.ContentHash("session-b", "Bash", "3", "3"), memory.Observation{Type: "discovery", Title: "other session"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "session-b", "proj", "Bash", memory.ContentHash("session-b", "Bash", "3", "3"), memory.Observation{Type: "discovery", Title: "other session"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.BySessionID("session-a", 10)
+	results, err := st.BySessionID(context.Background(), "session-a", 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}
@@ -136,13 +137,13 @@ func TestBySessionIDOrdersOldestFirstAndScopesToSession(t *testing.T) {
 
 func TestRecentByProjectEmptyForUnknownProject(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	results, err := st.RecentByProject("no-such-project", 10)
+	results, err := st.RecentByProject(context.Background(), "no-such-project", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}

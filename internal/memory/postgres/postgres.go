@@ -568,9 +568,9 @@ func jsonDecode(raw []byte) []string {
 // instead of a duplicate row. Postgres's database/sql driver has no
 // LastInsertId support (there's no single generic "last id" concept the
 // way SQLite's rowid gives one), so this uses RETURNING id directly instead.
-func (s *Store) Insert(sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64) (memory.InsertResult, error) {
+func (s *Store) Insert(ctx context.Context, sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64) (memory.InsertResult, error) {
 	now := time.Now()
-	return s.insertRow(sessionID, project, toolName, contentHash, o, costUSD, now, now.UnixMilli())
+	return s.insertRow(ctx, sessionID, project, toolName, contentHash, o, costUSD, now, now.UnixMilli())
 }
 
 // insertRow is Insert's and ImportRow's (export.go) shared implementation.
@@ -580,12 +580,12 @@ func (s *Store) Insert(sessionID, project, toolName, contentHash string, o memor
 // a subtly different clock than the created_at_epoch value it computed in
 // Go); ImportRow (a restore) passes the original values through instead,
 // so a restore reflects when things actually happened.
-func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64, createdAt time.Time, createdAtEpoch int64) (memory.InsertResult, error) {
+func (s *Store) insertRow(ctx context.Context, sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64, createdAt time.Time, createdAtEpoch int64) (memory.InsertResult, error) {
 	if err := memory.ValidateObservationType(o.Type); err != nil {
 		return memory.InsertResult{}, err
 	}
 	var id int64
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
 			 concepts, files_read, files_modified, next_steps, cost_usd, created_at, created_at_epoch, content_hash)
@@ -601,7 +601,7 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o me
 	if err == sql.ErrNoRows {
 		// ON CONFLICT DO NOTHING fired: no row to RETURN. Not an error —
 		// look up the row that already holds this content_hash.
-		if lookupErr := s.db.QueryRow(`SELECT id FROM observations WHERE content_hash = $1`, contentHash).Scan(&id); lookupErr != nil {
+		if lookupErr := s.db.QueryRowContext(ctx, `SELECT id FROM observations WHERE content_hash = $1`, contentHash).Scan(&id); lookupErr != nil {
 			return memory.InsertResult{}, fmt.Errorf("look up existing observation for duplicate content_hash: %w", lookupErr)
 		}
 		return memory.InsertResult{ID: id, Inserted: false}, nil
@@ -612,9 +612,9 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o me
 	return memory.InsertResult{ID: id, Inserted: true}, nil
 }
 
-func (s *Store) CountByProject(project string) (int, error) {
+func (s *Store) CountByProject(ctx context.Context, project string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE project = $1`, project).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE project = $1`, project).Scan(&n)
 	return n, err
 }
 
@@ -623,8 +623,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // SaveEmbedding stores vec using pgvector's native type — dims must match
 // the column's fixed dimensionality (see Open's embedDims), or Postgres
 // rejects the write outright rather than silently truncating/padding.
-func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
-	// Checked here, with both numbers and the remedy named, rather than
+func (s *Store) SaveEmbedding(ctx context.Context, observationID int64, vec []float32) error { // Checked here, with both numbers and the remedy named, rather than
 	// left to pgvector's bare "expected 768 dimensions, not 384" — which
 	// says nothing about WHY they differ or what to do. The store's width
 	// is fixed at creation, so this is a configuration mismatch (an embed
@@ -635,7 +634,7 @@ func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
 			"the column's width is fixed when the store is created, so either use an embedding model that emits %d dimensions or create a new store with %s=%d and re-embed",
 			observationID, s.embedDims, len(vec), s.embedDims, defaultEmbedDimsEnvVar, len(vec))
 	}
-	res, err := s.db.Exec(`UPDATE observations SET embedding = $1 WHERE id = $2`,
+	res, err := s.db.ExecContext(ctx, `UPDATE observations SET embedding = $1 WHERE id = $2`,
 		pgvector.NewVector(vec), observationID)
 	if err != nil {
 		return fmt.Errorf("save embedding for observation %d: %w", observationID, err)
@@ -756,7 +755,7 @@ func (s *Store) semanticSearchPlan(project string) (useCTE, useIterative bool) {
 //
 // project scopes the comparison set to one project when non-empty, for the
 // same cross-project-leak reason as Search.
-func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]memory.VectorMatch, error) {
+func (s *Store) SemanticSearch(ctx context.Context, project string, queryVec []float32, limit int) ([]memory.VectorMatch, error) {
 	limit = clampNegativeLimit(limit)
 	scope := ""
 	args := []any{pgvector.NewVector(queryVec), limit}
@@ -800,7 +799,7 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 	useCTE, useIterative := s.semanticSearchPlan(project)
 	scoped := project != ""
 	if !scoped && s.hnswEfSearch <= 0 {
-		rows, err := s.db.Query(query, args...)
+		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("semantic search: %w", err)
 		}
@@ -822,7 +821,7 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 		ORDER BY embedding <=> $1
 		LIMIT $2`
 		if s.hnswEfSearch <= 0 {
-			rows, err := s.db.Query(query, args...)
+			rows, err := s.db.QueryContext(ctx, query, args...)
 			if err != nil {
 				return nil, fmt.Errorf("semantic search: %w", err)
 			}
@@ -838,7 +837,7 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 	// UNRELATED query the pool hands that same connection next. SET LOCAL
 	// confines every override below to this one transaction, gone the
 	// instant it ends.
-	tx, err := s.db.BeginTx(context.Background(), nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin semantic search tx: %w", err)
 	}
@@ -848,16 +847,16 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 		// recall/speed tradeoff — pgvector's built-in default (40)
 		// doesn't necessarily hold as `observations` grows well past the
 		// row counts it was tuned against.
-		if _, err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
 			return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
 		}
 	}
 	if useIterative {
-		if _, err := tx.Exec("SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
+		if _, err := tx.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
 			return nil, fmt.Errorf("set hnsw.iterative_scan: %w", err)
 		}
 	}
-	rows, err := tx.Query(query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("semantic search: %w", err)
 	}

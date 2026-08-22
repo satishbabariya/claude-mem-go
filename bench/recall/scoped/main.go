@@ -103,7 +103,7 @@ func main() {
 				continue
 			}
 			started := time.Now()
-			got, err := st.SemanticSearch(proj, vec.Slice(), k)
+			got, err := st.SemanticSearch(ctx, proj, vec.Slice(), k)
 			if err != nil {
 				panic(err)
 			}
@@ -163,7 +163,7 @@ func main() {
 				if len(truth) == 0 {
 					continue
 				}
-				got, err := tuned.SemanticSearch(proj, vec.Slice(), k)
+				got, err := tuned.SemanticSearch(ctx, proj, vec.Slice(), k)
 				if err != nil {
 					panic(err)
 				}

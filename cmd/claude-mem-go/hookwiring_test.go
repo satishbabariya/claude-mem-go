@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // dispatchSubcommands reads main.go's own switch, so these guards track
@@ -133,4 +134,53 @@ func captureStderr(t *testing.T, fn func()) string {
 	w.Close()
 	os.Stderr = orig
 	return <-done
+}
+
+// TestHookBudgetsFitInsideHooksJSONTimeouts pins ctx.go's per-hook context
+// budgets under the matching "timeout" in hooks.json. A budget at or above
+// the manifest's timeout is worse than none: Claude Code kills the process
+// before the deadline fires, so the graceful "{}" path never runs.
+func TestHookBudgetsFitInsideHooksJSONTimeouts(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatalf("read hooks.json: %v", err)
+	}
+	var cfg struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+				Timeout int    `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+	wrapped := regexp.MustCompile(`run-hook\.sh"\s+([a-z-]+)`)
+	timeouts := map[string]int{}
+	for _, entries := range cfg.Hooks {
+		for _, e := range entries {
+			for _, h := range e.Hooks {
+				if m := wrapped.FindStringSubmatch(h.Command); m != nil {
+					timeouts[m[1]] = h.Timeout
+				}
+			}
+		}
+	}
+	budgets := map[string]time.Duration{
+		"context":        sessionStartBudget,
+		"prompt-context": promptContextBudget,
+		"file-context":   fileContextBudget,
+		"stop":           stopBudget,
+	}
+	for sub, budget := range budgets {
+		limit, ok := timeouts[sub]
+		if !ok {
+			t.Errorf("hooks.json no longer wires subcommand %q; drop its budget from ctx.go or re-wire it", sub)
+			continue
+		}
+		if budget >= time.Duration(limit)*time.Second {
+			t.Errorf("%s budget %v is not under hooks.json timeout %ds", sub, budget, limit)
+		}
+	}
 }

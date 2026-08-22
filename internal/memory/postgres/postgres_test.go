@@ -160,7 +160,7 @@ func TestPostgresInsertIsIdempotentOnContentHash(t *testing.T) {
 	hash := memory.ContentHash("s1", "Bash", "npm test", project)
 	o := memory.Observation{Type: "discovery", Title: "Tests passed"}
 
-	first, err := st.Insert("s1", project, "Bash", hash, o, 0.01)
+	first, err := st.Insert(context.Background(), "s1", project, "Bash", hash, o, 0.01)
 	if err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestPostgresInsertIsIdempotentOnContentHash(t *testing.T) {
 		t.Fatal("first Insert of a fresh content_hash: want Inserted=true")
 	}
 
-	second, err := st.Insert("s1", project, "Bash", hash, o, 0.01)
+	second, err := st.Insert(context.Background(), "s1", project, "Bash", hash, o, 0.01)
 	if err != nil {
 		t.Fatalf("second Insert (duplicate): %v", err)
 	}
@@ -179,7 +179,7 @@ func TestPostgresInsertIsIdempotentOnContentHash(t *testing.T) {
 		t.Fatalf("second Insert returned ID %d, want %d", second.ID, first.ID)
 	}
 
-	count, err := st.CountByProject(project)
+	count, err := st.CountByProject(context.Background(), project)
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -198,13 +198,13 @@ func TestPostgresInsertRejectsAnUnrecognizedObservationType(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	_, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "bad-type", project),
+	_, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "bad-type", project),
 		memory.Observation{Type: "bugfix", Title: "x"}, 0)
 	if err == nil {
 		t.Fatal("Insert with an unrecognized type: want an error, got nil")
 	}
 
-	count, cerr := st.CountByProject(project)
+	count, cerr := st.CountByProject(context.Background(), project)
 	if cerr != nil {
 		t.Fatalf("CountByProject: %v", cerr)
 	}
@@ -217,7 +217,7 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 	o := memory.Observation{Type: "discovery", Title: "claude-mem installation found"}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), o, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), o, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestPostgresSearchHandlesHyphenatedQueries(t *testing.T) {
 	// row under accumulated history. Real callers hit the identical
 	// scoping requirement for the identical reason (see Search's doc
 	// comment), so this isn't a test-only workaround.
-	results, err := st.Search(project, "claude-mem", "", 10, 0, 0, 0, "")
+	results, err := st.Search(context.Background(), project, "claude-mem", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error: %v", err)
 	}
@@ -259,17 +259,17 @@ func TestPostgresSearchFiltersByObservationTypeWithProjectScope(t *testing.T) {
 	project := uniqueProject(t)
 	otherProject := uniqueProject(t)
 
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "decision", Title: "gadget rollout plan approved"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "decision", Title: "gadget rollout plan approved"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if _, err := st.Insert("s1", otherProject, "Bash", memory.ContentHash("s1", "Bash", "c", otherProject), memory.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", otherProject, "Bash", memory.ContentHash("s1", "Bash", "c", otherProject), memory.Observation{Type: "discovery", Title: "gadget rollout"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "gadget", "discovery", 10, 0, 0, 0, "")
+	results, err := st.Search(context.Background(), project, "gadget", "discovery", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(project=%s, type=discovery): %v", project, err)
 	}
@@ -290,17 +290,17 @@ func TestPostgresSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
 		t.Fatalf("Insert discovery: %v", err)
 	}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
 		t.Fatalf("Insert decision: %v", err)
 	}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "c", project), memory.Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "c", project), memory.Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
 		t.Fatalf("Insert manual: %v", err)
 	}
 
-	got, err := st.Search(project, "gizmo", "discovery,decision", 10, 0, 0, 0, "")
+	got, err := st.Search(context.Background(), project, "gizmo", "discovery,decision", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=\"discovery,decision\"): %v", err)
 	}
@@ -317,11 +317,11 @@ func TestPostgresSearchRankingAndNoMatch(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 	o := memory.Observation{Type: "discovery", Title: "A totally unrelated observation about kites"}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), o, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), o, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search(project, "xyzzy_no_such_term_anywhere", "", 10, 0, 0, 0, "")
+	results, err := st.Search(context.Background(), project, "xyzzy_no_such_term_anywhere", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestPostgresSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 
 	var seededIDs []int64
 	for i := 0; i < 5; i++ {
-		res, err := st.Insert("s1", project, "Bash",
+		res, err := st.Insert(context.Background(), "s1", project, "Bash",
 			memory.ContentHash("s1", "Bash", "page", fmt.Sprintf("%s-%d", project, i)),
 			memory.Observation{Type: "discovery", Title: "paginated widget rollout"}, 0)
 		if err != nil {
@@ -357,15 +357,15 @@ func TestPostgresSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 		seededIDs = append(seededIDs, res.ID)
 	}
 
-	page1, err := st.Search(project, "widget", "", 2, 0, 0, 0, "")
+	page1, err := st.Search(context.Background(), project, "widget", "", 2, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 1: %v", err)
 	}
-	page2, err := st.Search(project, "widget", "", 2, 2, 0, 0, "")
+	page2, err := st.Search(context.Background(), project, "widget", "", 2, 2, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 2: %v", err)
 	}
-	page3, err := st.Search(project, "widget", "", 2, 4, 0, 0, "")
+	page3, err := st.Search(context.Background(), project, "widget", "", 2, 4, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 3: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestPostgresSearchFiltersByDateRange(t *testing.T) {
 	base := int64(1700000000000)
 	var ids [3]int64
 	for i := 0; i < 3; i++ {
-		res, err := st.Insert("s1", project, "Bash",
+		res, err := st.Insert(context.Background(), "s1", project, "Bash",
 			memory.ContentHash("s1", "Bash", "daterange", fmt.Sprintf("%s-%d", project, i)),
 			memory.Observation{Type: "discovery", Title: "dateranged gadget observation"}, 0)
 		if err != nil {
@@ -422,7 +422,7 @@ func TestPostgresSearchFiltersByDateRange(t *testing.T) {
 		}
 	}
 
-	fromDay1, err := st.Search(project, "gadget", "", 10, 0, base+day, 0, "")
+	fromDay1, err := st.Search(context.Background(), project, "gadget", "", 10, 0, base+day, 0, "")
 	if err != nil {
 		t.Fatalf("Search with dateStart: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestPostgresSearchFiltersByDateRange(t *testing.T) {
 		t.Fatalf("Search(dateStart=day1) returned ids %v, want day1 and day2 only (not day0)", got)
 	}
 
-	toDay1, err := st.Search(project, "gadget", "", 10, 0, 0, base+day, "")
+	toDay1, err := st.Search(context.Background(), project, "gadget", "", 10, 0, 0, base+day, "")
 	if err != nil {
 		t.Fatalf("Search with dateEnd: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestPostgresSearchFiltersByDateRange(t *testing.T) {
 		t.Fatalf("Search(dateEnd=day1) returned ids %v, want day0 and day1 only (not day2)", got)
 	}
 
-	onlyDay1, err := st.Search(project, "gadget", "", 10, 0, base+day, base+day, "")
+	onlyDay1, err := st.Search(context.Background(), project, "gadget", "", 10, 0, base+day, base+day, "")
 	if err != nil {
 		t.Fatalf("Search with both bounds: %v", err)
 	}
@@ -469,7 +469,7 @@ func TestPostgresSearchOrderBy(t *testing.T) {
 	base := int64(1700000000000)
 	var ids [3]int64
 	for i := 0; i < 3; i++ {
-		res, err := st.Insert("s1", project, "Bash",
+		res, err := st.Insert(context.Background(), "s1", project, "Bash",
 			memory.ContentHash("s1", "Bash", "orderby", fmt.Sprintf("%s-%d", project, i)),
 			memory.Observation{Type: "discovery", Title: "orderby flavored widget"}, 0)
 		if err != nil {
@@ -482,7 +482,7 @@ func TestPostgresSearchOrderBy(t *testing.T) {
 		}
 	}
 
-	desc, err := st.Search(project, "widget", "", 10, 0, 0, 0, "date_desc")
+	desc, err := st.Search(context.Background(), project, "widget", "", 10, 0, 0, 0, "date_desc")
 	if err != nil {
 		t.Fatalf("Search date_desc: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestPostgresSearchOrderBy(t *testing.T) {
 		t.Fatalf("Search(orderBy=date_desc) ids = %v, want newest-first [%d,%d,%d]", pgIDList(desc), ids[2], ids[1], ids[0])
 	}
 
-	asc, err := st.Search(project, "widget", "", 10, 0, 0, 0, "date_asc")
+	asc, err := st.Search(context.Background(), project, "widget", "", 10, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("Search date_asc: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestPostgresSearchOrderBy(t *testing.T) {
 		t.Fatalf("Search(orderBy=date_asc) ids = %v, want oldest-first [%d,%d,%d]", pgIDList(asc), ids[0], ids[1], ids[2])
 	}
 
-	garbage, err := st.Search(project, "widget", "", 10, 0, 0, 0, "banana")
+	garbage, err := st.Search(context.Background(), project, "widget", "", 10, 0, 0, 0, "banana")
 	if err != nil {
 		t.Fatalf("Search with unrecognized orderBy: %v", err)
 	}
@@ -524,18 +524,18 @@ func TestPostgresByIDsFetchesExactRowsAndOmitsUnknownIDs(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	r1, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	r1, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "first", Narrative: "narrative one", Facts: []string{"fact a"}}, 0)
 	if err != nil {
 		t.Fatalf("Insert 1: %v", err)
 	}
-	r2, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
+	r2, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
 		memory.Observation{Type: "discovery", Title: "second", Narrative: "narrative two"}, 0)
 	if err != nil {
 		t.Fatalf("Insert 2: %v", err)
 	}
 
-	results, err := st.ByIDs([]int64{r1.ID, r2.ID, 999999999})
+	results, err := st.ByIDs(context.Background(), []int64{r1.ID, r2.ID, 999999999})
 	if err != nil {
 		t.Fatalf("ByIDs: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestPostgresByIDsRejectsTooManyIDs(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = int64(i + 1)
 	}
-	if _, err := st.ByIDs(tooMany); err == nil {
+	if _, err := st.ByIDs(context.Background(), tooMany); err == nil {
 		t.Fatalf("ByIDs with %d ids (limit is %d): want an error, got nil", len(tooMany), memory.MaxIDsPerLookup)
 	}
 }
@@ -576,23 +576,23 @@ func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	oCat, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "cat", project), memory.Observation{Type: "discovery", Title: "about cats"}, 0)
+	oCat, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "cat", project), memory.Observation{Type: "discovery", Title: "about cats"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	oDog, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "dog", project), memory.Observation{Type: "discovery", Title: "about dogs"}, 0)
+	oDog, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "dog", project), memory.Observation{Type: "discovery", Title: "about dogs"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
 	dims := make([]float32, DefaultEmbedDims)
 	dims[0] = 1
-	if err := st.SaveEmbedding(oCat.ID, dims); err != nil {
+	if err := st.SaveEmbedding(context.Background(), oCat.ID, dims); err != nil {
 		t.Fatalf("SaveEmbedding cat: %v", err)
 	}
 	orth := make([]float32, DefaultEmbedDims)
 	orth[1] = 1
-	if err := st.SaveEmbedding(oDog.ID, orth); err != nil {
+	if err := st.SaveEmbedding(context.Background(), oDog.ID, orth); err != nil {
 		t.Fatalf("SaveEmbedding dog: %v", err)
 	}
 
@@ -603,7 +603,7 @@ func TestPostgresSemanticSearchOrdersByCosineSimilarity(t *testing.T) {
 	// grows every time this suite runs against the shared instance, and a
 	// fixed limit=50 would eventually push one of these two rows out of
 	// the returned set on ranking ties alone.
-	matches, err := st.SemanticSearch(project, query, 50)
+	matches, err := st.SemanticSearch(context.Background(), project, query, 50)
 	if err != nil {
 		t.Fatalf("SemanticSearch: %v", err)
 	}
@@ -702,14 +702,14 @@ func TestPostgresSemanticSearchHNSWEfSearchAppliesWithoutLeaking(t *testing.T) {
 	}
 
 	project2 := uniqueProject(t)
-	o2, err := tuned.Insert("s1", project2, "Bash", memory.ContentHash("s1", "Bash", "efsearch-valid", project2), memory.Observation{Type: "discovery", Title: "y"}, 0)
+	o2, err := tuned.Insert(context.Background(), "s1", project2, "Bash", memory.ContentHash("s1", "Bash", "efsearch-valid", project2), memory.Observation{Type: "discovery", Title: "y"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := tuned.SaveEmbedding(o2.ID, vec); err != nil {
+	if err := tuned.SaveEmbedding(context.Background(), o2.ID, vec); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
-	matches, err := tuned.SemanticSearch(project2, vec, 10)
+	matches, err := tuned.SemanticSearch(context.Background(), project2, vec, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch with a valid override (999): %v", err)
 	}
@@ -730,16 +730,16 @@ func TestPostgresRecentByProjectOrdersNewestFirst(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	older, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "1", project), memory.Observation{Type: "discovery", Title: "older"}, 0)
+	older, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "1", project), memory.Observation{Type: "discovery", Title: "older"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	newer, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "2", project), memory.Observation{Type: "discovery", Title: "newer"}, 0)
+	newer, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "2", project), memory.Observation{Type: "discovery", Title: "newer"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.RecentByProject(project, 10)
+	results, err := st.RecentByProject(context.Background(), project, 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestPostgresRecentByProjectHandlesNullNarrative(t *testing.T) {
 		t.Fatalf("insert row with NULL narrative/subtitle: %v", err)
 	}
 
-	results, err := st.RecentByProject(project, 10)
+	results, err := st.RecentByProject(context.Background(), project, 10)
 	if err != nil {
 		t.Fatalf("RecentByProject with a NULL narrative row: %v", err)
 	}
@@ -785,16 +785,16 @@ func TestPostgresBySessionIDOrdersOldestFirst(t *testing.T) {
 	project := uniqueProject(t)
 	sessionID := fmt.Sprintf("session-%d", time.Now().UnixNano())
 
-	first, err := st.Insert(sessionID, project, "Bash", memory.ContentHash(sessionID, "Bash", "1", project), memory.Observation{Type: "discovery", Title: "first"}, 0)
+	first, err := st.Insert(context.Background(), sessionID, project, "Bash", memory.ContentHash(sessionID, "Bash", "1", project), memory.Observation{Type: "discovery", Title: "first"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	second, err := st.Insert(sessionID, project, "Bash", memory.ContentHash(sessionID, "Bash", "2", project), memory.Observation{Type: "discovery", Title: "second"}, 0)
+	second, err := st.Insert(context.Background(), sessionID, project, "Bash", memory.ContentHash(sessionID, "Bash", "2", project), memory.Observation{Type: "discovery", Title: "second"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.BySessionID(sessionID, 10)
+	results, err := st.BySessionID(context.Background(), sessionID, 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}
@@ -811,22 +811,22 @@ func TestPostgresObservationsForFileMatchesReadAndModifiedExactly(t *testing.T) 
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	readMatch, err := st.Insert("s1", project, "Read", memory.ContentHash("s1", "Read", "1", project),
+	readMatch, err := st.Insert(context.Background(), "s1", project, "Read", memory.ContentHash("s1", "Read", "1", project),
 		memory.Observation{Type: "discovery", Title: "read match", FilesRead: []string{"main.go"}}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	modifiedMatch, err := st.Insert("s1", project, "Edit", memory.ContentHash("s1", "Edit", "2", project),
+	modifiedMatch, err := st.Insert(context.Background(), "s1", project, "Edit", memory.ContentHash("s1", "Edit", "2", project),
 		memory.Observation{Type: "change", Title: "modified match", FilesModified: []string{"main.go"}}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if _, err := st.Insert("s1", project, "Read", memory.ContentHash("s1", "Read", "3", project),
+	if _, err := st.Insert(context.Background(), "s1", project, "Read", memory.ContentHash("s1", "Read", "3", project),
 		memory.Observation{Type: "discovery", Title: "substring only", FilesRead: []string{"not-main.go-really"}}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.ObservationsForFile(project, "main.go", 10)
+	results, err := st.ObservationsForFile(context.Background(), project, "main.go", 10)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}
@@ -842,13 +842,13 @@ func TestPostgresObservationsForFileMatchesReadAndModifiedExactly(t *testing.T) 
 func TestPostgresSemanticSearchDimensionMismatchErrors(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	o, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "c", project), memory.Observation{Type: "discovery", Title: "x"}, 0)
+	o, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "c", project), memory.Observation{Type: "discovery", Title: "x"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	// Wrong dimensionality must fail loudly, not silently truncate/pad —
 	// this is the schema's fixed-dims guarantee actually being enforced.
-	if err := st.SaveEmbedding(o.ID, []float32{1, 2, 3}); err == nil {
+	if err := st.SaveEmbedding(context.Background(), o.ID, []float32{1, 2, 3}); err == nil {
 		t.Fatal("SaveEmbedding with the wrong vector dimensionality: want an error, got nil")
 	}
 }
@@ -1002,7 +1002,7 @@ func TestPostgresSemanticSearchScopedToProjectReturnsResults(t *testing.T) {
 	seed := func(project string, vec []float32, n int) {
 		t.Helper()
 		for i := 0; i < n; i++ {
-			res, err := st.Insert("s1", project, "Bash",
+			res, err := st.Insert(context.Background(), "s1", project, "Bash",
 				memory.ContentHash("s1", "Bash", project, fmt.Sprintf("%d", i)),
 				memory.Observation{Type: "discovery", Title: fmt.Sprintf("%s row %d", project, i)}, 0)
 			if err != nil {
@@ -1010,7 +1010,7 @@ func TestPostgresSemanticSearchScopedToProjectReturnsResults(t *testing.T) {
 			}
 			v := append([]float32(nil), vec...)
 			v[DefaultEmbedDims-1] = float32(i) / 1e6
-			if err := st.SaveEmbedding(res.ID, v); err != nil {
+			if err := st.SaveEmbedding(context.Background(), res.ID, v); err != nil {
 				t.Fatalf("SaveEmbedding: %v", err)
 			}
 		}
@@ -1018,7 +1018,7 @@ func TestPostgresSemanticSearchScopedToProjectReturnsResults(t *testing.T) {
 	seed(other, near, 40)
 	seed(target, far, 20)
 
-	got, err := st.SemanticSearch(target, near, 10)
+	got, err := st.SemanticSearch(context.Background(), target, near, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch: %v", err)
 	}
@@ -1043,7 +1043,7 @@ func TestPostgresSemanticSearchCTEFallbackPath(t *testing.T) {
 	vec := make([]float32, DefaultEmbedDims)
 	vec[0] = 1
 	for i := 0; i < 5; i++ {
-		res, err := st.Insert("s1", project, "Bash",
+		res, err := st.Insert(context.Background(), "s1", project, "Bash",
 			memory.ContentHash("s1", "Bash", project, fmt.Sprintf("%d", i)),
 			memory.Observation{Type: "discovery", Title: fmt.Sprintf("row %d", i)}, 0)
 		if err != nil {
@@ -1051,13 +1051,13 @@ func TestPostgresSemanticSearchCTEFallbackPath(t *testing.T) {
 		}
 		v := append([]float32(nil), vec...)
 		v[DefaultEmbedDims-1] = float32(i) / 1e6
-		if err := st.SaveEmbedding(res.ID, v); err != nil {
+		if err := st.SaveEmbedding(context.Background(), res.ID, v); err != nil {
 			t.Fatalf("SaveEmbedding: %v", err)
 		}
 	}
 
 	st.iterativeScan = false // force the fallback
-	got, err := st.SemanticSearch(project, vec, 10)
+	got, err := st.SemanticSearch(context.Background(), project, vec, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch via the CTE fallback: %v", err)
 	}
@@ -1116,7 +1116,7 @@ func TestSemanticSearchPlanNeverLeavesAScopedSearchUnguarded(t *testing.T) {
 func TestPostgresSaveEmbeddingRejectsAnUnknownObservation(t *testing.T) {
 	st := openTestStore(t)
 	vec := make([]float32, st.embedDims)
-	err := st.SaveEmbedding(999999999, vec)
+	err := st.SaveEmbedding(context.Background(), 999999999, vec)
 	if err == nil {
 		t.Fatal("SaveEmbedding for a nonexistent observation returned nil — the caller would believe an embedding was stored when the UPDATE matched no rows")
 	}
@@ -1134,7 +1134,7 @@ func TestPostgresSaveEmbeddingRejectsAnUnknownObservation(t *testing.T) {
 func TestPostgresSaveEmbeddingRejectsWrongDimensionsActionably(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	res, err := st.Insert("s1", project, "Bash",
+	res, err := st.Insert(context.Background(), "s1", project, "Bash",
 		memory.ContentHash("s1", "Bash", project, "dims"),
 		memory.Observation{Type: "discovery", Title: "row"}, 0)
 	if err != nil {
@@ -1142,7 +1142,7 @@ func TestPostgresSaveEmbeddingRejectsWrongDimensionsActionably(t *testing.T) {
 	}
 
 	wrong := make([]float32, st.embedDims+1)
-	err = st.SaveEmbedding(res.ID, wrong)
+	err = st.SaveEmbedding(context.Background(), res.ID, wrong)
 	if err == nil {
 		t.Fatal("SaveEmbedding with the wrong dimension count: want an error, got nil")
 	}

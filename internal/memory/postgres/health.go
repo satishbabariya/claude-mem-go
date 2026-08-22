@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // exists — a schema drift (a manually-run migration, an index dropped by
 // hand) would otherwise silently degrade every SemanticSearch call to a
 // full table scan without anything here ever saying so.
-func (s *Store) HealthDetails() (map[string]string, error) {
+func (s *Store) HealthDetails(ctx context.Context) (map[string]string, error) {
 	details := map[string]string{}
 
 	dbStats := s.db.Stats()
@@ -26,14 +27,14 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 	details["pool_max_open_connections"] = strconv.Itoa(dbStats.MaxOpenConnections)
 
 	var vectorVersion string
-	if err := s.db.QueryRow(`SELECT extversion FROM pg_extension WHERE extname = 'vector'`).Scan(&vectorVersion); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT extversion FROM pg_extension WHERE extname = 'vector'`).Scan(&vectorVersion); err != nil {
 		details["vector_extension"] = "not installed"
 	} else {
 		details["vector_extension"] = vectorVersion
 	}
 
 	var hnswExists bool
-	if err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_observations_embedding_hnsw')`).Scan(&hnswExists); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_observations_embedding_hnsw')`).Scan(&hnswExists); err != nil {
 		return nil, fmt.Errorf("check HNSW index: %w", err)
 	}
 	details["hnsw_index_exists"] = strconv.FormatBool(hnswExists)
@@ -74,7 +75,7 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 	if s.embedDims > 0 {
 		details["embedding_column_dims"] = strconv.Itoa(s.embedDims)
 	}
-	rows, err := s.db.Query(`SELECT vector_dims(embedding), COUNT(*) FROM observations WHERE embedding IS NOT NULL GROUP BY vector_dims(embedding) ORDER BY 1`)
+	rows, err := s.db.QueryContext(ctx, `SELECT vector_dims(embedding), COUNT(*) FROM observations WHERE embedding IS NOT NULL GROUP BY vector_dims(embedding) ORDER BY 1`)
 	if err != nil {
 		return nil, fmt.Errorf("query embedding dims histogram: %w", err)
 	}

@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -40,19 +41,19 @@ func TestValidateObservationTypeRejectsUnknownValues(t *testing.T) {
 // correctly but forgetting to call it from insertRow.
 func TestInsertRejectsAnUnrecognizedObservationType(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	_, err = st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "b"),
+	_, err = st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "b"),
 		memory.Observation{Type: "bugfix", Title: "x"}, 0)
 	if err == nil {
 		t.Fatal("Insert with an unrecognized type: want an error, got nil")
 	}
 
-	count, cerr := st.CountByProject("proj")
+	count, cerr := st.CountByProject(context.Background(), "proj")
 	if cerr != nil {
 		t.Fatalf("CountByProject: %v", cerr)
 	}
@@ -68,13 +69,13 @@ func TestInsertRejectsAnUnrecognizedObservationType(t *testing.T) {
 // for just one of the two callers.
 func TestImportRowRejectsAnUnrecognizedObservationType(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	_, err = st.ImportRow(memory.ExportRow{
+	_, err = st.ImportRow(context.Background(), memory.ExportRow{
 		SessionID:   "s1",
 		Project:     "proj",
 		ToolName:    "Bash",

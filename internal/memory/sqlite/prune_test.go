@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 func openPruneTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -32,14 +33,14 @@ func setCreatedAtEpoch(t *testing.T, s *Store, id int64, epoch int64) {
 
 func TestPruneDryRunCountsWithoutDeleting(t *testing.T) {
 	st := openPruneTestStore(t)
-	old, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	old, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "old row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	setCreatedAtEpoch(t, st, old.ID, 1000)
 
-	n, err := st.Prune("", 2000, true)
+	n, err := st.Prune(context.Background(), "", 2000, true)
 	if err != nil {
 		t.Fatalf("Prune (dry run): %v", err)
 	}
@@ -47,7 +48,7 @@ func TestPruneDryRunCountsWithoutDeleting(t *testing.T) {
 		t.Fatalf("Prune dry-run count = %d, want 1", n)
 	}
 
-	count, err := st.CountByProject("proj")
+	count, err := st.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -58,21 +59,21 @@ func TestPruneDryRunCountsWithoutDeleting(t *testing.T) {
 
 func TestPruneDeletesOnlyRowsOlderThanCutoff(t *testing.T) {
 	st := openPruneTestStore(t)
-	old, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "old", "1"),
+	old, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "old", "1"),
 		memory.Observation{Type: "discovery", Title: "old row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert old: %v", err)
 	}
 	setCreatedAtEpoch(t, st, old.ID, 1000)
 
-	recent, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "recent", "2"),
+	recent, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "recent", "2"),
 		memory.Observation{Type: "discovery", Title: "recent row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert recent: %v", err)
 	}
 	setCreatedAtEpoch(t, st, recent.ID, 5000)
 
-	n, err := st.Prune("", 2000, false)
+	n, err := st.Prune(context.Background(), "", 2000, false)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestPruneDeletesOnlyRowsOlderThanCutoff(t *testing.T) {
 		t.Fatalf("Prune deleted %d rows, want 1", n)
 	}
 
-	results, err := st.RecentByProject("proj", 10)
+	results, err := st.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -91,21 +92,21 @@ func TestPruneDeletesOnlyRowsOlderThanCutoff(t *testing.T) {
 
 func TestPruneScopesToProjectWhenGiven(t *testing.T) {
 	st := openPruneTestStore(t)
-	a, err := st.Insert("s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	a, err := st.Insert(context.Background(), "s1", "proj-a", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "old in proj-a"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	setCreatedAtEpoch(t, st, a.ID, 1000)
 
-	b, err := st.Insert("s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+	b, err := st.Insert(context.Background(), "s1", "proj-b", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
 		memory.Observation{Type: "discovery", Title: "old in proj-b"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	setCreatedAtEpoch(t, st, b.ID, 1000)
 
-	n, err := st.Prune("proj-a", 2000, false)
+	n, err := st.Prune(context.Background(), "proj-a", 2000, false)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -113,14 +114,14 @@ func TestPruneScopesToProjectWhenGiven(t *testing.T) {
 		t.Fatalf("Prune scoped to proj-a deleted %d rows, want 1", n)
 	}
 
-	countA, err := st.CountByProject("proj-a")
+	countA, err := st.CountByProject(context.Background(), "proj-a")
 	if err != nil {
 		t.Fatalf("CountByProject proj-a: %v", err)
 	}
 	if countA != 0 {
 		t.Fatalf("CountByProject(proj-a) after scoped prune = %d, want 0", countA)
 	}
-	countB, err := st.CountByProject("proj-b")
+	countB, err := st.CountByProject(context.Background(), "proj-b")
 	if err != nil {
 		t.Fatalf("CountByProject proj-b: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestPruneScopesToProjectWhenGiven(t *testing.T) {
 // applies migration 5 and Prune then works.
 func TestMigration5FixesAnAlreadyMigratedDatabasesBrokenTrigger(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestMigration5FixesAnAlreadyMigratedDatabasesBrokenTrigger(t *testing.T) {
 	if _, err := st.db.Exec(`DELETE FROM schema_migrations WHERE version = 5`); err != nil {
 		t.Fatalf("roll back migration 5's record: %v", err)
 	}
-	old, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	old, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "row inserted under the broken trigger"}, 0)
 	if err != nil {
 		t.Fatalf("Insert under simulated broken trigger: %v", err)
@@ -167,13 +168,13 @@ func TestMigration5FixesAnAlreadyMigratedDatabasesBrokenTrigger(t *testing.T) {
 	setCreatedAtEpoch(t, st, old.ID, 1000)
 	st.Close()
 
-	st2, err := Open(dbPath)
+	st2, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("re-Open (should apply migration 5): %v", err)
 	}
 	defer st2.Close()
 
-	if _, err := st2.Prune("", 2000, false); err != nil {
+	if _, err := st2.Prune(context.Background(), "", 2000, false); err != nil {
 		t.Fatalf("Prune after migration 5 should succeed against the fixed trigger, got: %v", err)
 	}
 }
@@ -185,14 +186,14 @@ func TestMigration5FixesAnAlreadyMigratedDatabasesBrokenTrigger(t *testing.T) {
 // prevent that.
 func TestPruneCleansUpFTSIndexToo(t *testing.T) {
 	st := openPruneTestStore(t)
-	old, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	old, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "prunable marker xyzzy-plumbus"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	setCreatedAtEpoch(t, st, old.ID, 1000)
 
-	before, err := st.Search("", "xyzzy-plumbus", "", 10, 0, 0, 0, "")
+	before, err := st.Search(context.Background(), "", "xyzzy-plumbus", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search before prune: %v", err)
 	}
@@ -200,11 +201,11 @@ func TestPruneCleansUpFTSIndexToo(t *testing.T) {
 		t.Fatalf("Search before prune found %d results, want 1", len(before))
 	}
 
-	if _, err := st.Prune("", 2000, false); err != nil {
+	if _, err := st.Prune(context.Background(), "", 2000, false); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	after, err := st.Search("", "xyzzy-plumbus", "", 10, 0, 0, 0, "")
+	after, err := st.Search(context.Background(), "", "xyzzy-plumbus", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search after prune: %v", err)
 	}

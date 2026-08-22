@@ -15,7 +15,7 @@ import (
 func TestHealthDetailsReflectsRealPoolAndSchemaState(t *testing.T) {
 	st := openTestStore(t)
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestHealthDetailsReflectsConfiguredHNSWEfSearch(t *testing.T) {
 	}
 	defer st.Close()
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}
@@ -78,14 +78,14 @@ func TestSaveEmbeddingRejectsWrongDimensionVector(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	res, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	res, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "dim mismatch test"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
 	wrongDims := make([]float32, DefaultEmbedDims/2)
-	if err := st.SaveEmbedding(res.ID, wrongDims); err == nil {
+	if err := st.SaveEmbedding(context.Background(), res.ID, wrongDims); err == nil {
 		t.Fatalf("SaveEmbedding with %d dims (schema expects %d): want an error, got nil — a silent dimension mismatch here would be worse than SQLite's, since it wouldn't even show up in HealthDetails afterward", len(wrongDims), DefaultEmbedDims)
 	}
 }
@@ -98,16 +98,16 @@ func TestHealthDetailsReportsEmbeddingDimsForPostgres(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	res, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
+	res, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
 		memory.Observation{Type: "discovery", Title: "embedded row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := st.SaveEmbedding(res.ID, make([]float32, DefaultEmbedDims)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), res.ID, make([]float32, DefaultEmbedDims)); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}

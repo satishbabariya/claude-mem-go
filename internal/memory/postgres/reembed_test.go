@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -10,19 +11,19 @@ func TestPostgresObservationsNeedingEmbeddingFindsUnembeddedRows(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	neverEmbedded, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "never embedded"}, 0)
+	neverEmbedded, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "never embedded"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	correctlyEmbedded, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "discovery", Title: "already fine"}, 0)
+	correctlyEmbedded, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project), memory.Observation{Type: "discovery", Title: "already fine"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := st.SaveEmbedding(correctlyEmbedded.ID, make([]float32, DefaultEmbedDims)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), correctlyEmbedded.ID, make([]float32, DefaultEmbedDims)); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	results, err := st.ObservationsNeedingEmbedding(project, DefaultEmbedDims, 0, 100)
+	results, err := st.ObservationsNeedingEmbedding(context.Background(), project, DefaultEmbedDims, 0, 100)
 	if err != nil {
 		t.Fatalf("ObservationsNeedingEmbedding: %v", err)
 	}

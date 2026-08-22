@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -14,9 +15,9 @@ import (
 // rationale, shared by both backends, and its doc comment on ExportRow
 // for why the embedding needs to travel too, not just the observation's
 // content.
-func (s *Store) ExportAll(afterID int64, limit int) ([]memory.ExportRow, error) {
+func (s *Store) ExportAll(ctx context.Context, afterID int64, limit int) ([]memory.ExportRow, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, next_steps,
 		       cost_usd, created_at, created_at_epoch, content_hash, embedding
@@ -73,8 +74,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]memory.ExportRow, error) 
 // embedding if it had one — see sqlite.Store's ImportRow doc comment for
 // the idempotency/timestamp/embedding-preservation rationale, identical
 // here.
-func (s *Store) ImportRow(row memory.ExportRow) (memory.InsertResult, error) {
-	// memory.ParseExportCreatedAt, not an inline time.Parse: this backend
+func (s *Store) ImportRow(ctx context.Context, row memory.ExportRow) (memory.InsertResult, error) { // memory.ParseExportCreatedAt, not an inline time.Parse: this backend
 	// validated CreatedAt from the start while the SQLite one didn't, and
 	// that silent disagreement was itself a real bug (see the helper's own
 	// doc comment). Sharing one definition is what keeps them from drifting
@@ -83,13 +83,13 @@ func (s *Store) ImportRow(row memory.ExportRow) (memory.InsertResult, error) {
 	if err != nil {
 		return memory.InsertResult{}, err
 	}
-	res, err := s.insertRow(row.SessionID, row.Project, row.ToolName, row.ContentHash,
+	res, err := s.insertRow(ctx, row.SessionID, row.Project, row.ToolName, row.ContentHash,
 		row.Observation, row.CostUSD, createdAt, row.CreatedAtEpoch)
 	if err != nil {
 		return res, err
 	}
 	if res.Inserted && len(row.Embedding) > 0 {
-		if err := s.SaveEmbedding(res.ID, row.Embedding); err != nil {
+		if err := s.SaveEmbedding(ctx, res.ID, row.Embedding); err != nil {
 			return res, fmt.Errorf("import observation %d: save embedding: %w", res.ID, err)
 		}
 	}

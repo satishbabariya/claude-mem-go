@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,14 +73,14 @@ func (f *fakeOllama) calls() int {
 func seedRowsNeedingEmbedding(t *testing.T, n int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "reembed.db")
-	st, err := sqlite.Open(path)
+	st, err := sqlite.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("observation %d", i)
-		if _, err := st.Insert("s1", "reembed-proj", "Bash",
+		if _, err := st.Insert(context.Background(), "s1", "reembed-proj", "Bash",
 			memory.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
 			memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
@@ -139,12 +140,12 @@ func TestReembedBreakerResetsOnSuccess(t *testing.T) {
 	dbPath := seedRowsNeedingEmbedding(t, seeded)
 	rc := cmdReembed([]string{"-db", dbPath, "-yes"})
 
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
-	remaining, err := st.ObservationsNeedingEmbedding("", 768, 0, 1000)
+	remaining, err := st.ObservationsNeedingEmbedding(context.Background(), "", 768, 0, 1000)
 	if err != nil {
 		t.Fatalf("ObservationsNeedingEmbedding: %v", err)
 	}

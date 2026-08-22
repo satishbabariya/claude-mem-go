@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -16,16 +17,16 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	res, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "row"}, 0)
+	res, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project), memory.Observation{Type: "discovery", Title: "row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := st.SaveEmbedding(res.ID, make([]float32, DefaultEmbedDims)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), res.ID, make([]float32, DefaultEmbedDims)); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
 	t.Run("Search", func(t *testing.T) {
-		results, err := st.Search(project, "row", "", -1, 0, 0, 0, "")
+		results, err := st.Search(context.Background(), project, "row", "", -1, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search(limit=-1): want a clean clamp, got an error: %v", err)
 		}
@@ -34,7 +35,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 		}
 	})
 	t.Run("RecentByProject", func(t *testing.T) {
-		results, err := st.RecentByProject(project, -1)
+		results, err := st.RecentByProject(context.Background(), project, -1)
 		if err != nil {
 			t.Fatalf("RecentByProject(limit=-1): want a clean clamp, got an error: %v", err)
 		}
@@ -43,7 +44,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 		}
 	})
 	t.Run("BySessionID", func(t *testing.T) {
-		results, err := st.BySessionID("s1", -1)
+		results, err := st.BySessionID(context.Background(), "s1", -1)
 		if err != nil {
 			t.Fatalf("BySessionID(limit=-1): want a clean clamp, got an error: %v", err)
 		}
@@ -52,7 +53,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 		}
 	})
 	t.Run("SemanticSearch", func(t *testing.T) {
-		matches, err := st.SemanticSearch(project, make([]float32, DefaultEmbedDims), -1)
+		matches, err := st.SemanticSearch(context.Background(), project, make([]float32, DefaultEmbedDims), -1)
 		if err != nil {
 			t.Fatalf("SemanticSearch(limit=-1): want a clean clamp, got an error: %v", err)
 		}
@@ -61,7 +62,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 		}
 	})
 	t.Run("ExportAll", func(t *testing.T) {
-		results, err := st.ExportAll(0, -1)
+		results, err := st.ExportAll(context.Background(), 0, -1)
 		if err != nil {
 			t.Fatalf("ExportAll(limit=-1): want a clean clamp, got an error: %v", err)
 		}
@@ -70,7 +71,7 @@ func TestNegativeLimitDoesNotError(t *testing.T) {
 		}
 	})
 	t.Run("ObservationsNeedingEmbedding", func(t *testing.T) {
-		results, err := st.ObservationsNeedingEmbedding(project, DefaultEmbedDims, 0, -1)
+		results, err := st.ObservationsNeedingEmbedding(context.Background(), project, DefaultEmbedDims, 0, -1)
 		if err != nil {
 			t.Fatalf("ObservationsNeedingEmbedding(limit=-1): want a clean clamp, got an error: %v", err)
 		}

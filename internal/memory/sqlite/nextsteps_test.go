@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,20 +15,20 @@ import (
 // data-loss bug of exactly that shape — a field that was captured and
 // then quietly dropped by the migration path.
 func TestNextStepsRoundTrip(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "o.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "o.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	want := []string{"wire the retry budget into the client", "delete the dead flag"}
-	if _, err := st.Insert("s1", "proj", "SessionSummary",
+	if _, err := st.Insert(context.Background(), "s1", "proj", "SessionSummary",
 		memory.ContentHash("s1", "SessionSummary", "summary", ""),
 		memory.Observation{Type: "summary", Title: "session summary", NextSteps: want}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	recent, err := st.RecentByProject("proj", 10)
+	recent, err := st.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestNextStepsRoundTrip(t *testing.T) {
 		t.Errorf("NextSteps from RecentByProject = %v, want %v", got, want)
 	}
 
-	rows, err := st.ExportAll(0, 10)
+	rows, err := st.ExportAll(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -56,18 +57,18 @@ func TestNextStepsRoundTrip(t *testing.T) {
 // non-emptiness, so a stray value would put a phantom "unfinished" block
 // at the top of every session.
 func TestNextStepsDefaultsEmpty(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "o.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "o.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Insert("s1", "proj", "Bash",
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 		memory.ContentHash("s1", "Bash", "ordinary", ""),
 		memory.Observation{Type: "discovery", Title: "ordinary observation"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	recent, err := st.RecentByProject("proj", 10)
+	recent, err := st.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -115,11 +116,11 @@ func TestParseXMLExtractsNextSteps(t *testing.T) {
 // failing to scan.
 func TestNextStepsMigrationOnPreexistingStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "o.db")
-	st, err := Open(path)
+	st, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash",
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 		memory.ContentHash("s1", "Bash", "old", ""),
 		memory.Observation{Type: "discovery", Title: "written before next_steps existed"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -138,13 +139,13 @@ func TestNextStepsMigrationOnPreexistingStore(t *testing.T) {
 	}
 	st.Close()
 
-	reopened, err := Open(path)
+	reopened, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("reopening a store without next_steps must migrate it, got: %v", err)
 	}
 	defer reopened.Close()
 
-	recent, err := reopened.RecentByProject("proj", 10)
+	recent, err := reopened.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject after migration: %v", err)
 	}

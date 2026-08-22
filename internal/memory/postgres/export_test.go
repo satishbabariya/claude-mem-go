@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -10,18 +11,18 @@ import (
 func TestPostgresExportAllReturnsEverythingOldestFirst(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	first, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	first, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "first"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	second, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
+	second, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "b", project),
 		memory.Observation{Type: "discovery", Title: "second"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	rows, err := st.ExportAll(first.ID-1, 100)
+	rows, err := st.ExportAll(context.Background(), first.ID-1, 100)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestPostgresImportRowCreatesANewRowWithPreservedFields(t *testing.T) {
 		CreatedAtEpoch: 1577836800000,
 	}
 
-	res, err := pg.ImportRow(row)
+	res, err := pg.ImportRow(context.Background(), row)
 	if err != nil {
 		t.Fatalf("ImportRow: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestPostgresImportRowCreatesANewRowWithPreservedFields(t *testing.T) {
 		t.Fatal("ImportRow of a genuinely new row: want Inserted=true")
 	}
 
-	restored, err := pg.RecentByProject(project, 10)
+	restored, err := pg.RecentByProject(context.Background(), project, 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestPostgresImportRowCreatesANewRowWithPreservedFields(t *testing.T) {
 // SQLite store and import into the live Postgres container, confirming
 // export/import doubles as the SQLite<->Postgres migration path.
 func TestExportSQLiteImportPostgres(t *testing.T) {
-	sqliteDB, err := sqlite.Open(t.TempDir() + "/test.db")
+	sqliteDB, err := sqlite.Open(context.Background(), t.TempDir()+"/test.db")
 	if err != nil {
 		t.Fatalf("sqlite Open: %v", err)
 	}
@@ -106,11 +107,11 @@ func TestExportSQLiteImportPostgres(t *testing.T) {
 
 	project := uniqueProject(t)
 	o := memory.Observation{Type: "discovery", Title: "migrated from sqlite", FilesRead: []string{"main.go"}}
-	if _, err := sqliteDB.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "migrate", project), o, 0.02); err != nil {
+	if _, err := sqliteDB.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "migrate", project), o, 0.02); err != nil {
 		t.Fatalf("sqlite Insert: %v", err)
 	}
 
-	rows, err := sqliteDB.ExportAll(0, 100)
+	rows, err := sqliteDB.ExportAll(context.Background(), 0, 100)
 	if err != nil {
 		t.Fatalf("sqlite ExportAll: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestExportSQLiteImportPostgres(t *testing.T) {
 	}
 
 	pg := openTestStore(t)
-	res, err := pg.ImportRow(*toMigrate)
+	res, err := pg.ImportRow(context.Background(), *toMigrate)
 	if err != nil {
 		t.Fatalf("postgres ImportRow: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestExportSQLiteImportPostgres(t *testing.T) {
 		t.Fatal("postgres ImportRow: want Inserted=true")
 	}
 
-	found, err := pg.ObservationsForFile(project, "main.go", 10)
+	found, err := pg.ObservationsForFile(context.Background(), project, "main.go", 10)
 	if err != nil {
 		t.Fatalf("postgres ObservationsForFile: %v", err)
 	}
@@ -149,25 +150,25 @@ func TestExportSQLiteImportPostgres(t *testing.T) {
 // to search. Uses a real embedding value round-tripped through both
 // backends, not a mocked one.
 func TestExportSQLiteImportPostgresPreservesEmbedding(t *testing.T) {
-	sqliteDB, err := sqlite.Open(t.TempDir() + "/test.db")
+	sqliteDB, err := sqlite.Open(context.Background(), t.TempDir()+"/test.db")
 	if err != nil {
 		t.Fatalf("sqlite Open: %v", err)
 	}
 	defer sqliteDB.Close()
 
 	project := uniqueProject(t)
-	res, err := sqliteDB.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "embed-migrate", project),
+	res, err := sqliteDB.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "embed-migrate", project),
 		memory.Observation{Type: "discovery", Title: "row with an embedding to migrate"}, 0)
 	if err != nil {
 		t.Fatalf("sqlite Insert: %v", err)
 	}
 	vec := make([]float32, DefaultEmbedDims)
 	vec[0] = 1
-	if err := sqliteDB.SaveEmbedding(res.ID, vec); err != nil {
+	if err := sqliteDB.SaveEmbedding(context.Background(), res.ID, vec); err != nil {
 		t.Fatalf("sqlite SaveEmbedding: %v", err)
 	}
 
-	rows, err := sqliteDB.ExportAll(0, 100)
+	rows, err := sqliteDB.ExportAll(context.Background(), 0, 100)
 	if err != nil {
 		t.Fatalf("sqlite ExportAll: %v", err)
 	}
@@ -185,14 +186,14 @@ func TestExportSQLiteImportPostgresPreservesEmbedding(t *testing.T) {
 	}
 
 	pg := openTestStore(t)
-	importRes, err := pg.ImportRow(*toMigrate)
+	importRes, err := pg.ImportRow(context.Background(), *toMigrate)
 	if err != nil {
 		t.Fatalf("postgres ImportRow: %v", err)
 	}
 
 	query := make([]float32, DefaultEmbedDims)
 	query[0] = 1
-	matches, err := pg.SemanticSearch(project, query, 10)
+	matches, err := pg.SemanticSearch(context.Background(), project, query, 10)
 	if err != nil {
 		t.Fatalf("postgres SemanticSearch: %v", err)
 	}
@@ -217,7 +218,7 @@ func TestPostgresImportRowRejectsAnUnrecognizedObservationType(t *testing.T) {
 	pg := openTestStore(t)
 	project := uniqueProject(t)
 
-	_, err := pg.ImportRow(memory.ExportRow{
+	_, err := pg.ImportRow(context.Background(), memory.ExportRow{
 		SessionID:      "s1",
 		Project:        project,
 		ToolName:       "Bash",
@@ -268,7 +269,7 @@ func TestPostgresImportRowValidatesCreatedAt(t *testing.T) {
 				CreatedAt:      c.createdAt,
 				CreatedAtEpoch: 1700000000000,
 			}
-			_, err := st.ImportRow(row)
+			_, err := st.ImportRow(context.Background(), row)
 			if c.wantErr && err == nil {
 				t.Fatalf("ImportRow with created_at=%q: want an error, got nil", c.createdAt)
 			}

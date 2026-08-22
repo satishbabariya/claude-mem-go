@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -19,7 +20,7 @@ import (
 // match the store. The column being fixed-width is exactly what causes
 // that, not what prevents it. SaveEmbedding now says so explicitly
 // instead of surfacing pgvector's bare dimension error.
-func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]memory.SearchResult, error) {
+func (s *Store) ObservationsNeedingEmbedding(ctx context.Context, project string, expectedDims int64, afterID int64, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	scope := ""
 	args := []any{afterID, expectedDims, limit}
@@ -27,7 +28,7 @@ func (s *Store) ObservationsNeedingEmbedding(project string, expectedDims int64,
 		scope = "AND project = $4"
 		args = append(args, project)
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations

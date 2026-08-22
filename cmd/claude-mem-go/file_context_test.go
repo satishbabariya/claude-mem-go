@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,13 +48,13 @@ func runFileContext(t *testing.T, dbPath, payload string) (string, string) {
 func seedFileObservation(t *testing.T, project, filePath string) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "fc.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	res, err := st.Insert("s1", project, "Read", memory.ContentHash("s1", "Read", filePath, "1"),
+	res, err := st.Insert(context.Background(), "s1", project, "Read", memory.ContentHash("s1", "Read", filePath, "1"),
 		memory.Observation{Type: "discovery", Title: "the parser used a regex here", FilesRead: []string{filePath}}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -163,12 +164,12 @@ func TestFileContextInjectsAcrossSessionsNotJustTheLatest(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "fc.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	ins := func(sess, title string) {
-		if _, err := st.Insert(sess, project, "Read", memory.ContentHash(sess, "Read", title, target),
+		if _, err := st.Insert(context.Background(), sess, project, "Read", memory.ContentHash(sess, "Read", title, target),
 			memory.Observation{Type: "change", Title: title, FilesRead: []string{target}}, 0); err != nil {
 			t.Fatalf("Insert %q: %v", title, err)
 		}

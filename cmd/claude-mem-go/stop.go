@@ -156,7 +156,7 @@ const (
 // conversation, no tool calls at all) pays the full wait budget before
 // this gives up — an acceptable cost since Stop runs fire-and-forget,
 // not a cost the user waiting on their own session ever sees.
-func waitForSessionObservations(st memory.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]memory.SearchResult, error) {
+func waitForSessionObservations(ctx context.Context, st memory.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]memory.SearchResult, error) {
 	var observations []memory.SearchResult
 	prevCount := -1
 	streak := 0
@@ -171,7 +171,7 @@ func waitForSessionObservations(st memory.Backend, sessionID string, limit int, 
 	// ever anything to wait for.
 	sawActivity := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		obs, err := st.BySessionID(sessionID, limit)
+		obs, err := st.BySessionID(ctx, sessionID, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -316,7 +316,9 @@ func cmdStop(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := hookContext(stopBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		return 0
@@ -339,7 +341,7 @@ func cmdStop(args []string) int {
 	// after its summary was already written — without needing to enumerate
 	// them. It costs one extra query on the normal path, where it finds
 	// nothing and falls through.
-	if existing, err := st.BySessionID(in.SessionID, *limit); err == nil {
+	if existing, err := st.BySessionID(ctx, in.SessionID, *limit); err == nil {
 		for _, o := range existing {
 			if o.Observation.Type == "summary" {
 				l.Printf("skip: session %s already summarized (observations.id=%d) — "+
@@ -356,7 +358,7 @@ func cmdStop(args []string) int {
 		}
 		return n, true
 	}
-	observations, err := waitForSessionObservations(st, in.SessionID, *limit, inFlight)
+	observations, err := waitForSessionObservations(ctx, st, in.SessionID, *limit, inFlight)
 	if err != nil {
 		l.Errorf("FAILED BySessionID(%s): %v", in.SessionID, err)
 		return 0
@@ -392,7 +394,7 @@ func cmdStop(args []string) int {
 	// it is far above *limit, so Total is the true count in every
 	// realistic case and the prompt can say so.
 	all := observations
-	if full, ferr := st.BySessionID(in.SessionID, summaryFetchCap); ferr != nil {
+	if full, ferr := st.BySessionID(ctx, in.SessionID, summaryFetchCap); ferr != nil {
 		l.Warnf("full re-read for windowing failed, falling back to the capped set: %v", ferr)
 	} else if len(full) > len(all) {
 		all = full
@@ -403,7 +405,7 @@ func cmdStop(args []string) int {
 			in.SessionID, window.Total, len(window.Observations))
 	}
 
-	obs, err := observer.New(context.Background(), *model)
+	obs, err := observer.New(ctx, *model)
 	if err != nil {
 		l.Errorf("FAILED to start observer: %v", err)
 		return 0
@@ -416,7 +418,7 @@ func cmdStop(args []string) int {
 		return 0
 	}
 
-	res, err := st.Insert(in.SessionID, project, "SessionSummary", hash, summaryTurn.Observation, summaryTurn.Result.CostUSD)
+	res, err := st.Insert(ctx, in.SessionID, project, "SessionSummary", hash, summaryTurn.Observation, summaryTurn.Result.CostUSD)
 	if err != nil {
 		l.Errorf("FAILED sqlite insert: %v", err)
 		return 0
@@ -445,7 +447,7 @@ func cmdStop(args []string) int {
 		l.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
 		return 0
 	}
-	if err := st.SaveEmbedding(res.ID, vec); err != nil {
+	if err := st.SaveEmbedding(ctx, res.ID, vec); err != nil {
 		l.Warnf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 	}
 	return 0

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -162,7 +163,7 @@ func searchOrderClause(orderBy string, enumerate bool) string {
 	}
 }
 
-func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]memory.SearchResult, error) {
+func (s *Store) Search(ctx context.Context, project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
 	// An empty query means "every observation matching the other
@@ -212,7 +213,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 	limitPlaceholder := fmt.Sprintf("$%d", len(args))
 	args = append(args, offset)
 	offsetPlaceholder := fmt.Sprintf("$%d", len(args))
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -248,9 +249,9 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 // RecentByProject returns a project's most recent observations, newest
 // first — the plain-index read path for SessionStart context injection,
 // not a search.
-func (s *Store) RecentByProject(project string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) RecentByProject(ctx context.Context, project string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
@@ -285,9 +286,9 @@ func (s *Store) RecentByProject(project string, limit int) ([]memory.SearchResul
 
 // BySessionID returns every observation recorded for one session, oldest
 // first — the read path for Stop-hook session summarization.
-func (s *Store) BySessionID(sessionID string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) BySessionID(ctx context.Context, sessionID string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -333,14 +334,14 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]memory.SearchResult,
 // shouldn't see a different effective limit depending on which backend
 // happens to be active, and no legitimate caller needs more than a page of
 // IDs from a single detail lookup regardless of backend.
-func (s *Store) ByIDs(ids []int64) ([]memory.SearchResult, error) {
+func (s *Store) ByIDs(ctx context.Context, ids []int64) ([]memory.SearchResult, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	if len(ids) > memory.MaxIDsPerLookup {
 		return nil, fmt.Errorf("ByIDs: %d ids exceeds the %d-id limit per call", len(ids), memory.MaxIDsPerLookup)
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -376,9 +377,9 @@ func (s *Store) ByIDs(ids []int64) ([]memory.SearchResult, error) {
 // top-level array element" operator — the Postgres analog of SQLite's
 // json_each membership check, and does not conflict with pgx's $N
 // placeholder syntax (pgx never treats a bare `?` as a placeholder).
-func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) ObservationsForFile(ctx context.Context, project, filePath string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -417,8 +418,7 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]memo
 // reasoning. Ordered by id, same as the SQLite backend: BIGSERIAL
 // increases monotonically with insertion order here too, so "before/after
 // this row" is exact without needing a timestamp comparison.
-func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]memory.SearchResult, error) {
-	// Postgres's own LIMIT rejects a negative value outright ("LIMIT must
+func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, depthBefore, depthAfter int) ([]memory.SearchResult, error) { // Postgres's own LIMIT rejects a negative value outright ("LIMIT must
 	// not be negative," confirmed against the real container) rather than
 	// SQLite's "unlimited" — a different failure mode from the same root
 	// cause (see the SQLite backend's identical clamp for the full
@@ -438,7 +438,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		depthAfter = memory.MaxTimelineDepth
 	}
 
-	anchorRows, err := s.ByIDs([]int64{anchorID})
+	anchorRows, err := s.ByIDs(ctx, []int64{anchorID})
 	if err != nil {
 		return nil, fmt.Errorf("timeline: %w", err)
 	}
@@ -450,7 +450,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		return nil, fmt.Errorf("timeline: anchor id %d belongs to a different project", anchorID)
 	}
 
-	beforeRows, err := s.db.Query(`
+	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -468,7 +468,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		before[i], before[j] = before[j], before[i]
 	}
 
-	afterRows, err := s.db.Query(`
+	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations

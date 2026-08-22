@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -35,18 +36,18 @@ func TestSanitizeFTSQuery(t *testing.T) {
 // ("no such column: mem") before sanitizeFTSQuery existed.
 func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	o := memory.Observation{Type: "discovery", Title: "claude-mem installation found"}
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "b"), o, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "b"), o, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.Search("", "claude-mem", "", 10, 0, 0, 0, "")
+	results, err := st.Search(context.Background(), "", "claude-mem", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(\"claude-mem\") returned an error instead of results: %v", err)
 	}
@@ -64,20 +65,20 @@ func TestSearchHandlesHyphenatedQueries(t *testing.T) {
 // results, not just accepts the argument without effect.
 func TestSearchFiltersByObservationType(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "widget rollout"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "widget rollout"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "decision", Title: "widget rollout plan approved"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "decision", Title: "widget rollout plan approved"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	all, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "")
+	all, err := st.Search(context.Background(), "proj", "widget", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search with no type filter: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search with no type filter returned %d results, want 2 (sanity check before filtering)", len(all))
 	}
 
-	discoveries, err := st.Search("proj", "widget", "discovery", 10, 0, 0, 0, "")
+	discoveries, err := st.Search(context.Background(), "proj", "widget", "discovery", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=discovery): %v", err)
 	}
@@ -93,7 +94,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=discovery) = %+v, want exactly the one discovery-type row", discoveries)
 	}
 
-	decisions, err := st.Search("proj", "widget", "decision", 10, 0, 0, 0, "")
+	decisions, err := st.Search(context.Background(), "proj", "widget", "decision", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=decision): %v", err)
 	}
@@ -101,7 +102,7 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 		t.Fatalf("Search(type=decision) = %+v, want exactly the one decision-type row", decisions)
 	}
 
-	none, err := st.Search("proj", "widget", "bugfix", 10, 0, 0, 0, "")
+	none, err := st.Search(context.Background(), "proj", "widget", "bugfix", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=bugfix): %v", err)
 	}
@@ -121,23 +122,23 @@ func TestSearchFiltersByObservationType(t *testing.T) {
 // string that happens to match nothing.
 func TestSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "gizmo rollout"}, 0); err != nil {
 		t.Fatalf("Insert discovery: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "decision", Title: "gizmo rollout plan approved"}, 0); err != nil {
 		t.Fatalf("Insert decision: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "c", "3"), memory.Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "c", "3"), memory.Observation{Type: "manual", Title: "gizmo rollout manual note"}, 0); err != nil {
 		t.Fatalf("Insert manual: %v", err)
 	}
 
-	got, err := st.Search("proj", "gizmo", "discovery,decision", 10, 0, 0, 0, "")
+	got, err := st.Search(context.Background(), "proj", "gizmo", "discovery,decision", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search(type=\"discovery,decision\"): %v", err)
 	}
@@ -151,7 +152,7 @@ func TestSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
 
 	// Whitespace around commas must be tolerated, matching SearchManager.ts's
 	// own .trim() on each split part.
-	spaced, err := st.Search("proj", "gizmo", "discovery, decision", 10, 0, 0, 0, "")
+	spaced, err := st.Search(context.Background(), "proj", "gizmo", "discovery, decision", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search with spaced comma list: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestSearchFiltersByCommaSeparatedObservationTypes(t *testing.T) {
 // (non-deterministic) ordering could also produce by accident.
 func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 
 	var seededIDs []int64
 	for i := 0; i < 5; i++ {
-		res, err := st.Insert("s1", "proj", "Bash",
+		res, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 			memory.ContentHash("s1", "Bash", "page", string(rune('a'+i))),
 			memory.Observation{Type: "discovery", Title: "paginated widget rollout"}, 0)
 		if err != nil {
@@ -188,15 +189,15 @@ func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 		seededIDs = append(seededIDs, res.ID)
 	}
 
-	page1, err := st.Search("proj", "widget", "", 2, 0, 0, 0, "")
+	page1, err := st.Search(context.Background(), "proj", "widget", "", 2, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 1: %v", err)
 	}
-	page2, err := st.Search("proj", "widget", "", 2, 2, 0, 0, "")
+	page2, err := st.Search(context.Background(), "proj", "widget", "", 2, 2, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 2: %v", err)
 	}
-	page3, err := st.Search("proj", "widget", "", 2, 4, 0, 0, "")
+	page3, err := st.Search(context.Background(), "proj", "widget", "", 2, 4, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search page 3: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestSearchOffsetPagesWithoutOverlapOrGap(t *testing.T) {
 // SessionSearch.ts's identical >=/<= clauses do.
 func TestSearchFiltersByDateRange(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestSearchFiltersByDateRange(t *testing.T) {
 	base := int64(1700000000000) // an arbitrary but fixed reference point
 	var ids [3]int64
 	for i := 0; i < 3; i++ {
-		res, err := st.Insert("s1", "proj", "Bash",
+		res, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 			memory.ContentHash("s1", "Bash", "daterange", string(rune('a'+i))),
 			memory.Observation{Type: "discovery", Title: "dateranged gadget observation"}, 0)
 		if err != nil {
@@ -262,7 +263,7 @@ func TestSearchFiltersByDateRange(t *testing.T) {
 	}
 
 	// dateStart excludes day 0, keeps days 1 and 2.
-	fromDay1, err := st.Search("proj", "gadget", "", 10, 0, base+day, 0, "")
+	fromDay1, err := st.Search(context.Background(), "proj", "gadget", "", 10, 0, base+day, 0, "")
 	if err != nil {
 		t.Fatalf("Search with dateStart: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestSearchFiltersByDateRange(t *testing.T) {
 	}
 
 	// dateEnd excludes day 2, keeps days 0 and 1.
-	toDay1, err := st.Search("proj", "gadget", "", 10, 0, 0, base+day, "")
+	toDay1, err := st.Search(context.Background(), "proj", "gadget", "", 10, 0, 0, base+day, "")
 	if err != nil {
 		t.Fatalf("Search with dateEnd: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestSearchFiltersByDateRange(t *testing.T) {
 	}
 
 	// Both bounds together isolate exactly day 1.
-	onlyDay1, err := st.Search("proj", "gadget", "", 10, 0, base+day, base+day, "")
+	onlyDay1, err := st.Search(context.Background(), "proj", "gadget", "", 10, 0, base+day, base+day, "")
 	if err != nil {
 		t.Fatalf("Search with both bounds: %v", err)
 	}
@@ -305,7 +306,7 @@ func idSet(results []memory.SearchResult) map[int64]bool {
 // default case implements.
 func TestSearchOrderBy(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -315,7 +316,7 @@ func TestSearchOrderBy(t *testing.T) {
 	base := int64(1700000000000)
 	var ids [3]int64
 	for i := 0; i < 3; i++ {
-		res, err := st.Insert("s1", "proj", "Bash",
+		res, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 			memory.ContentHash("s1", "Bash", "orderby", string(rune('a'+i))),
 			memory.Observation{Type: "discovery", Title: "orderby flavored widget"}, 0)
 		if err != nil {
@@ -328,7 +329,7 @@ func TestSearchOrderBy(t *testing.T) {
 		}
 	}
 
-	desc, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "date_desc")
+	desc, err := st.Search(context.Background(), "proj", "widget", "", 10, 0, 0, 0, "date_desc")
 	if err != nil {
 		t.Fatalf("Search date_desc: %v", err)
 	}
@@ -336,7 +337,7 @@ func TestSearchOrderBy(t *testing.T) {
 		t.Fatalf("Search(orderBy=date_desc) ids = %v, want newest-first [%d,%d,%d]", idList(desc), ids[2], ids[1], ids[0])
 	}
 
-	asc, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "date_asc")
+	asc, err := st.Search(context.Background(), "proj", "widget", "", 10, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("Search date_asc: %v", err)
 	}
@@ -347,7 +348,7 @@ func TestSearchOrderBy(t *testing.T) {
 	// Real claude-mem's own buildOrderClause treats any unrecognized
 	// orderBy value the same as date_desc, not as "relevance" — ported
 	// deliberately, not an accidental catch-all.
-	garbage, err := st.Search("proj", "widget", "", 10, 0, 0, 0, "banana")
+	garbage, err := st.Search(context.Background(), "proj", "widget", "", 10, 0, 0, 0, "banana")
 	if err != nil {
 		t.Fatalf("Search with unrecognized orderBy: %v", err)
 	}
@@ -372,24 +373,24 @@ func idList(results []memory.SearchResult) []int64 {
 // drop the unknown one rather than erroring.
 func TestByIDsFetchesExactRowsAndOmitsUnknownIDs(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	o1 := memory.Observation{Type: "discovery", Title: "first", Narrative: "narrative one", Facts: []string{"fact a"}}
-	r1, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), o1, 0)
+	r1, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), o1, 0)
 	if err != nil {
 		t.Fatalf("Insert 1: %v", err)
 	}
 	o2 := memory.Observation{Type: "discovery", Title: "second", Narrative: "narrative two"}
-	r2, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), o2, 0)
+	r2, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), o2, 0)
 	if err != nil {
 		t.Fatalf("Insert 2: %v", err)
 	}
 
-	results, err := st.ByIDs([]int64{r1.ID, r2.ID, 999999})
+	results, err := st.ByIDs(context.Background(), []int64{r1.ID, r2.ID, 999999})
 	if err != nil {
 		t.Fatalf("ByIDs: %v", err)
 	}
@@ -410,13 +411,13 @@ func TestByIDsFetchesExactRowsAndOmitsUnknownIDs(t *testing.T) {
 
 func TestByIDsWithEmptySliceReturnsNoRowsNoError(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	results, err := st.ByIDs(nil)
+	results, err := st.ByIDs(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ByIDs(nil): %v", err)
 	}
@@ -436,7 +437,7 @@ func TestByIDsWithEmptySliceReturnsNoRowsNoError(t *testing.T) {
 // exactly where the driver's own real limit sits.
 func TestByIDsRejectsTooManyIDs(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -446,12 +447,12 @@ func TestByIDsRejectsTooManyIDs(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = int64(i + 1)
 	}
-	if _, err := st.ByIDs(tooMany); err == nil {
+	if _, err := st.ByIDs(context.Background(), tooMany); err == nil {
 		t.Fatalf("ByIDs with %d ids (limit is %d): want an error, got nil", len(tooMany), memory.MaxIDsPerLookup)
 	}
 
 	exactly := tooMany[:memory.MaxIDsPerLookup]
-	if _, err := st.ByIDs(exactly); err != nil {
+	if _, err := st.ByIDs(context.Background(), exactly); err != nil {
 		t.Errorf("ByIDs with exactly %d ids (at the limit): want success, got %v", len(exactly), err)
 	}
 }
@@ -468,7 +469,7 @@ func TestByIDsRejectsTooManyIDs(t *testing.T) {
 // same seeded terms.
 func TestSearchCoversFactsAndConcepts(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -476,18 +477,18 @@ func TestSearchCoversFactsAndConcepts(t *testing.T) {
 
 	// The distinctive terms live ONLY in facts/concepts — nothing in
 	// title/subtitle/narrative mentions them.
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "facts", "1"),
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "facts", "1"),
 		memory.Observation{Type: "discovery", Title: "unremarkable heading",
 			Facts: []string{"the zorblatt subsystem was replaced"}}, 0); err != nil {
 		t.Fatalf("Insert facts row: %v", err)
 	}
-	if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "concepts", "2"),
+	if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "concepts", "2"),
 		memory.Observation{Type: "discovery", Title: "another plain heading",
 			Concepts: []string{"quibblesnort architecture"}}, 0); err != nil {
 		t.Fatalf("Insert concepts row: %v", err)
 	}
 
-	factHits, err := st.Search("proj", "zorblatt", "", 10, 0, 0, 0, "")
+	factHits, err := st.Search(context.Background(), "proj", "zorblatt", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search for a facts-only term: %v", err)
 	}
@@ -495,7 +496,7 @@ func TestSearchCoversFactsAndConcepts(t *testing.T) {
 		t.Fatalf("Search(\"zorblatt\") returned %d rows, want 1 — the term exists only in facts, which the FTS5 table must cover", len(factHits))
 	}
 
-	conceptHits, err := st.Search("proj", "quibblesnort", "", 10, 0, 0, 0, "")
+	conceptHits, err := st.Search(context.Background(), "proj", "quibblesnort", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search for a concepts-only term: %v", err)
 	}

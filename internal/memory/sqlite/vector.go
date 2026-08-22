@@ -11,6 +11,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
@@ -51,10 +52,9 @@ func decodeVector(b []byte, dims int) ([]float32, error) {
 }
 
 // SaveEmbedding stores vec for an already-persisted observation.
-func (s *Store) SaveEmbedding(observationID int64, vec []float32) error {
-	// observation_vectors is guaranteed to exist by Open's migrations
+func (s *Store) SaveEmbedding(ctx context.Context, observationID int64, vec []float32) error { // observation_vectors is guaranteed to exist by Open's migrations
 	// (see store/migrations.go) — no need to create it lazily here.
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO observation_vectors (observation_id, dims, embedding) VALUES (?, ?, ?)`,
 		observationID, len(vec), encodeVector(vec),
 	)
@@ -86,8 +86,7 @@ func cosineSimilarity(a, b []float32) float64 {
 // project scopes the comparison set to one project when non-empty, for the
 // same cross-project-leak reason as Search (this store is one shared
 // database across every project ever recorded on the machine).
-func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([]memory.VectorMatch, error) {
-	// A real, more severe version of the same bug clampNegativeLimit
+func (s *Store) SemanticSearch(ctx context.Context, project string, queryVec []float32, limit int) ([]memory.VectorMatch, error) { // A real, more severe version of the same bug clampNegativeLimit
 	// exists for: this method slices its own results in Go
 	// (all[:limit]) rather than relying on SQL's LIMIT, so a negative
 	// limit doesn't silently return "everything" — it panics outright
@@ -109,9 +108,9 @@ func (s *Store) SemanticSearch(project string, queryVec []float32, limit int) ([
 	var rows *sql.Rows
 	var err error
 	if project != "" {
-		rows, err = s.db.Query(query+" WHERE o.project = ?", project)
+		rows, err = s.db.QueryContext(ctx, query+" WHERE o.project = ?", project)
 	} else {
-		rows, err = s.db.Query(query)
+		rows, err = s.db.QueryContext(ctx, query)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query embeddings: %w", err)

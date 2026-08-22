@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -19,14 +20,14 @@ func TestPostgresStatsMatchesTheSQLiteShape(t *testing.T) {
 	types := []string{"discovery", "change", "decision", "summary"}
 	for i := 0; i < 8; i++ {
 		title := fmt.Sprintf("stats row %d", i)
-		if _, err := st.Insert(fmt.Sprintf("%s-sess-%d", project, i%3), project, "Bash",
+		if _, err := st.Insert(context.Background(), fmt.Sprintf("%s-sess-%d", project, i%3), project, "Bash",
 			memory.ContentHash("s", "Bash", title, project),
 			memory.Observation{Type: types[i%4], Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
 	}
 
-	s, err := st.Stats()
+	s, err := st.Stats(context.Background())
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}

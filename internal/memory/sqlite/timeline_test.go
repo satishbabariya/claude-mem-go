@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -15,7 +16,7 @@ func seedSequence(t *testing.T, st *Store, project string, n int) []int64 {
 	ids := make([]int64, n)
 	for i := 0; i < n; i++ {
 		title := string(rune('A' + i))
-		res, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", project, title), memory.Observation{Type: "discovery", Title: title}, 0)
+		res, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", project, title), memory.Observation{Type: "discovery", Title: title}, 0)
 		if err != nil {
 			t.Fatalf("seed insert %d: %v", i, err)
 		}
@@ -26,7 +27,7 @@ func seedSequence(t *testing.T, st *Store, project string, n int) []int64 {
 
 func TestTimelineReturnsBeforeAnchorAfterInChronologicalOrder(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestTimelineReturnsBeforeAnchorAfterInChronologicalOrder(t *testing.T) {
 	ids := seedSequence(t, st, "proj", 7) // titles A..G, ids[3] = "D"
 	anchor := ids[3]
 
-	results, err := st.Timeline("proj", anchor, 2, 2)
+	results, err := st.Timeline(context.Background(), "proj", anchor, 2, 2)
 	if err != nil {
 		t.Fatalf("Timeline: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestTimelineReturnsBeforeAnchorAfterInChronologicalOrder(t *testing.T) {
 
 func TestTimelineClampsAtTheStartAndEndOfHistory(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestTimelineClampsAtTheStartAndEndOfHistory(t *testing.T) {
 	ids := seedSequence(t, st, "proj", 3) // A, B, C
 
 	// Anchor on the very first row, asking for more "before" than exists.
-	results, err := st.Timeline("proj", ids[0], 5, 5)
+	results, err := st.Timeline(context.Background(), "proj", ids[0], 5, 5)
 	if err != nil {
 		t.Fatalf("Timeline: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestTimelineClampsAtTheStartAndEndOfHistory(t *testing.T) {
 
 func TestTimelineRejectsAnchorFromADifferentProject(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -91,27 +92,27 @@ func TestTimelineRejectsAnchorFromADifferentProject(t *testing.T) {
 	idsA := seedSequence(t, st, "proj-a", 2)
 	seedSequence(t, st, "proj-b", 2)
 
-	if _, err := st.Timeline("proj-b", idsA[0], 1, 1); err == nil {
+	if _, err := st.Timeline(context.Background(), "proj-b", idsA[0], 1, 1); err == nil {
 		t.Fatal("Timeline with an anchor from proj-a but project=proj-b: want an error, got nil — a real cross-project leak otherwise")
 	}
 }
 
 func TestTimelineUnknownAnchorIsAnError(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Timeline("proj", 999999, 1, 1); err == nil {
+	if _, err := st.Timeline(context.Background(), "proj", 999999, 1, 1); err == nil {
 		t.Fatal("Timeline with an unknown anchor id: want an error, got nil")
 	}
 }
 
 func TestTimelineNeverCrossesIntoAnotherProjectsRows(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestTimelineNeverCrossesIntoAnotherProjectsRows(t *testing.T) {
 	idsA2 := seedSequence(t, st, "proj-a", 1)
 	_ = idsA1
 
-	results, err := st.Timeline("proj-a", idsA2[0], 5, 5)
+	results, err := st.Timeline(context.Background(), "proj-a", idsA2[0], 5, 5)
 	if err != nil {
 		t.Fatalf("Timeline: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestTimelineNeverCrossesIntoAnotherProjectsRows(t *testing.T) {
 // directly.
 func TestTimelineNegativeDepthDoesNotReturnUnlimitedRows(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestTimelineNegativeDepthDoesNotReturnUnlimitedRows(t *testing.T) {
 	ids := seedSequence(t, st, "proj", 10)
 	anchor := ids[5]
 
-	results, err := st.Timeline("proj", anchor, -1, -1)
+	results, err := st.Timeline(context.Background(), "proj", anchor, -1, -1)
 	if err != nil {
 		t.Fatalf("Timeline with negative depths: %v", err)
 	}

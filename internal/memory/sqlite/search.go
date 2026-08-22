@@ -21,6 +21,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -204,7 +205,7 @@ func searchOrderClause(orderBy string, enumerate bool) string {
 // own search_observations tool) always passes the current project; the
 // plain `search` CLI subcommand leaves it empty for ad-hoc cross-project
 // lookups from a terminal.
-func (s *Store) Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]memory.SearchResult, error) {
+func (s *Store) Search(ctx context.Context, project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	offset = clampNegativeLimit(offset)
 	// An empty query means "every observation matching the other
@@ -264,7 +265,7 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 	if enumerate {
 		from, where = "observations o", "1=1"
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
 		FROM `+from+`
@@ -300,9 +301,9 @@ func (s *Store) Search(project, query, obsType string, limit, offset int, dateSt
 // first — a plain indexed query (idx_observations_project +
 // idx_observations_created), not FTS5; this is "what happened lately here,"
 // not a search.
-func (s *Store) RecentByProject(project string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) RecentByProject(ctx context.Context, project string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
@@ -338,9 +339,9 @@ func (s *Store) RecentByProject(project string, limit int) ([]memory.SearchResul
 // BySessionID returns every observation recorded for one session, oldest
 // first — the read path for Stop-hook session summarization: the narrative
 // arc of what happened, not a ranked search.
-func (s *Store) BySessionID(sessionID string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) BySessionID(ctx context.Context, sessionID string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -379,7 +380,7 @@ func (s *Store) BySessionID(sessionID string, limit int) ([]memory.SearchResult,
 // function for testing array membership; it's compiled into
 // modernc.org/sqlite (confirmed by hand, not assumed — see this package's
 // doc history).
-func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]memory.SearchResult, error) {
+func (s *Store) ObservationsForFile(ctx context.Context, project, filePath string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
 	// Joins the indexed path table rather than running json_each over
 	// every row in the project — see migration 6 for the measurements
@@ -389,7 +390,7 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]memo
 	// filtering one path yields at most one row per observation. The old
 	// query needed it only because two EXISTS clauses could both hold;
 	// keeping it here would re-introduce a sort this shape does not need.
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
 		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
 		FROM observation_files f
@@ -440,8 +441,7 @@ func (s *Store) ObservationsForFile(project, filePath string, limit int) ([]memo
 // errors rather than silently ignoring it or, worse, ever pulling
 // before/after rows from some OTHER project than the one the anchor
 // actually lives in.
-func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]memory.SearchResult, error) {
-	// A negative depth is not just "no results" — SQLite's own `LIMIT`
+func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, depthBefore, depthAfter int) ([]memory.SearchResult, error) { // A negative depth is not just "no results" — SQLite's own `LIMIT`
 	// treats a negative value as "unlimited," found the hard way against
 	// a real database (a naive `LIMIT ?` with depthBefore=-1 returned
 	// EVERY row before the anchor, not zero). Clamping the lower bound
@@ -462,7 +462,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		depthAfter = memory.MaxTimelineDepth
 	}
 
-	anchorRows, err := s.ByIDs([]int64{anchorID})
+	anchorRows, err := s.ByIDs(ctx, []int64{anchorID})
 	if err != nil {
 		return nil, fmt.Errorf("timeline: %w", err)
 	}
@@ -474,7 +474,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		return nil, fmt.Errorf("timeline: anchor id %d belongs to a different project", anchorID)
 	}
 
-	beforeRows, err := s.db.Query(`
+	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -494,7 +494,7 @@ func (s *Store) Timeline(project string, anchorID int64, depthBefore, depthAfter
 		before[i], before[j] = before[j], before[i]
 	}
 
-	afterRows, err := s.db.Query(`
+	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations
@@ -565,7 +565,7 @@ func parseJSONArray(raw string) []string {
 // hoping the row is still in the page. Unknown IDs are silently omitted
 // rather than erroring, the same way a search for a query that matches
 // nothing returns an empty slice rather than failing.
-func (s *Store) ByIDs(ids []int64) ([]memory.SearchResult, error) {
+func (s *Store) ByIDs(ctx context.Context, ids []int64) ([]memory.SearchResult, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -578,7 +578,7 @@ func (s *Store) ByIDs(ids []int64) ([]memory.SearchResult, error) {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := s.db.Query(fmt.Sprintf(`
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
 		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
 		FROM observations

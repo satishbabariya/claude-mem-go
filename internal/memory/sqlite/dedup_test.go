@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -34,7 +35,7 @@ func TestContentHashIsDeterministicAndDistinguishesInputs(t *testing.T) {
 
 func TestInsertIsIdempotentOnContentHash(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -43,7 +44,7 @@ func TestInsertIsIdempotentOnContentHash(t *testing.T) {
 	hash := memory.ContentHash("session-1", "Bash", "npm test", "42 passed")
 	o := memory.Observation{Type: "discovery", Title: "Tests passed"}
 
-	first, err := st.Insert("session-1", "proj", "Bash", hash, o, 0.01)
+	first, err := st.Insert(context.Background(), "session-1", "proj", "Bash", hash, o, 0.01)
 	if err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestInsertIsIdempotentOnContentHash(t *testing.T) {
 
 	// Simulate re-ingesting the same transcript, or a hook firing twice for
 	// the same event — the real scenarios this exists to prevent.
-	second, err := st.Insert("session-1", "proj", "Bash", hash, o, 0.01)
+	second, err := st.Insert(context.Background(), "session-1", "proj", "Bash", hash, o, 0.01)
 	if err != nil {
 		t.Fatalf("second Insert (duplicate): %v", err)
 	}
@@ -64,7 +65,7 @@ func TestInsertIsIdempotentOnContentHash(t *testing.T) {
 		t.Fatalf("second Insert returned ID %d, want the original row's ID %d", second.ID, first.ID)
 	}
 
-	count, err := st.CountByProject("proj")
+	count, err := st.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -78,18 +79,18 @@ func TestInsertAllowsSameToolCallInDifferentSessions(t *testing.T) {
 	// output (e.g. both ran "ls -la" in a fresh checkout) are legitimately
 	// distinct observations — content_hash is scoped per-session, not global.
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
 	o := memory.Observation{Type: "discovery", Title: "Listed files"}
-	r1, err := st.Insert("session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "ls -la", "same output"), o, 0)
+	r1, err := st.Insert(context.Background(), "session-a", "proj", "Bash", memory.ContentHash("session-a", "Bash", "ls -la", "same output"), o, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	r2, err := st.Insert("session-b", "proj", "Bash", memory.ContentHash("session-b", "Bash", "ls -la", "same output"), o, 0)
+	r2, err := st.Insert(context.Background(), "session-b", "proj", "Bash", memory.ContentHash("session-b", "Bash", "ls -la", "same output"), o, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestEnsureContentHashColumnMigratesPreExistingRows(t *testing.T) {
 	// Simulate a database created before content_hash existed: open once,
 	// then drop the column and its index the same migration adds, and
 	// insert a row directly via the pre-migration schema shape.
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -147,13 +148,13 @@ func TestEnsureContentHashColumnMigratesPreExistingRows(t *testing.T) {
 	// Re-Open should detect the missing column, migrate it in, backfill the
 	// pre-existing row with a synthetic-but-unique hash, and leave the
 	// database usable — this is the exact path a real upgrade takes.
-	st2, err := Open(dbPath)
+	st2, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("re-Open after simulated pre-migration state: %v", err)
 	}
 	defer st2.Close()
 
-	count, err := st2.CountByProject("old-proj")
+	count, err := st2.CountByProject(context.Background(), "old-proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -163,14 +164,14 @@ func TestEnsureContentHashColumnMigratesPreExistingRows(t *testing.T) {
 
 	// The migrated database must still enforce uniqueness going forward.
 	dupHash := memory.ContentHash("new-session", "Bash", "new command", "new output")
-	first, err := st2.Insert("new-session", "old-proj", "Bash", dupHash, memory.Observation{Type: "discovery", Title: "x"}, 0)
+	first, err := st2.Insert(context.Background(), "new-session", "old-proj", "Bash", dupHash, memory.Observation{Type: "discovery", Title: "x"}, 0)
 	if err != nil {
 		t.Fatalf("Insert after migration: %v", err)
 	}
 	if !first.Inserted {
 		t.Fatal("Insert after migration: want Inserted=true for a fresh hash")
 	}
-	second, err := st2.Insert("new-session", "old-proj", "Bash", dupHash, memory.Observation{Type: "discovery", Title: "x"}, 0)
+	second, err := st2.Insert(context.Background(), "new-session", "old-proj", "Bash", dupHash, memory.Observation{Type: "discovery", Title: "x"}, 0)
 	if err != nil {
 		t.Fatalf("Insert after migration (duplicate): %v", err)
 	}

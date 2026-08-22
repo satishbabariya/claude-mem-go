@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -9,13 +10,13 @@ import (
 
 func TestHealthDetailsReflectsRealPragmas(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}
@@ -44,28 +45,28 @@ func TestHealthDetailsReflectsRealPragmas(t *testing.T) {
 // SaveEmbedding path, not a hand-crafted row.
 func TestHealthDetailsFlagsInconsistentEmbeddingDimensions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	r1, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "old model"}, 0)
+	r1, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "old model"}, 0)
 	if err != nil {
 		t.Fatalf("Insert 1: %v", err)
 	}
-	if err := st.SaveEmbedding(r1.ID, make([]float32, 768)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), r1.ID, make([]float32, 768)); err != nil {
 		t.Fatalf("SaveEmbedding 1: %v", err)
 	}
-	r2, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "discovery", Title: "new model"}, 0)
+	r2, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"), memory.Observation{Type: "discovery", Title: "new model"}, 0)
 	if err != nil {
 		t.Fatalf("Insert 2: %v", err)
 	}
-	if err := st.SaveEmbedding(r2.ID, make([]float32, 384)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), r2.ID, make([]float32, 384)); err != nil {
 		t.Fatalf("SaveEmbedding 2: %v", err)
 	}
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}
@@ -79,21 +80,21 @@ func TestHealthDetailsFlagsInconsistentEmbeddingDimensions(t *testing.T) {
 
 func TestHealthDetailsReportsConsistentEmbeddingDimensions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	r1, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "one"}, 0)
+	r1, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "one"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := st.SaveEmbedding(r1.ID, make([]float32, 768)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), r1.ID, make([]float32, 768)); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	details, err := st.HealthDetails()
+	details, err := st.HealthDetails(context.Background())
 	if err != nil {
 		t.Fatalf("HealthDetails: %v", err)
 	}

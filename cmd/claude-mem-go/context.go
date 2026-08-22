@@ -63,7 +63,9 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := hookContext(sessionStartBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
@@ -80,7 +82,7 @@ func cmdContext(args []string) int {
 	// composite name, so the two stay distinguishable — this only widens
 	// the read. Real claude-mem does the same (context.ts injects over
 	// getProjectContext(cwd).allProjects, not .primary).
-	recent, err := recentAcrossProjects(st, pc.AllProjects, *limit)
+	recent, err := recentAcrossProjects(ctx, st, pc.AllProjects, *limit)
 	if err != nil {
 		l.Errorf("FAILED RecentByProject(%v): %v", pc.AllProjects, err)
 		fmt.Println("{}")
@@ -98,10 +100,10 @@ func cmdContext(args []string) int {
 		return 0
 	}
 
-	ctx := formatContext(recent)
+	injected := formatContext(recent)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "SessionStart",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {
@@ -109,7 +111,7 @@ func cmdContext(args []string) int {
 		fmt.Println("{}")
 		return 0
 	}
-	l.Printf("injected %d recent observations for project=%s (%d bytes)", len(recent), project, len(ctx))
+	l.Printf("injected %d recent observations for project=%s (%d bytes)", len(recent), project, len(injected))
 	fmt.Println(string(enc))
 	return 0
 }
@@ -134,18 +136,18 @@ func formatContext(recent []memory.SearchResult) string {
 // worktree with plenty of its own history is not forced to give up half
 // its slots to the parent — the newest observations win regardless of
 // which project they came from.
-func recentAcrossProjects(st memory.Backend, projects []string, limit int) ([]memory.SearchResult, error) {
+func recentAcrossProjects(ctx context.Context, st memory.Backend, projects []string, limit int) ([]memory.SearchResult, error) {
 	if len(projects) <= 1 {
 		p := ""
 		if len(projects) == 1 {
 			p = projects[0]
 		}
-		return st.RecentByProject(p, limit)
+		return st.RecentByProject(ctx, p, limit)
 	}
 	var all []memory.SearchResult
 	seen := make(map[int64]bool)
 	for _, p := range projects {
-		rs, err := st.RecentByProject(p, limit)
+		rs, err := st.RecentByProject(ctx, p, limit)
 		if err != nil {
 			return nil, err
 		}

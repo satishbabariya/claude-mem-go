@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,13 +51,13 @@ func runStopWithPayload(t *testing.T, dbPath, payload string) string {
 func seedSummarizedSession(t *testing.T, sessionID string, withSummary bool) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "stop.db")
-	st, err := sqlite.Open(path)
+	st, err := sqlite.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	if _, err := st.Insert(sessionID, "guard-proj", "Bash",
+	if _, err := st.Insert(context.Background(), sessionID, "guard-proj", "Bash",
 		memory.ContentHash(sessionID, "Bash", "did a thing", "1"),
 		memory.Observation{Type: "change", Title: "did a thing"}, 0); err != nil {
 		t.Fatalf("Insert observation: %v", err)
@@ -64,7 +65,7 @@ func seedSummarizedSession(t *testing.T, sessionID string, withSummary bool) str
 	if withSummary {
 		// The same shape cmdStop itself writes: type "summary", tool name
 		// "SessionSummary", and the session-derived content hash.
-		if _, err := st.Insert(sessionID, "guard-proj", "SessionSummary",
+		if _, err := st.Insert(context.Background(), sessionID, "guard-proj", "SessionSummary",
 			memory.ContentHash(sessionID, "SessionSummary", "session-summary", ""),
 			memory.Observation{Type: "summary", Title: "already summarized"}, 0); err != nil {
 			t.Fatalf("Insert summary: %v", err)

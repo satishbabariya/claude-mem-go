@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -14,23 +15,23 @@ import (
 // sqliteDSNParams) genuinely took effect, not just that it was requested
 // in the DSN. Keys are stable strings a caller looks up by name; iteration
 // order isn't guaranteed.
-func (s *Store) HealthDetails() (map[string]string, error) {
+func (s *Store) HealthDetails(ctx context.Context) (map[string]string, error) {
 	details := map[string]string{}
 
 	var journalMode string
-	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
 		return nil, fmt.Errorf("query journal_mode: %w", err)
 	}
 	details["journal_mode"] = journalMode
 
 	var foreignKeys int
-	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+	if err := s.db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
 		return nil, fmt.Errorf("query foreign_keys: %w", err)
 	}
 	details["foreign_keys"] = fmt.Sprintf("%d", foreignKeys)
 
 	var busyTimeoutMS int
-	if err := s.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeoutMS); err != nil {
+	if err := s.db.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busyTimeoutMS); err != nil {
 		return nil, fmt.Errorf("query busy_timeout: %w", err)
 	}
 	details["busy_timeout_ms"] = fmt.Sprintf("%d", busyTimeoutMS)
@@ -48,7 +49,7 @@ func (s *Store) HealthDetails() (map[string]string, error) {
 	// ever saying so. More than one distinct dimension present is exactly
 	// that condition already having happened. Omitted entirely when there
 	// are no embedded observations yet — nothing to report.
-	rows, err := s.db.Query(`SELECT dims, COUNT(*) FROM observation_vectors GROUP BY dims ORDER BY dims`)
+	rows, err := s.db.QueryContext(ctx, `SELECT dims, COUNT(*) FROM observation_vectors GROUP BY dims ORDER BY dims`)
 	if err != nil {
 		return nil, fmt.Errorf("query embedding dims histogram: %w", err)
 	}

@@ -21,6 +21,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -88,7 +89,7 @@ const sqliteDSNParams = "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
 
 // Open opens (creating if needed) the sqlite file at path and ensures the
 // schema exists.
-func Open(path string) (*Store, error) {
+func Open(ctx context.Context, path string) (*Store, error) {
 	sep := "?"
 	if strings.Contains(path, "?") {
 		sep = "&"
@@ -97,7 +98,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	if err := runMigrations(db); err != nil {
+	if err := runMigrations(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
@@ -116,9 +117,9 @@ func jsonArray(items []string) string {
 // exactly like ResponseProcessor.ts's broadcast record does. contentHash
 // (see memory.ContentHash) is the idempotency key: inserting the same hash twice
 // is a no-op that returns the original row, not a duplicate.
-func (s *Store) Insert(sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64) (memory.InsertResult, error) {
+func (s *Store) Insert(ctx context.Context, sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64) (memory.InsertResult, error) {
 	now := time.Now()
-	return s.insertRow(sessionID, project, toolName, contentHash, o, costUSD, now.Format(time.RFC3339), now.UnixMilli())
+	return s.insertRow(ctx, sessionID, project, toolName, contentHash, o, costUSD, now.Format(time.RFC3339), now.UnixMilli())
 }
 
 // insertRow is Insert's and ImportRow's (export.go) shared implementation —
@@ -126,11 +127,11 @@ func (s *Store) Insert(sessionID, project, toolName, contentHash string, o memor
 // a previously exported one" is which created_at/created_at_epoch gets
 // written, so that's the one thing this takes as parameters rather than
 // always stamping time.Now() itself.
-func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64, createdAt string, createdAtEpoch int64) (memory.InsertResult, error) {
+func (s *Store) insertRow(ctx context.Context, sessionID, project, toolName, contentHash string, o memory.Observation, costUSD float64, createdAt string, createdAtEpoch int64) (memory.InsertResult, error) {
 	if err := memory.ValidateObservationType(o.Type); err != nil {
 		return memory.InsertResult{}, err
 	}
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
 			 concepts, files_read, files_modified, next_steps, cost_usd, created_at, created_at_epoch, content_hash)
@@ -150,7 +151,7 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o me
 	}
 	if affected == 0 {
 		var id int64
-		if err := s.db.QueryRow(`SELECT id FROM observations WHERE content_hash = ?`, contentHash).Scan(&id); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT id FROM observations WHERE content_hash = ?`, contentHash).Scan(&id); err != nil {
 			return memory.InsertResult{}, fmt.Errorf("look up existing observation for duplicate content_hash: %w", err)
 		}
 		return memory.InsertResult{ID: id, Inserted: false}, nil
@@ -165,9 +166,9 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o me
 // CountByProject is a small read-path check useful for verifying a round
 // trip, mirroring the kind of query src/services/sqlite/SessionSearch.ts
 // runs (filter by project).
-func (s *Store) CountByProject(project string) (int, error) {
+func (s *Store) CountByProject(ctx context.Context, project string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE project = ?`, project).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE project = ?`, project).Scan(&n)
 	return n, err
 }
 

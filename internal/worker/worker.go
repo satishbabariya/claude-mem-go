@@ -580,7 +580,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	turn.Observation.FilesRead = memory.NormalizeFilePaths(in.Cwd, turn.Observation.FilesRead)
 	turn.Observation.FilesModified = memory.NormalizeFilePaths(in.Cwd, turn.Observation.FilesModified)
 
-	res, err := d.st.Insert(in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
+	res, err := d.st.Insert(ctx, in.SessionID, project, in.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 	if err != nil {
 		d.Log.Errorf("FAILED sqlite insert: %v", err)
 		d.counters.insertErrors.Add(1)
@@ -612,7 +612,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		d.counters.embedErrors.Add(1)
 		return
 	}
-	if err := d.st.SaveEmbedding(res.ID, vec); err != nil {
+	if err := d.st.SaveEmbedding(ctx, res.ID, vec); err != nil {
 		d.Log.Warnf("saving embedding for observations.id=%d failed: %v", res.ID, err)
 		d.counters.embedErrors.Add(1)
 	}

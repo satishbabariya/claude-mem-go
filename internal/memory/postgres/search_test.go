@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -23,18 +24,18 @@ func TestPostgresSearchCoversFactsAndConcepts(t *testing.T) {
 	// The distinctive terms live ONLY in facts/concepts — nothing in
 	// title/subtitle/narrative mentions them, so a hit can only come from
 	// the columns this fix added.
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "facts", project),
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "facts", project),
 		memory.Observation{Type: "discovery", Title: "unremarkable heading",
 			Facts: []string{"the zorblatt subsystem was replaced"}}, 0); err != nil {
 		t.Fatalf("Insert facts row: %v", err)
 	}
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "concepts", project),
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "concepts", project),
 		memory.Observation{Type: "discovery", Title: "another plain heading",
 			Concepts: []string{"quibblesnort architecture"}}, 0); err != nil {
 		t.Fatalf("Insert concepts row: %v", err)
 	}
 
-	factHits, err := st.Search(project, "zorblatt", "", 10, 0, 0, 0, "")
+	factHits, err := st.Search(context.Background(), project, "zorblatt", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search for a facts-only term: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestPostgresSearchCoversFactsAndConcepts(t *testing.T) {
 		t.Fatalf("Search(\"zorblatt\") returned %d rows, want 1 — the term exists only in facts, which search_vector must cover", len(factHits))
 	}
 
-	conceptHits, err := st.Search(project, "quibblesnort", "", 10, 0, 0, 0, "")
+	conceptHits, err := st.Search(context.Background(), project, "quibblesnort", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search for a concepts-only term: %v", err)
 	}
@@ -59,18 +60,18 @@ func TestPostgresSearchRanksTitleAboveTags(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
 
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "tagged", project),
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "tagged", project),
 		memory.Observation{Type: "discovery", Title: "unrelated heading",
 			Concepts: []string{"frobnicator"}}, 0); err != nil {
 		t.Fatalf("Insert tag row: %v", err)
 	}
-	titled, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "titled", project),
+	titled, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "titled", project),
 		memory.Observation{Type: "discovery", Title: "frobnicator rewritten from scratch"}, 0)
 	if err != nil {
 		t.Fatalf("Insert title row: %v", err)
 	}
 
-	hits, err := st.Search(project, "frobnicator", "", 10, 0, 0, 0, "")
+	hits, err := st.Search(context.Background(), project, "frobnicator", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestPostgresSearchBooleanOperatorParity(t *testing.T) {
 
 	seed := func(key, title string) {
 		t.Helper()
-		if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", key, project),
+		if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", key, project),
 			memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %s: %v", key, err)
 		}
@@ -149,7 +150,7 @@ func TestPostgresSearchBooleanOperatorParity(t *testing.T) {
 	}
 
 	t.Run("OR returns the union", func(t *testing.T) {
-		got, err := st.Search(project, "alpha OR beta", "", 10, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "alpha OR beta", "", 10, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -160,7 +161,7 @@ func TestPostgresSearchBooleanOperatorParity(t *testing.T) {
 	})
 
 	t.Run("NOT excludes rather than including", func(t *testing.T) {
-		got, err := st.Search(project, "alpha NOT beta", "", 10, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "alpha NOT beta", "", 10, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -171,7 +172,7 @@ func TestPostgresSearchBooleanOperatorParity(t *testing.T) {
 	})
 
 	t.Run("adjacent terms still AND", func(t *testing.T) {
-		got, err := st.Search(project, "alpha beta", "", 10, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "alpha beta", "", 10, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -184,7 +185,7 @@ func TestPostgresSearchBooleanOperatorParity(t *testing.T) {
 	// bare hyphen — must keep working through the new quoted path.
 	t.Run("hyphenated query still matches", func(t *testing.T) {
 		seed("d", "the claude-mem project")
-		got, err := st.Search(project, "claude-mem", "", 10, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "claude-mem", "", 10, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}

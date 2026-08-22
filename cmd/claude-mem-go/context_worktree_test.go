@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -13,7 +14,7 @@ type fakeBackend struct {
 	queried []string
 }
 
-func (f *fakeBackend) RecentByProject(project string, limit int) ([]memory.SearchResult, error) {
+func (f *fakeBackend) RecentByProject(ctx context.Context, project string, limit int) ([]memory.SearchResult, error) {
 	f.queried = append(f.queried, project)
 	rs := f.rows[project]
 	if len(rs) > limit {
@@ -37,7 +38,7 @@ func TestRecentAcrossProjectsMergesAWorktreeWithItsParent(t *testing.T) {
 		},
 	}}
 
-	got, err := recentAcrossProjects(f, []string{"mainrepo", "mainrepo/wt-feature"}, 10)
+	got, err := recentAcrossProjects(context.Background(), f, []string{"mainrepo", "mainrepo/wt-feature"}, 10)
 	if err != nil {
 		t.Fatalf("recentAcrossProjects: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestRecentAcrossProjectsRespectsTheLimitAfterMerging(t *testing.T) {
 		"mainrepo/wt-feature": rows("mainrepo/wt-feature", 200),
 	}}
 
-	got, err := recentAcrossProjects(f, []string{"mainrepo", "mainrepo/wt-feature"}, 5)
+	got, err := recentAcrossProjects(context.Background(), f, []string{"mainrepo", "mainrepo/wt-feature"}, 5)
 	if err != nil {
 		t.Fatalf("recentAcrossProjects: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestRecentAcrossProjectsSingleProjectIsUnchanged(t *testing.T) {
 	f := &fakeBackend{rows: map[string][]memory.SearchResult{
 		"myrepo": {{ID: 1, Project: "myrepo", CreatedAtEpoch: 1}},
 	}}
-	got, err := recentAcrossProjects(f, []string{"myrepo"}, 10)
+	got, err := recentAcrossProjects(context.Background(), f, []string{"myrepo"}, 10)
 	if err != nil {
 		t.Fatalf("recentAcrossProjects: %v", err)
 	}

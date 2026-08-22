@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -12,7 +13,7 @@ import (
 // migration has an accurate "already applied?" baseline to check against.
 func TestOpenRecordsAllMigrationsOnAFreshDatabase(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -52,13 +53,13 @@ func TestOpenRecordsAllMigrationsOnAFreshDatabase(t *testing.T) {
 // individually idempotent SQL — Open must not re-run Apply funcs at all.
 func TestReopenDoesNotReapplyMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
 	st.Close()
 
-	st2, err := Open(dbPath)
+	st2, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}

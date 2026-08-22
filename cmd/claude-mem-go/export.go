@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -27,7 +26,9 @@ func cmdExport(args []string) int {
 	out := fs.String("out", "", "output file (JSON Lines, one observation per line); defaults to stdout")
 	fs.Parse(args)
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -49,7 +50,7 @@ func cmdExport(args []string) int {
 	afterID := int64(0)
 	total := 0
 	for {
-		rows, err := st.ExportAll(afterID, exportPageSize)
+		rows, err := st.ExportAll(ctx, afterID, exportPageSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED export: %v\n", err)
 			return 1
@@ -96,7 +97,9 @@ func cmdImport(args []string) int {
 	}
 	defer f.Close()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -111,7 +114,7 @@ func cmdImport(args []string) int {
 			fmt.Fprintf(os.Stderr, "FAILED decoding row from %s: %v\n", *in, err)
 			return 1
 		}
-		res, err := st.ImportRow(row)
+		res, err := st.ImportRow(ctx, row)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED importing row (content_hash=%s): %v\n", row.ContentHash, err)
 			return 1

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -78,7 +77,9 @@ func cmdFileContext(args []string) int {
 		project = filepath.Base(filepath.Dir(in.TranscriptPath))
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := hookContext(fileContextBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
@@ -95,7 +96,7 @@ func cmdFileContext(args []string) int {
 	// never matched.
 	targetPath := memory.NormalizeFilePath(in.Cwd, toolInput.FilePath)
 
-	results, err := st.ObservationsForFile(project, targetPath, memory.FileContextCandidateLimit(*limit))
+	results, err := st.ObservationsForFile(ctx, project, targetPath, memory.FileContextCandidateLimit(*limit))
 	if err != nil {
 		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
@@ -153,10 +154,10 @@ func cmdFileContext(args []string) int {
 			candidates, len(results), targetPath)
 	}
 
-	ctx := formatFileContext(targetPath, results)
+	injected := formatFileContext(targetPath, results)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {

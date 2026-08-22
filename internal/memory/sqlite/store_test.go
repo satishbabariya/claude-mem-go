@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -121,7 +122,7 @@ func TestCosineSimilarity(t *testing.T) {
 
 func TestInsertAndSearchRoundTrip(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		Facts:     []string{"Reproduced with 12 goroutines", "Fixed with a buffered channel"},
 		Narrative: "A concurrency bug was found and fixed.",
 	}
-	res, err := st.Insert("session-1", "my-project", "Bash", memory.ContentHash("session-1", "Bash", "ls -la", "file1 file2"), o, 0.01)
+	res, err := st.Insert(context.Background(), "session-1", "my-project", "Bash", memory.ContentHash("session-1", "Bash", "ls -la", "file1 file2"), o, 0.01)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 	}
 	id := res.ID
 
-	count, err := st.CountByProject("my-project")
+	count, err := st.CountByProject(context.Background(), "my-project")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		t.Fatalf("CountByProject = %d, want 1", count)
 	}
 
-	results, err := st.Search("", "race condition", "", 10, 0, 0, 0, "")
+	results, err := st.Search(context.Background(), "", "race condition", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 		t.Fatalf("round-tripped Facts = %v, want %v", results[0].Observation.Facts, o.Facts)
 	}
 
-	if noResults, err := st.Search("", "completely unrelated query xyzzy", "", 10, 0, 0, 0, ""); err != nil {
+	if noResults, err := st.Search(context.Background(), "", "completely unrelated query xyzzy", "", 10, 0, 0, 0, ""); err != nil {
 		t.Fatalf("Search: %v", err)
 	} else if len(noResults) != 0 {
 		t.Fatalf("Search for an unrelated query returned %d results, want 0", len(noResults))
@@ -174,31 +175,31 @@ func TestInsertAndSearchRoundTrip(t *testing.T) {
 
 func TestSaveEmbeddingAndSemanticSearchRoundTrip(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	res1, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "cmd-a", "out-a"), memory.Observation{Type: "discovery", Title: "about cats"}, 0)
+	res1, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "cmd-a", "out-a"), memory.Observation{Type: "discovery", Title: "about cats"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	res2, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "cmd-b", "out-b"), memory.Observation{Type: "discovery", Title: "about dogs"}, 0)
+	res2, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "cmd-b", "out-b"), memory.Observation{Type: "discovery", Title: "about dogs"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	id1, id2 := res1.ID, res2.ID
 
 	// Fake embeddings: id1 close to the query vector, id2 orthogonal to it.
-	if err := st.SaveEmbedding(id1, []float32{1, 0, 0}); err != nil {
+	if err := st.SaveEmbedding(context.Background(), id1, []float32{1, 0, 0}); err != nil {
 		t.Fatalf("SaveEmbedding id1: %v", err)
 	}
-	if err := st.SaveEmbedding(id2, []float32{0, 1, 0}); err != nil {
+	if err := st.SaveEmbedding(context.Background(), id2, []float32{0, 1, 0}); err != nil {
 		t.Fatalf("SaveEmbedding id2: %v", err)
 	}
 
-	results, err := st.SemanticSearch("", []float32{1, 0, 0}, 10)
+	results, err := st.SemanticSearch(context.Background(), "", []float32{1, 0, 0}, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch: %v", err)
 	}

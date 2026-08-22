@@ -11,9 +11,11 @@
 // Postgres+pgvector is the scale-up path when you actually need it.
 package memory
 
+import "context"
+
 type Backend interface {
-	Insert(sessionID, project, toolName, contentHash string, o Observation, costUSD float64) (InsertResult, error)
-	CountByProject(project string) (int, error)
+	Insert(ctx context.Context, sessionID, project, toolName, contentHash string, o Observation, costUSD float64) (InsertResult, error)
+	CountByProject(ctx context.Context, project string) (int, error)
 	// Search full-text-searches observations; project scopes it to one
 	// project when non-empty, or every project in the store when empty. See
 	// Store.Search's doc comment for why an empty project is a deliberate,
@@ -29,67 +31,67 @@ type Backend interface {
 	// order) or "date_desc"/"date_asc"; any other value is treated as
 	// date_desc, matching real claude-mem's own SessionSearch.buildOrderClause
 	// fallback.
-	Search(project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]SearchResult, error)
-	SaveEmbedding(observationID int64, vec []float32) error
+	Search(ctx context.Context, project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) ([]SearchResult, error)
+	SaveEmbedding(ctx context.Context, observationID int64, vec []float32) error
 	// SemanticSearch is Search's embedding-based counterpart; project has
 	// the same scoping meaning.
-	SemanticSearch(project string, queryVec []float32, limit int) ([]VectorMatch, error)
+	SemanticSearch(ctx context.Context, project string, queryVec []float32, limit int) ([]VectorMatch, error)
 	// RecentByProject returns a project's most recent observations, newest
 	// first — the read path for SessionStart context injection (see the
 	// context subcommand): the actual "memory" half of claude-mem, as
 	// opposed to the on-demand Search/SemanticSearch tools.
-	RecentByProject(project string, limit int) ([]SearchResult, error)
+	RecentByProject(ctx context.Context, project string, limit int) ([]SearchResult, error)
 	// BySessionID returns every observation recorded for one Claude Code
 	// session, oldest first — the read path for Stop-hook session
 	// summarization: what actually happened this session, in order.
-	BySessionID(sessionID string, limit int) ([]SearchResult, error)
+	BySessionID(ctx context.Context, sessionID string, limit int) ([]SearchResult, error)
 	// ObservationsForFile returns observations whose files_read or
 	// files_modified mentions filePath — the read path for PreToolUse's
 	// file-context hook.
-	ObservationsForFile(project, filePath string, limit int) ([]SearchResult, error)
+	ObservationsForFile(ctx context.Context, project, filePath string, limit int) ([]SearchResult, error)
 	// ByIDs fetches specific observations by ID — the read path for a
 	// caller that already has IDs (from a prior Search/RecentByProject
 	// call) and wants full details the abbreviated list formats omit.
 	// Unknown IDs are silently omitted rather than erroring.
-	ByIDs(ids []int64) ([]SearchResult, error)
+	ByIDs(ctx context.Context, ids []int64) ([]SearchResult, error)
 	// Timeline returns up to depthBefore observations immediately before
 	// anchorID and up to depthAfter immediately after it, in chronological
 	// order with the anchor itself included — "what happened around this
 	// specific observation," the read path for the `timeline` MCP tool.
 	// Always scoped to the anchor's own project; project is a caller
 	// assertion checked against that, not an independent filter.
-	Timeline(project string, anchorID int64, depthBefore, depthAfter int) ([]SearchResult, error)
+	Timeline(ctx context.Context, project string, anchorID int64, depthBefore, depthAfter int) ([]SearchResult, error)
 	// ObservationsNeedingEmbedding returns observations with no embedding
 	// at all, or whose stored embedding dimension doesn't match
 	// expectedDims — the read path for the `reembed` CLI command, the
 	// remediation half of HealthDetails' embedding_dims_consistent
 	// finding. Paginated like ExportAll (id > afterID, oldest first).
-	ObservationsNeedingEmbedding(project string, expectedDims int64, afterID int64, limit int) ([]SearchResult, error)
+	ObservationsNeedingEmbedding(ctx context.Context, project string, expectedDims int64, afterID int64, limit int) ([]SearchResult, error)
 	// Prune deletes observations older than cutoffEpoch (a Unix seconds
 	// timestamp), scoped to one project when non-empty or every project
 	// when empty. dryRun counts what WOULD be deleted without deleting
 	// anything. This is the store's retention story — without it, the
 	// store only ever grows.
-	Prune(project string, cutoffEpoch int64, dryRun bool) (int64, error)
+	Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error)
 	// ExportAll returns up to limit observations with id > afterID, oldest
 	// first — call repeatedly with the previous page's last ID until a
 	// page comes back with fewer than limit rows. This backend's only
 	// backup/migration story: paginated so exporting a large store doesn't
 	// require loading it all into
-	ExportAll(afterID int64, limit int) ([]ExportRow, error)
+	ExportAll(ctx context.Context, afterID int64, limit int) ([]ExportRow, error)
 	// ImportRow re-inserts a previously exported row, preserving its
 	// original ContentHash (idempotent-dedup, same as Insert) and its
 	// original CreatedAt/CreatedAtEpoch — a restore reflects when things
 	// actually happened, not when they were re-imported. Also what makes
 	// export+import double as the SQLite<->Postgres migration path.
-	ImportRow(row ExportRow) (InsertResult, error)
+	ImportRow(ctx context.Context, row ExportRow) (InsertResult, error)
 	// HealthDetails returns backend-specific operational facts `doctor`
 	// prints — details generic to this interface can't surface, because
 	// they're about how each backend actually runs (SQLite's PRAGMA
 	// settings; Postgres's connection pool utilization, pgvector
 	// extension version, and whether its HNSW index still exists), not
 	// what it stores.
-	HealthDetails() (map[string]string, error)
+	HealthDetails(ctx context.Context) (map[string]string, error)
 	// Stats returns what the store actually CONTAINS, as opposed to
 	// HealthDetails' "is the machinery working".
 	//
@@ -102,7 +104,7 @@ type Backend interface {
 	// stale; one typo in an excluded-projects glob silently excludes
 	// everything. In all of those cases every component is reachable and
 	// the store simply stops growing, which nothing measured.
-	Stats() (StoreStats, error)
+	Stats(ctx context.Context) (StoreStats, error)
 	Close() error
 }
 

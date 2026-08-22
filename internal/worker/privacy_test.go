@@ -50,7 +50,7 @@ func TestProcessStripsPrivacyTagsBeforeObserving(t *testing.T) {
 	d.sessions = &sessionCache{byID: map[string]*sessionEntry{"s1": entry}}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -103,7 +102,9 @@ func cmdReembed(args []string) int {
 	}
 	expectedDims := int64(len(probe))
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -120,7 +121,7 @@ func cmdReembed(args []string) int {
 
 pager:
 	for {
-		batch, err := st.ObservationsNeedingEmbedding(*project, expectedDims, afterID, pageSize)
+		batch, err := st.ObservationsNeedingEmbedding(ctx, *project, expectedDims, afterID, pageSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED querying observations needing embedding: %v\n", err)
 			return 1
@@ -146,7 +147,7 @@ pager:
 				}
 				continue
 			}
-			if err := st.SaveEmbedding(r.ID, vec); err != nil {
+			if err := st.SaveEmbedding(ctx, r.ID, vec); err != nil {
 				fmt.Fprintf(os.Stderr, "FAILED saving embedding for observation id=%d: %v\n", r.ID, err)
 				failed++
 				consecutiveFailures++

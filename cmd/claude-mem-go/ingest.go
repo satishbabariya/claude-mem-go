@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -48,14 +47,16 @@ func cmdIngest(args []string) int {
 	}
 	fmt.Printf("ingested %d real tool_use/tool_result pairs\n\n", len(calls))
 
-	obs, err := observer.New(context.Background(), *model)
+	ctx, cancel := cliContext()
+	defer cancel()
+	obs, err := observer.New(ctx, *model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to start observer: %v\n", err)
 		return 1
 	}
 	defer obs.Close()
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
@@ -65,7 +66,7 @@ func cmdIngest(args []string) int {
 	project := filepath.Base(filepath.Dir(tp))
 
 	for i, tc := range calls {
-		turn, err := observer.ObserveResilient(context.Background(), obs, *model, tc, observer.DefaultRetryPolicy)
+		turn, err := observer.ObserveResilient(ctx, obs, *model, tc, observer.DefaultRetryPolicy)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "turn %d FAILED: %v\n", i+1, err)
 			return 1
@@ -74,7 +75,7 @@ func cmdIngest(args []string) int {
 			i+1, turn.Result.SessionID, turn.Result.CostUSD, turn.Observation.Title)
 
 		hash := memory.ContentHash(turn.Result.SessionID, tc.ToolName, tc.ToolInput, tc.ToolOutput)
-		res, err := st.Insert(turn.Result.SessionID, project, tc.ToolName, hash, turn.Observation, turn.Result.CostUSD)
+		res, err := st.Insert(ctx, turn.Result.SessionID, project, tc.ToolName, hash, turn.Observation, turn.Result.CostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: sqlite insert failed: %v\n", err)
 			continue
@@ -98,7 +99,7 @@ func cmdIngest(args []string) int {
 			fmt.Fprintf(os.Stderr, "  WARNING: embedding failed, semantic search won't find this one: %v\n", err)
 			continue
 		}
-		if err := st.SaveEmbedding(res.ID, vec); err != nil {
+		if err := st.SaveEmbedding(ctx, res.ID, vec); err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: saving embedding failed: %v\n", err)
 			continue
 		}

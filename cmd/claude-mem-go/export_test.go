@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,11 +11,11 @@ import (
 
 func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "source.db")
-	src, err := sqlite.Open(sourcePath)
+	src, err := sqlite.Open(context.Background(), sourcePath)
 	if err != nil {
 		t.Fatalf("Open source: %v", err)
 	}
-	if _, err := src.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	if _, err := src.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "cli round trip"}, 0.03); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -30,12 +31,12 @@ func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 		t.Fatalf("cmdImport exit code = %d, want 0", rc)
 	}
 
-	dest, err := sqlite.Open(destPath)
+	dest, err := sqlite.Open(context.Background(), destPath)
 	if err != nil {
 		t.Fatalf("Open dest: %v", err)
 	}
 	defer dest.Close()
-	count, err := dest.CountByProject("proj")
+	count, err := dest.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -46,11 +47,11 @@ func TestExportThenImportRoundTripsThroughACLIFile(t *testing.T) {
 
 func TestImportIsIdempotentAcrossTwoRuns(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "source.db")
-	src, err := sqlite.Open(sourcePath)
+	src, err := sqlite.Open(context.Background(), sourcePath)
 	if err != nil {
 		t.Fatalf("Open source: %v", err)
 	}
-	if _, err := src.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	if _, err := src.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "idempotent import"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -69,12 +70,12 @@ func TestImportIsIdempotentAcrossTwoRuns(t *testing.T) {
 		t.Fatalf("second cmdImport exit code = %d, want 0", rc)
 	}
 
-	dest, err := sqlite.Open(destPath)
+	dest, err := sqlite.Open(context.Background(), destPath)
 	if err != nil {
 		t.Fatalf("Open dest: %v", err)
 	}
 	defer dest.Close()
-	count, err := dest.CountByProject("proj")
+	count, err := dest.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}

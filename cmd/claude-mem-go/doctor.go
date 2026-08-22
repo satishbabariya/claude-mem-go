@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -270,13 +269,15 @@ func cmdDoctor(args []string) int {
 	}
 
 	var st memory.Backend
-	if opened, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch); err != nil {
+	ctx, cancel := cliContext()
+	defer cancel()
+	if opened, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch); err != nil {
 		fmt.Printf("✘ database (%s): %v\n", redactedDBPath, err)
 		critical = false
 	} else {
 		st = opened
 		defer st.Close()
-		if _, cerr := st.CountByProject(""); cerr != nil {
+		if _, cerr := st.CountByProject(ctx, ""); cerr != nil {
 			fmt.Printf("✘ database (%s) opened but a query failed: %v\n", redactedDBPath, cerr)
 			critical = false
 		} else {
@@ -299,7 +300,7 @@ func cmdDoctor(args []string) int {
 		// out as a real problem.
 		var embeddedRows int
 		if st != nil {
-			if sst, serr := st.Stats(); serr == nil {
+			if sst, serr := st.Stats(ctx); serr == nil {
 				embeddedRows = sst.Embedded
 				if sst.Observations == 0 {
 					if installed {
@@ -324,7 +325,7 @@ func cmdDoctor(args []string) int {
 		// Informational only, never critical on its own — a detail like
 		// hnsw_index_exists=false is a real problem worth surfacing, but
 		// it's a degraded-performance signal, not "nothing works."
-		if details, herr := st.HealthDetails(); herr == nil {
+		if details, herr := st.HealthDetails(ctx); herr == nil {
 			reportEfSearchRecall(details, embeddedRows)
 			keys := make([]string, 0, len(details))
 			for k := range details {
@@ -359,7 +360,7 @@ func cmdDoctor(args []string) int {
 		// a cheap presence check, not a full scan) catches that case too.
 		if st != nil {
 			if probe, perr := client.Embed("dimension probe"); perr == nil {
-				if needing, nerr := st.ObservationsNeedingEmbedding("", int64(len(probe)), 0, 1); nerr == nil && len(needing) > 0 {
+				if needing, nerr := st.ObservationsNeedingEmbedding(ctx, "", int64(len(probe)), 0, 1); nerr == nil && len(needing) > 0 {
 					fmt.Printf("… some observations need (re-)embedding with the current model (%d dims) — run `reembed` for a full count and to fix it\n", len(probe))
 				}
 			}

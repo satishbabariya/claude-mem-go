@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -20,21 +21,21 @@ func backdateCreatedAtEpoch(t *testing.T, s *Store, id int64, epoch int64) {
 func TestPostgresPruneDryRunCountsWithoutDeleting(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	old, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	old, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "old row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	backdateCreatedAtEpoch(t, st, old.ID, 1000)
 
-	n, err := st.Prune(project, 2000, true)
+	n, err := st.Prune(context.Background(), project, 2000, true)
 	if err != nil {
 		t.Fatalf("Prune (dry run): %v", err)
 	}
 	if n != 1 {
 		t.Fatalf("Prune dry-run count = %d, want 1", n)
 	}
-	count, err := st.CountByProject(project)
+	count, err := st.CountByProject(context.Background(), project)
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -48,28 +49,28 @@ func TestPostgresPruneDeletesOnlyRowsOlderThanCutoffScopedToProject(t *testing.T
 	project := uniqueProject(t)
 	otherProject := uniqueProject(t)
 
-	old, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "old", project),
+	old, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "old", project),
 		memory.Observation{Type: "discovery", Title: "old row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert old: %v", err)
 	}
 	backdateCreatedAtEpoch(t, st, old.ID, 1000)
 
-	recent, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "recent", project),
+	recent, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "recent", project),
 		memory.Observation{Type: "discovery", Title: "recent row"}, 0)
 	if err != nil {
 		t.Fatalf("Insert recent: %v", err)
 	}
 	backdateCreatedAtEpoch(t, st, recent.ID, 5000)
 
-	oldOther, err := st.Insert("s1", otherProject, "Bash", memory.ContentHash("s1", "Bash", "old-other", otherProject),
+	oldOther, err := st.Insert(context.Background(), "s1", otherProject, "Bash", memory.ContentHash("s1", "Bash", "old-other", otherProject),
 		memory.Observation{Type: "discovery", Title: "old row in another project"}, 0)
 	if err != nil {
 		t.Fatalf("Insert old (other project): %v", err)
 	}
 	backdateCreatedAtEpoch(t, st, oldOther.ID, 1000)
 
-	n, err := st.Prune(project, 2000, false)
+	n, err := st.Prune(context.Background(), project, 2000, false)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -77,14 +78,14 @@ func TestPostgresPruneDeletesOnlyRowsOlderThanCutoffScopedToProject(t *testing.T
 		t.Fatalf("Prune scoped to project deleted %d rows, want 1", n)
 	}
 
-	count, err := st.CountByProject(project)
+	count, err := st.CountByProject(context.Background(), project)
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("CountByProject(project) after prune = %d, want 1 (only the recent row left)", count)
 	}
-	otherCount, err := st.CountByProject(otherProject)
+	otherCount, err := st.CountByProject(context.Background(), otherProject)
 	if err != nil {
 		t.Fatalf("CountByProject(otherProject): %v", err)
 	}
@@ -103,7 +104,7 @@ func TestPostgresPruneDeletesOnlyRowsOlderThanCutoffScopedToProject(t *testing.T
 func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	old, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	old, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "prunable marker xyzzy-plumbus"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -112,11 +113,11 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 
 	dims := make([]float32, DefaultEmbedDims)
 	dims[0] = 1
-	if err := st.SaveEmbedding(old.ID, dims); err != nil {
+	if err := st.SaveEmbedding(context.Background(), old.ID, dims); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	before, err := st.Search(project, "xyzzy-plumbus", "", 10, 0, 0, 0, "")
+	before, err := st.Search(context.Background(), project, "xyzzy-plumbus", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search before prune: %v", err)
 	}
@@ -124,11 +125,11 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 		t.Fatalf("Search before prune found %d results, want 1", len(before))
 	}
 
-	if _, err := st.Prune(project, 2000, false); err != nil {
+	if _, err := st.Prune(context.Background(), project, 2000, false); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	after, err := st.Search(project, "xyzzy-plumbus", "", 10, 0, 0, 0, "")
+	after, err := st.Search(context.Background(), project, "xyzzy-plumbus", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search after prune: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 
 	query := make([]float32, DefaultEmbedDims)
 	query[0] = 1
-	matches, err := st.SemanticSearch(project, query, 10)
+	matches, err := st.SemanticSearch(context.Background(), project, query, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch after prune: %v", err)
 	}
@@ -161,13 +162,13 @@ func TestPostgresPruneCleansUpSearchAndEmbeddingColumnsToo(t *testing.T) {
 func TestPostgresPruneCutoffUnitsMatchInsertsRealTimestamp(t *testing.T) {
 	st := openTestStore(t)
 	project := uniqueProject(t)
-	if _, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
+	if _, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", "a", project),
 		memory.Observation{Type: "discovery", Title: "inserted with a real timestamp"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
 	cutoff := time.Now().AddDate(0, 0, 1).UnixMilli()
-	n, err := st.Prune(project, cutoff, true)
+	n, err := st.Prune(context.Background(), project, cutoff, true)
 	if err != nil {
 		t.Fatalf("Prune (dry run): %v", err)
 	}

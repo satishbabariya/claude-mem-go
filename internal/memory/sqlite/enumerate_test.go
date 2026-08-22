@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -10,14 +11,14 @@ import (
 
 func seedForEnumeration(t *testing.T, n int) *Store {
 	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "enum.db"))
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "enum.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("step %d", i)
-		if _, err := st.Insert("s1", "enum-proj", "Bash",
+		if _, err := st.Insert(context.Background(), "s1", "enum-proj", "Bash",
 			memory.ContentHash("s1", "Bash", title, fmt.Sprint(i)),
 			memory.Observation{Type: "change", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
@@ -39,11 +40,11 @@ func seedForEnumeration(t *testing.T, n int) *Store {
 func TestSearchWithNoQueryEnumerates(t *testing.T) {
 	st := seedForEnumeration(t, 150)
 
-	page1, err := st.Search("enum-proj", "", "", 100, 0, 0, 0, "date_asc")
+	page1, err := st.Search(context.Background(), "enum-proj", "", "", 100, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("enumerate page 1: %v", err)
 	}
-	page2, err := st.Search("enum-proj", "", "", 100, 100, 0, 0, "date_asc")
+	page2, err := st.Search(context.Background(), "enum-proj", "", "", 100, 100, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("enumerate page 2: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestSearchWithNoQueryEnumerates(t *testing.T) {
 func TestSearchWithNoQueryDefaultsToNewestFirst(t *testing.T) {
 	st := seedForEnumeration(t, 5)
 
-	got, err := st.Search("enum-proj", "", "", 10, 0, 0, 0, "")
+	got, err := st.Search(context.Background(), "enum-proj", "", "", 10, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("enumerate with the default order: %v", err)
 	}
@@ -86,13 +87,13 @@ func TestSearchWithNoQueryDefaultsToNewestFirst(t *testing.T) {
 // scope clauses with it, turning every enumeration into "the whole store".
 func TestSearchWithNoQueryStillHonorsFilters(t *testing.T) {
 	st := seedForEnumeration(t, 10)
-	if _, err := st.Insert("s2", "other-proj", "Bash",
+	if _, err := st.Insert(context.Background(), "s2", "other-proj", "Bash",
 		memory.ContentHash("s2", "Bash", "elsewhere", "x"),
 		memory.Observation{Type: "discovery", Title: "elsewhere"}, 0); err != nil {
 		t.Fatalf("Insert other project: %v", err)
 	}
 
-	scoped, err := st.Search("enum-proj", "", "", 100, 0, 0, 0, "date_asc")
+	scoped, err := st.Search(context.Background(), "enum-proj", "", "", 100, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("scoped enumerate: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestSearchWithNoQueryStillHonorsFilters(t *testing.T) {
 		t.Fatalf("project-scoped enumeration returned %d rows, want 10 — it leaked another project", len(scoped))
 	}
 
-	typed, err := st.Search("", "", "discovery", 100, 0, 0, 0, "date_asc")
+	typed, err := st.Search(context.Background(), "", "", "discovery", 100, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("typed enumerate: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestSearchWithNoQueryStillHonorsFilters(t *testing.T) {
 func TestSearchWithAQueryStillSearches(t *testing.T) {
 	st := seedForEnumeration(t, 10)
 
-	got, err := st.Search("enum-proj", "step 3", "", 100, 0, 0, 0, "")
+	got, err := st.Search(context.Background(), "enum-proj", "step 3", "", 100, 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

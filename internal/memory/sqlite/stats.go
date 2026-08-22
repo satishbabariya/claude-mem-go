@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -13,12 +14,12 @@ import (
 // so joining them into a single statement would trade clarity for
 // nothing measurable — this runs on demand from `stats` and `doctor`,
 // not on any hot path.
-func (s *Store) Stats() (memory.StoreStats, error) {
+func (s *Store) Stats(ctx context.Context) (memory.StoreStats, error) {
 	var out memory.StoreStats
 	out.ByType = map[string]int{}
 
 	var oldest, newest sql.NullInt64
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		SELECT count(*), count(DISTINCT project), count(DISTINCT session_id),
 		       min(created_at_epoch), max(created_at_epoch)
 		FROM observations`).Scan(&out.Observations, &out.Projects, &out.Sessions, &oldest, &newest)
@@ -38,7 +39,7 @@ func (s *Store) Stats() (memory.StoreStats, error) {
 		out.NewestEpochMs = newest.Int64
 	}
 
-	rows, err := s.db.Query(`SELECT type, count(*) FROM observations GROUP BY type`)
+	rows, err := s.db.QueryContext(ctx, `SELECT type, count(*) FROM observations GROUP BY type`)
 	if err != nil {
 		return memory.StoreStats{}, err
 	}
@@ -55,7 +56,7 @@ func (s *Store) Stats() (memory.StoreStats, error) {
 		return memory.StoreStats{}, err
 	}
 
-	if err := s.db.QueryRow(`SELECT count(*) FROM observation_vectors`).Scan(&out.Embedded); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observation_vectors`).Scan(&out.Embedded); err != nil {
 		return memory.StoreStats{}, err
 	}
 	return out, nil

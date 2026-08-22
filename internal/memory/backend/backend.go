@@ -29,5 +29,5 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (memory.
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		return postgres.Open(ctx, dsn, embedDims, hnswEfSearch)
 	}
-	return sqlite.Open(dsn)
+	return sqlite.Open(ctx, dsn)
 }

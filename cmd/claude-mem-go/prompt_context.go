@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -149,7 +148,9 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
+	ctx, cancel := hookContext(promptContextBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		fmt.Println("{}")
@@ -157,7 +158,7 @@ func cmdPromptContext(args []string) int {
 	}
 	defer st.Close()
 
-	matches, err := st.SemanticSearch(project, vec, *limit)
+	matches, err := st.SemanticSearch(ctx, project, vec, *limit)
 	if err != nil {
 		l.Errorf("FAILED SemanticSearch for project=%s: %v", project, err)
 		fmt.Println("{}")
@@ -176,10 +177,10 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	ctx := formatPromptContext(matches)
+	injected := formatPromptContext(matches)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "UserPromptSubmit",
-		AdditionalContext: ctx,
+		AdditionalContext: injected,
 	}}
 	enc, err := json.Marshal(out)
 	if err != nil {

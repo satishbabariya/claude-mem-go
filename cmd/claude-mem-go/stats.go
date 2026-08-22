@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -32,14 +31,16 @@ func cmdStats(args []string) int {
 	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
 	fs.Parse(args)
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, 0)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED opening store at %s: %v\n", memory.RedactDSN(*dbPath), err)
 		return 1
 	}
 	defer st.Close()
 
-	s, err := st.Stats()
+	s, err := st.Stats(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED reading stats: %v\n", err)
 		return 1

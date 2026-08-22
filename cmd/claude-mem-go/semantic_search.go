@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -35,14 +34,16 @@ func cmdSemanticSearch(args []string) int {
 		return 1
 	}
 
-	st, err := backend.Open(context.Background(), *dbPath, 0, *hnswEfSearch)
+	ctx, cancel := cliContext()
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
 
-	results, err := st.SemanticSearch(*project, queryVec, *limit)
+	results, err := st.SemanticSearch(ctx, *project, queryVec, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED semantic search: %v\n", err)
 		return 1

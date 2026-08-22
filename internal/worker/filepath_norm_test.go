@@ -49,7 +49,7 @@ func (relPathHandle) Close() error { return nil }
 // notice if the worker stopped calling it.
 func TestProcessStoresAbsoluteFilePaths(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "w.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestProcessStoresAbsoluteFilePaths(t *testing.T) {
 	want := filepath.Join(cwd, "src/auth/tokens.go")
 
 	// The lookup the hook actually performs.
-	got, err := st.ObservationsForFile(filepath.Base(cwd), want, 10)
+	got, err := st.ObservationsForFile(context.Background(), filepath.Base(cwd), want, 10)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}

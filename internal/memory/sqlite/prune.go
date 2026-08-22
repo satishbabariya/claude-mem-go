@@ -1,6 +1,9 @@
 package sqlite
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Prune deletes observations older than cutoffEpoch (created_at_epoch <
 // cutoffEpoch — a Unix seconds timestamp), scoped to one project when
@@ -14,7 +17,7 @@ import "fmt"
 // trigger (search.go) fires per deleted row regardless of whether the
 // DELETE is single-row or bulk. observation_vectors cleans up the same
 // way via its ON DELETE CASCADE foreign key (vector.go).
-func (s *Store) Prune(project string, cutoffEpoch int64, dryRun bool) (int64, error) {
+func (s *Store) Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error) {
 	args := []any{cutoffEpoch}
 	scope := ""
 	if project != "" {
@@ -24,14 +27,14 @@ func (s *Store) Prune(project string, cutoffEpoch int64, dryRun bool) (int64, er
 
 	if dryRun {
 		var n int64
-		err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE created_at_epoch < ? `+scope, args...).Scan(&n)
+		err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE created_at_epoch < ? `+scope, args...).Scan(&n)
 		if err != nil {
 			return 0, fmt.Errorf("count observations older than cutoff: %w", err)
 		}
 		return n, nil
 	}
 
-	res, err := s.db.Exec(`DELETE FROM observations WHERE created_at_epoch < ? `+scope, args...)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM observations WHERE created_at_epoch < ? `+scope, args...)
 	if err != nil {
 		return 0, fmt.Errorf("prune observations older than cutoff: %w", err)
 	}

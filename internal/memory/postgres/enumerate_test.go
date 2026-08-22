@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -30,18 +31,18 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 		// the rows stay under the old run's project name, and this test
 		// then enumerates its own (empty) project. Found exactly that
 		// way: it passed on a fresh database and failed on every re-run.
-		if _, err := st.Insert("s-enum", project, "Bash",
+		if _, err := st.Insert(context.Background(), "s-enum", project, "Bash",
 			memory.ContentHash("s-enum", "Bash", title, project+fmt.Sprint(i)),
 			memory.Observation{Type: "change", Title: title}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
 	}
 
-	page1, err := st.Search(project, "", "", 100, 0, 0, 0, "date_asc")
+	page1, err := st.Search(context.Background(), project, "", "", 100, 0, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("enumerate page 1: %v", err)
 	}
-	page2, err := st.Search(project, "", "", 100, 100, 0, 0, "date_asc")
+	page2, err := st.Search(context.Background(), project, "", "", 100, 100, 0, 0, "date_asc")
 	if err != nil {
 		t.Fatalf("enumerate page 2: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 		// The relevance clause here is ts_rank_cd(..., $1); on the
 		// enumeration path $1 does not exist, so falling through to it
 		// would be a SQL error rather than a bad sort.
-		got, err := st.Search(project, "", "", 5, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "", "", 5, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("enumerate with the default order: %v", err)
 		}
@@ -70,12 +71,12 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 
 	t.Run("project scope still applies", func(t *testing.T) {
 		other := uniqueProject(t)
-		if _, err := st.Insert("s-other", other, "Bash",
+		if _, err := st.Insert(context.Background(), "s-other", other, "Bash",
 			memory.ContentHash("s-other", "Bash", "elsewhere", other),
 			memory.Observation{Type: "discovery", Title: "elsewhere"}, 0); err != nil {
 			t.Fatalf("Insert other: %v", err)
 		}
-		got, err := st.Search(project, "", "", 500, 0, 0, 0, "date_asc")
+		got, err := st.Search(context.Background(), project, "", "", 500, 0, 0, 0, "date_asc")
 		if err != nil {
 			t.Fatalf("scoped enumerate: %v", err)
 		}
@@ -85,7 +86,7 @@ func TestPostgresSearchWithNoQueryEnumerates(t *testing.T) {
 	})
 
 	t.Run("a real query still searches", func(t *testing.T) {
-		got, err := st.Search(project, "step 3", "", 500, 0, 0, 0, "")
+		got, err := st.Search(context.Background(), project, "step 3", "", 500, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}

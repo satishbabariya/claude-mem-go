@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -13,7 +14,7 @@ import (
 // itself would otherwise leave off.
 func TestOpenEnablesWALAndForeignKeys(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -47,12 +48,12 @@ func TestOpenEnablesWALAndForeignKeys(t *testing.T) {
 // waits briefly and succeeds instead.
 func TestConcurrentStoresCanBothWriteWithoutLockErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	a, err := Open(dbPath)
+	a, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open a: %v", err)
 	}
 	defer a.Close()
-	b, err := Open(dbPath)
+	b, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open b: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestConcurrentStoresCanBothWriteWithoutLockErrors(t *testing.T) {
 		}
 		go func(st *Store, i int) {
 			defer wg.Done()
-			_, err := st.Insert("s1", "proj", "Bash",
+			_, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 				memory.ContentHash("s1", "Bash", string(rune('a'+i%26)), string(rune(i))),
 				memory.Observation{Type: "discovery", Title: "concurrent write"}, 0)
 			errs <- err
@@ -84,7 +85,7 @@ func TestConcurrentStoresCanBothWriteWithoutLockErrors(t *testing.T) {
 		}
 	}
 
-	count, err := a.CountByProject("proj")
+	count, err := a.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}

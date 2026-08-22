@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 func openExportTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -20,18 +21,18 @@ func openExportTestStore(t *testing.T) *Store {
 
 func TestExportAllReturnsEverythingOldestFirst(t *testing.T) {
 	st := openExportTestStore(t)
-	first, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
+	first, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"),
 		memory.Observation{Type: "discovery", Title: "first"}, 0.01)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	second, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
+	second, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "b", "2"),
 		memory.Observation{Type: "discovery", Title: "second"}, 0.02)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	rows, err := st.ExportAll(0, 10)
+	rows, err := st.ExportAll(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestExportAllPaginatesCorrectly(t *testing.T) {
 	const n = 25
 	var ids []int64
 	for i := 0; i < n; i++ {
-		res, err := st.Insert("s1", "proj", "Bash",
+		res, err := st.Insert(context.Background(), "s1", "proj", "Bash",
 			memory.ContentHash("s1", "Bash", string(rune('a'+i%26)), string(rune(i))),
 			memory.Observation{Type: "discovery", Title: "row"}, 0)
 		if err != nil {
@@ -68,7 +69,7 @@ func TestExportAllPaginatesCorrectly(t *testing.T) {
 	afterID := int64(0)
 	const pageSize = 7
 	for {
-		page, err := st.ExportAll(afterID, pageSize)
+		page, err := st.ExportAll(context.Background(), afterID, pageSize)
 		if err != nil {
 			t.Fatalf("ExportAll(afterID=%d): %v", afterID, err)
 		}
@@ -103,11 +104,11 @@ func TestImportRowRoundTripsIntoAFreshStore(t *testing.T) {
 		Facts: []string{"fact one", "fact two"}, Narrative: "what happened",
 		Concepts: []string{"concept"}, FilesRead: []string{"a.go"}, FilesModified: []string{"b.go"},
 	}
-	orig, err := source.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"), o, 0.05)
+	orig, err := source.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"), o, 0.05)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	rows, err := source.ExportAll(0, 10)
+	rows, err := source.ExportAll(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestImportRowRoundTripsIntoAFreshStore(t *testing.T) {
 	}
 
 	dest := openExportTestStore(t)
-	res, err := dest.ImportRow(rows[0])
+	res, err := dest.ImportRow(context.Background(), rows[0])
 	if err != nil {
 		t.Fatalf("ImportRow: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestImportRowRoundTripsIntoAFreshStore(t *testing.T) {
 		t.Fatal("ImportRow into a fresh store: want Inserted=true")
 	}
 
-	restored, err := dest.RecentByProject("proj", 10)
+	restored, err := dest.RecentByProject(context.Background(), "proj", 10)
 	if err != nil {
 		t.Fatalf("RecentByProject: %v", err)
 	}
@@ -146,21 +147,21 @@ func TestImportRowRoundTripsIntoAFreshStore(t *testing.T) {
 // no-op — the same guarantee Insert already provides, preserved here.
 func TestImportRowIsIdempotent(t *testing.T) {
 	source := openExportTestStore(t)
-	if _, err := source.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"),
+	if _, err := source.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"),
 		memory.Observation{Type: "discovery", Title: "row"}, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	rows, err := source.ExportAll(0, 10)
+	rows, err := source.ExportAll(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
 
 	dest := openExportTestStore(t)
-	first, err := dest.ImportRow(rows[0])
+	first, err := dest.ImportRow(context.Background(), rows[0])
 	if err != nil {
 		t.Fatalf("first ImportRow: %v", err)
 	}
-	second, err := dest.ImportRow(rows[0])
+	second, err := dest.ImportRow(context.Background(), rows[0])
 	if err != nil {
 		t.Fatalf("second ImportRow: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestImportRowIsIdempotent(t *testing.T) {
 	if second.ID != first.ID {
 		t.Fatalf("second ImportRow returned a different ID (%d) than the first (%d)", second.ID, first.ID)
 	}
-	count, err := dest.CountByProject("proj")
+	count, err := dest.CountByProject(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("CountByProject: %v", err)
 	}
@@ -186,25 +187,25 @@ func TestImportRowIsIdempotent(t *testing.T) {
 // ANN search at scale" would have arrived with nothing left to search.
 func TestExportAllIncludesEmbeddingAndImportRowRestoresIt(t *testing.T) {
 	source := openExportTestStore(t)
-	res, err := source.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"),
+	res, err := source.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "x", "y"),
 		memory.Observation{Type: "discovery", Title: "has an embedding"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	wantVec := []float32{1, 2, 3, 4}
-	if err := source.SaveEmbedding(res.ID, wantVec); err != nil {
+	if err := source.SaveEmbedding(context.Background(), res.ID, wantVec); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
 	// Also seed a row with NO embedding, to confirm ExportAll still
 	// includes it (LEFT JOIN, not an accidental INNER JOIN that would
 	// silently drop every never-embedded observation from the export).
-	if _, err := source.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "no-embed", "z"),
+	if _, err := source.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "no-embed", "z"),
 		memory.Observation{Type: "discovery", Title: "never embedded"}, 0); err != nil {
 		t.Fatalf("Insert (no embedding): %v", err)
 	}
 
-	rows, err := source.ExportAll(0, 10)
+	rows, err := source.ExportAll(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -236,11 +237,11 @@ func TestExportAllIncludesEmbeddingAndImportRowRestoresIt(t *testing.T) {
 	}
 
 	dest := openExportTestStore(t)
-	importRes, err := dest.ImportRow(*embeddedRow)
+	importRes, err := dest.ImportRow(context.Background(), *embeddedRow)
 	if err != nil {
 		t.Fatalf("ImportRow: %v", err)
 	}
-	semantic, err := dest.SemanticSearch("", []float32{1, 2, 3, 4}, 10)
+	semantic, err := dest.SemanticSearch(context.Background(), "", []float32{1, 2, 3, 4}, 10)
 	if err != nil {
 		t.Fatalf("SemanticSearch: %v", err)
 	}
@@ -284,7 +285,7 @@ func TestImportRowValidatesCreatedAt(t *testing.T) {
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dbPath := t.TempDir() + "/test.db"
-			st, err := Open(dbPath)
+			st, err := Open(context.Background(), dbPath)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -297,7 +298,7 @@ func TestImportRowValidatesCreatedAt(t *testing.T) {
 				CreatedAt:      c.createdAt,
 				CreatedAtEpoch: 1700000000000,
 			}
-			_, err = st.ImportRow(row)
+			_, err = st.ImportRow(context.Background(), row)
 			if c.wantErr && err == nil {
 				t.Fatalf("ImportRow with created_at=%q: want an error, got nil — a malformed timestamp must not reach the TEXT column", c.createdAt)
 			}
@@ -324,7 +325,7 @@ func TestImportRowValidatesCreatedAt(t *testing.T) {
 // stop being the no-op ImportRow's idempotency guarantee promises.
 func TestImportRowPreservesCreatedAtByteForByte(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -338,7 +339,7 @@ func TestImportRowPreservesCreatedAtByteForByte(t *testing.T) {
 		CreatedAt:      exact,
 		CreatedAtEpoch: 1700000000000,
 	}
-	if _, err := st.ImportRow(row); err != nil {
+	if _, err := st.ImportRow(context.Background(), row); err != nil {
 		t.Fatalf("ImportRow: %v", err)
 	}
 	var got string

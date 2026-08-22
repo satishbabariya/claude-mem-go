@@ -52,7 +52,7 @@ func (b *blockingHandleWithValidType) Close() error { return nil }
 // than merely not crashing.
 func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := sqlite.Open(dbPath)
+	st, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 		t.Fatal("waitForProcessDrain did not return after the in-flight turn was released")
 	}
 
-	results, err := st.BySessionID("brand-new-session", 10)
+	results, err := st.BySessionID(context.Background(), "brand-new-session", 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}

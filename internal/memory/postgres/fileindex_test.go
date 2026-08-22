@@ -55,7 +55,7 @@ func TestObservationsForFileUsesTheGinIndexes(t *testing.T) {
 			files = append(files, target)
 		}
 		title := fmt.Sprintf("row %d", i)
-		if _, err := st.Insert("s-idx", project, "Read",
+		if _, err := st.Insert(context.Background(), "s-idx", project, "Read",
 			memory.ContentHash("s-idx", "Read", title, project),
 			memory.Observation{Type: "change", Title: title, FilesRead: files}, 0); err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
@@ -130,7 +130,7 @@ func TestObservationsForFileUsesTheGinIndexes(t *testing.T) {
 	}
 
 	// And the results must still be correct, not merely fast.
-	results, err := st.ObservationsForFile(project, target, 50)
+	results, err := st.ObservationsForFile(context.Background(), project, target, 50)
 	if err != nil {
 		t.Fatalf("ObservationsForFile: %v", err)
 	}

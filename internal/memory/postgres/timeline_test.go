@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -11,7 +12,7 @@ func seedSequence(t *testing.T, st *Store, project string, n int) []int64 {
 	ids := make([]int64, n)
 	for i := 0; i < n; i++ {
 		title := string(rune('A' + i))
-		res, err := st.Insert("s1", project, "Bash", memory.ContentHash("s1", "Bash", project, title+t.Name()), memory.Observation{Type: "discovery", Title: title}, 0)
+		res, err := st.Insert(context.Background(), "s1", project, "Bash", memory.ContentHash("s1", "Bash", project, title+t.Name()), memory.Observation{Type: "discovery", Title: title}, 0)
 		if err != nil {
 			t.Fatalf("seed insert %d: %v", i, err)
 		}
@@ -33,7 +34,7 @@ func TestPostgresTimelineMatchesSQLiteBehavior(t *testing.T) {
 	ids := seedSequence(t, st, project, 7) // A..G
 	anchor := ids[3]                       // D
 
-	results, err := st.Timeline(project, anchor, 2, 2)
+	results, err := st.Timeline(context.Background(), project, anchor, 2, 2)
 	if err != nil {
 		t.Fatalf("Timeline: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestPostgresTimelineRejectsAnchorFromADifferentProject(t *testing.T) {
 	idsA := seedSequence(t, st, projectA, 1)
 	seedSequence(t, st, projectB, 1)
 
-	if _, err := st.Timeline(projectB, idsA[0], 1, 1); err == nil {
+	if _, err := st.Timeline(context.Background(), projectB, idsA[0], 1, 1); err == nil {
 		t.Fatal("Timeline with an anchor from a different project: want an error, got nil — a real cross-project leak otherwise")
 	}
 }
@@ -78,7 +79,7 @@ func TestPostgresTimelineNegativeDepthDoesNotError(t *testing.T) {
 	ids := seedSequence(t, st, project, 5)
 	anchor := ids[2]
 
-	results, err := st.Timeline(project, anchor, -1, -1)
+	results, err := st.Timeline(context.Background(), project, anchor, -1, -1)
 	if err != nil {
 		t.Fatalf("Timeline with negative depths: want a clean clamp, got an error: %v", err)
 	}

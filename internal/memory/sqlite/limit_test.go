@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -15,7 +16,7 @@ import (
 // rows and confirms each method returns 0, not 20, for limit=-1.
 func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -24,13 +25,13 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 	const n = 20
 	for i := 0; i < n; i++ {
 		title := "row"
-		if _, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", title, string(rune('a'+i))), memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
+		if _, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", title, string(rune('a'+i))), memory.Observation{Type: "discovery", Title: title}, 0); err != nil {
 			t.Fatalf("seed insert %d: %v", i, err)
 		}
 	}
 
 	t.Run("Search", func(t *testing.T) {
-		results, err := st.Search("proj", "row", "", -1, 0, 0, 0, "")
+		results, err := st.Search(context.Background(), "proj", "row", "", -1, 0, 0, 0, "")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -39,7 +40,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 		}
 	})
 	t.Run("RecentByProject", func(t *testing.T) {
-		results, err := st.RecentByProject("proj", -1)
+		results, err := st.RecentByProject(context.Background(), "proj", -1)
 		if err != nil {
 			t.Fatalf("RecentByProject: %v", err)
 		}
@@ -48,7 +49,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 		}
 	})
 	t.Run("BySessionID", func(t *testing.T) {
-		results, err := st.BySessionID("s1", -1)
+		results, err := st.BySessionID(context.Background(), "s1", -1)
 		if err != nil {
 			t.Fatalf("BySessionID: %v", err)
 		}
@@ -57,7 +58,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 		}
 	})
 	t.Run("ExportAll", func(t *testing.T) {
-		results, err := st.ExportAll(0, -1)
+		results, err := st.ExportAll(context.Background(), 0, -1)
 		if err != nil {
 			t.Fatalf("ExportAll: %v", err)
 		}
@@ -66,7 +67,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 		}
 	})
 	t.Run("ObservationsNeedingEmbedding", func(t *testing.T) {
-		results, err := st.ObservationsNeedingEmbedding("proj", 768, 0, -1)
+		results, err := st.ObservationsNeedingEmbedding(context.Background(), "proj", 768, 0, -1)
 		if err != nil {
 			t.Fatalf("ObservationsNeedingEmbedding: %v", err)
 		}
@@ -86,21 +87,21 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 // here would have crashed the entire shared process.
 func TestSemanticSearchNegativeLimitDoesNotPanic(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	st, err := Open(dbPath)
+	st, err := Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
 
-	res, err := st.Insert("s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "x"}, 0)
+	res, err := st.Insert(context.Background(), "s1", "proj", "Bash", memory.ContentHash("s1", "Bash", "a", "1"), memory.Observation{Type: "discovery", Title: "x"}, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := st.SaveEmbedding(res.ID, make([]float32, 768)); err != nil {
+	if err := st.SaveEmbedding(context.Background(), res.ID, make([]float32, 768)); err != nil {
 		t.Fatalf("SaveEmbedding: %v", err)
 	}
 
-	matches, err := st.SemanticSearch("proj", make([]float32, 768), -1)
+	matches, err := st.SemanticSearch(context.Background(), "proj", make([]float32, 768), -1)
 	if err != nil {
 		t.Fatalf("SemanticSearch(limit=-1): %v", err)
 	}
