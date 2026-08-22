@@ -380,7 +380,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	// a real database (a naive `LIMIT ?` with depthBefore=-1 returned
 	// EVERY row before the anchor, not zero). Clamping the lower bound
 	// here, not just the caller's own sanitization (mcpserver.go's
-	// runTimeline already defaults <=0 to 3, but that's one caller, not a
+	// runTimeline already defaults <=0 to 10, but that's one caller, not a
 	// guarantee), keeps this method itself safe regardless of who calls
 	// it or what they pass.
 	if depthBefore < 0 {

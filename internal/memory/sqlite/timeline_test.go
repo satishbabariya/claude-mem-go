@@ -143,7 +143,7 @@ func TestTimelineNeverCrossesIntoAnotherProjectsRows(t *testing.T) {
 // test for a real bug found against this project's own SQLite driver:
 // SQLite's LIMIT treats a negative value as "unlimited," so a naive
 // `LIMIT ?` with depthBefore=-1 returned EVERY row before the anchor
-// instead of zero. mcpserver.go's own caller already defaults <=0 to 3,
+// instead of zero. mcpserver.go's own caller already defaults <=0 to 10,
 // but Timeline itself must not depend on that — any other caller (a
 // future CLI command, a test, a bug) could pass a negative value
 // directly.

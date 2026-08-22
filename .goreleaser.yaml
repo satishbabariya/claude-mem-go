@@ -26,7 +26,7 @@ builds:
     binary: claude-mem-go
     # CGO_ENABLED=0 is a real constraint, not a default left in place:
     # modernc.org/sqlite is pure Go (this project's whole reason for using
-    # it over mattn/go-sqlite3 — see store's doc comments), and pgx/v5 is a
+    # it over mattn/go-sqlite3 — see internal/memory/sqlite's doc comments), and pgx/v5 is a
     # pure Go Postgres driver too. Nothing here needs cgo, so a static
     # binary that cross-compiles cleanly without a C toolchain per target
     # is a correctness property of the dependency choices, not a shortcut.
