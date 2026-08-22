@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
@@ -39,7 +40,7 @@ func cmdDoctor(args []string) int {
 	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model semantic search would use")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: the hnsw.ef_search override configured "+
 		"elsewhere (mcp/semantic-search/prompt-context), so its HealthDetails reflects the same value — "+
-		"valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")
+		"valid range 1-1000 (default 200 — measured 94% recall@10; pgvector's own 40 measured 71-80%)")
 	fs.Parse(args)
 
 	buildInfo, _ := debug.ReadBuildInfo()
@@ -452,6 +453,11 @@ func checkOllama(ctx context.Context, st memory.Backend, embedModel string) {
 // the flag that fixes it, is the honest version.
 const efSearchRecallFloor = 10000
 
+// efSearchRecallSafe is the lowest hnsw.ef_search bench/recall measured as
+// not losing memories silently (scoped search went exact at 100; 200 is
+// the default with margin). Below it on a large store, doctor warns.
+const efSearchRecallSafe = 100
+
 // minRecallsToJudge is how many recalls must have happened before an
 // empty RATE means anything. Two empties out of two is a brand-new
 // install, not a broken one, and a check that fires there would train the
@@ -461,13 +467,18 @@ const minRecallsToJudge = 10
 // reportEfSearchRecall warns when a store is large enough for the ANN
 // approximation to matter while still running pgvector's default.
 func reportEfSearchRecall(details map[string]string, embedded int) {
-	if details["hnsw_ef_search"] != "default (40)" {
-		return // an override is configured; the operator has already chosen
+	raw, ok := details["hnsw_ef_search"]
+	if !ok {
+		return // not the Postgres backend
+	}
+	ef, err := strconv.Atoi(strings.Fields(raw)[0])
+	if err != nil || ef >= efSearchRecallSafe {
+		return // the default (200) or a deliberate higher override
 	}
 	if embedded < efSearchRecallFloor {
 		return
 	}
-	fmt.Printf("… %d embedded rows with hnsw.ef_search at pgvector's default (40) — measured at ~80%% recall@10\n", embedded)
+	fmt.Printf("… %d embedded rows with hnsw.ef_search lowered to %d — pgvector's own 40 measured ~80%% recall@10\n", embedded, ef)
 	fmt.Println("  ↳ project-scoped search — what every hook uses — measured worse still, ~71%")
-	fmt.Println("  ↳ -hnsw-ef-search 200 measured ~94% unscoped and exact-and-complete scoped, under 4ms p50 (see bench/recall)")
+	fmt.Println("  ↳ the default, -hnsw-ef-search 200, measured ~94% unscoped and exact-and-complete scoped, under 4ms p50 (see bench/recall)")
 }
