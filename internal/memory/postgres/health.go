@@ -49,10 +49,9 @@ func (s *Store) HealthDetails(ctx context.Context) (map[string]string, error) {
 	// all before this — an operator who set -hnsw-ef-search had no way to
 	// confirm it was actually configured short of reading the process's
 	// own flags.
-	if s.hnswEfSearch > 0 {
-		details["hnsw_ef_search"] = strconv.Itoa(s.hnswEfSearch)
-	} else {
-		details["hnsw_ef_search"] = "default (40)"
+	details["hnsw_ef_search"] = strconv.Itoa(s.hnswEfSearch)
+	if s.hnswEfSearch == DefaultHNSWEfSearch {
+		details["hnsw_ef_search"] += " (default)"
 	}
 
 	// embedding_dims: reported for parity with the SQLite backend's

@@ -35,8 +35,8 @@ func TestHealthDetailsReflectsRealPoolAndSchemaState(t *testing.T) {
 	if details["pool_open_connections"] == "" {
 		t.Error("pool_open_connections is empty, want a real count")
 	}
-	if details["hnsw_ef_search"] != "default (40)" {
-		t.Errorf(`hnsw_ef_search = %q, want "default (40)" — openTestStore configures no override`, details["hnsw_ef_search"])
+	if details["hnsw_ef_search"] != "200 (default)" {
+		t.Errorf(`hnsw_ef_search = %q, want "200 (default)" — openTestStore configures no override`, details["hnsw_ef_search"])
 	}
 }
 

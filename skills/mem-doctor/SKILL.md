@@ -89,7 +89,7 @@ Don't use this for "did we solve X before" — that's `mem-search`.
   semantic search actually depends on still exists (a missing HNSW
   index would otherwise silently degrade every semantic search to a full
   table scan with nothing saying so), and the configured
-  `hnsw_ef_search` value (`default (40)` unless `-hnsw-ef-search` was
+  `hnsw_ef_search` value (`200 (default)` unless `-hnsw-ef-search` was
   passed to `doctor` — pass the identical value used on `mcp`/
   `semantic-search`/`prompt-context` to confirm it's actually what you
   think it is, not a live Postgres session setting, since the override

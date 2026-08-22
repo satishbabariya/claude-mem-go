@@ -744,13 +744,13 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
   actually configured. `doctor` gained the identical `-hnsw-ef-search`
   flag so it can be pointed at the same override an operator set on
   `mcp`/`semantic-search`/`prompt-context`, and reports it back verbatim
-  (or `default (40)` when unset). Reports this `Store`'s *configured*
+  (or `200 (default)` when unset). Reports this `Store`'s *configured*
   value, not a live Postgres session setting — there isn't one to read,
   since `SemanticSearch` applies it per call via a transaction-scoped
   `SET LOCAL`, not a persistent session GUC. Verified against the live
   container: a real `doctor -hnsw-ef-search 333` run showed
   `hnsw_ef_search=333`, and the unset default showed
-  `hnsw_ef_search=default (40)`.
+  `hnsw_ef_search=200 (default)`.
 - **version** — prints the exact commit and build time via Go's own
   `runtime/debug.ReadBuildInfo()` (VCS stamping is on by default since Go
   1.18 — no ldflags wiring, no version file to keep in sync, no CI change

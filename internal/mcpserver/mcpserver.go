@@ -134,7 +134,7 @@ type Server struct {
 	// recall/speed tradeoff for semantic_search_observations and
 	// observation_context — see postgres.Store.SemanticSearch's own doc
 	// comment. Ignored entirely for a SQLite DBPath. 0 (the zero value)
-	// leaves pgvector's built-in default (40) in place.
+	// uses this port's default of 200 (see postgres.DefaultHNSWEfSearch).
 	HNSWEfSearch int
 	Log          *logging.Logger
 

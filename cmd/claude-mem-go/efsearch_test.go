@@ -11,7 +11,7 @@ import (
 // pgvector's default should warn, and the other two combinations must
 // stay quiet.
 func TestEfSearchRecallWarning(t *testing.T) {
-	defaultDetails := map[string]string{"hnsw_ef_search": "default (40)"}
+	defaultDetails := map[string]string{"hnsw_ef_search": "40"}
 	overridden := map[string]string{"hnsw_ef_search": "200"}
 
 	cases := []struct {
@@ -20,7 +20,7 @@ func TestEfSearchRecallWarning(t *testing.T) {
 		embedded int
 		want     bool
 	}{
-		{"large store on the default warns", defaultDetails, efSearchRecallFloor, true},
+		{"large store lowered to 40 warns", defaultDetails, efSearchRecallFloor, true},
 		{"well past the floor warns", defaultDetails, 10 * efSearchRecallFloor, true},
 		// Below the floor the planner still prefers an exact sequential
 		// scan, so ef_search changes nothing and warning would be noise.

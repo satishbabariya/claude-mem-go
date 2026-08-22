@@ -63,6 +63,16 @@ const DefaultEmbedDims = 768
 const (
 	hnswEfSearchMin = 1
 	hnswEfSearchMax = 1000
+
+	// DefaultHNSWEfSearch is what SemanticSearch runs with when the caller
+	// passes 0. It is 200, not pgvector's own 40, because 40 was measured
+	// (bench/recall, 20,000 real nomic-embed-text vectors) at 80% recall@10
+	// unscoped and 71% project-scoped — the path every hook takes — with
+	// nothing in any output to say a third of the relevant memories were
+	// missing. 200 measured 94% unscoped and exact-and-complete scoped,
+	// and the whole range stayed under 4ms p50. Pass 40 explicitly to get
+	// pgvector's default back.
+	DefaultHNSWEfSearch = 200
 )
 
 // Store is the Postgres-backed memory.Backend implementation.
@@ -378,9 +388,12 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 	if embedDims <= 0 {
 		embedDims = configuredEmbedDims(DefaultEmbedDims)
 	}
-	if hnswEfSearch != 0 && (hnswEfSearch < hnswEfSearchMin || hnswEfSearch > hnswEfSearchMax) {
-		return nil, fmt.Errorf("hnsw.ef_search must be between %d and %d (or 0 to use pgvector's default), got %d",
-			hnswEfSearchMin, hnswEfSearchMax, hnswEfSearch)
+	if hnswEfSearch == 0 {
+		hnswEfSearch = DefaultHNSWEfSearch
+	}
+	if hnswEfSearch < hnswEfSearchMin || hnswEfSearch > hnswEfSearchMax {
+		return nil, fmt.Errorf("hnsw.ef_search must be between %d and %d (or 0 for the default of %d), got %d",
+			hnswEfSearchMin, hnswEfSearchMax, DefaultHNSWEfSearch, hnswEfSearch)
 	}
 	dsn = withStatementTimeout(dsn)
 	db, err := sql.Open("pgx", dsn)
@@ -832,15 +845,6 @@ func (s *Store) SemanticSearch(ctx context.Context, project string, queryVec []f
 	// away the ANN property this backend exists to provide, so it's the
 	// fallback for older pgvector only, not the default.
 	useCTE, useIterative := s.semanticSearchPlan(project)
-	scoped := project != ""
-	if !scoped && s.hnswEfSearch <= 0 {
-		rows, err := s.db.QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("semantic search: %w", err)
-		}
-		defer rows.Close()
-		return scanVectorMatches(rows)
-	}
 	if useCTE {
 		// Older pgvector: no iterative scan available, so pre-filter in a
 		// MATERIALIZED CTE. Exact and always correct, but O(rows in
@@ -855,14 +859,6 @@ func (s *Store) SemanticSearch(ctx context.Context, project string, queryVec []f
 		FROM scoped
 		ORDER BY embedding <=> $1
 		LIMIT $2`
-		if s.hnswEfSearch <= 0 {
-			rows, err := s.db.QueryContext(ctx, query, args...)
-			if err != nil {
-				return nil, fmt.Errorf("semantic search: %w", err)
-			}
-			defer rows.Close()
-			return scanVectorMatches(rows)
-		}
 	}
 
 	// SET LOCAL, not a plain SET: s.db is a pooled *sql.DB, and
@@ -877,14 +873,13 @@ func (s *Store) SemanticSearch(ctx context.Context, project string, queryVec []f
 		return nil, fmt.Errorf("begin semantic search tx: %w", err)
 	}
 	defer tx.Rollback()
-	if s.hnswEfSearch > 0 {
-		// hnsw.ef_search controls the ANN index's query-time
-		// recall/speed tradeoff — pgvector's built-in default (40)
-		// doesn't necessarily hold as `observations` grows well past the
-		// row counts it was tuned against.
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
-			return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
-		}
+	// Always set — see DefaultHNSWEfSearch; Open never leaves this 0.
+	// hnsw.ef_search controls the ANN index's query-time
+	// recall/speed tradeoff — pgvector's built-in default (40)
+	// doesn't necessarily hold as `observations` grows well past the
+	// row counts it was tuned against.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", s.hnswEfSearch)); err != nil {
+		return nil, fmt.Errorf("set hnsw.ef_search: %w", err)
 	}
 	if useIterative {
 		if _, err := tx.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
