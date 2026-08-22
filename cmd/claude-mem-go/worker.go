@@ -55,7 +55,7 @@ func cmdWorker(args []string) int {
 			d.Log.Printf("daemon shut down cleanly on signal")
 			return 0
 		}
-		d.Log.Printf("daemon exited: %v", err)
+		d.Log.Errorf("daemon exited: %v", err)
 		return 1
 	}
 	return 0

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -81,5 +82,22 @@ func TestReleaseSpawnLockIsOwnerChecked(t *testing.T) {
 
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("ReleaseSpawnLock deleted a lock file it does not own — a launcher must never delete a competitor's live lock")
+	}
+}
+
+func TestValidateSocketPathRejectsPathsTheKernelCannotBind(t *testing.T) {
+	if err := ValidateSocketPath("/tmp/ok.sock"); err != nil {
+		t.Fatalf("short path rejected: %v", err)
+	}
+	long := "/tmp/" + strings.Repeat("d", 200) + "/w.sock"
+	err := ValidateSocketPath(long)
+	if err == nil {
+		t.Fatal("a path over sun_path's limit was accepted; bind(2) would fail with EINVAL")
+	}
+	if !strings.Contains(err.Error(), "-socket") {
+		t.Fatalf("error does not tell the operator how to fix it: %v", err)
+	}
+	if err := ValidateSocketPath(""); err == nil {
+		t.Fatal("empty path accepted")
 	}
 }

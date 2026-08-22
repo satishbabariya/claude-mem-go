@@ -237,16 +237,18 @@ func checkWorker(socketPath, statsPath, redactedDBPath string, buildInfo *debug.
 		}
 	}
 
-	// A saturated pool is the observable symptom of a real capture
-	// stall. A slot is held for a cached observer session's whole
-	// lifetime, so once every slot is taken a NEW session's
-	// observations wait — and before this was surfaced they waited
-	// silently while every check here still reported green. Found by
-	// running three real concurrent sessions against the default
-	// capacity of 2: two were captured, the third produced nothing.
+	// A saturated pool is worth reporting, but it is no longer a capture
+	// stall by itself: an arriving session evicts the least-recently-used
+	// idle cached session and takes its slot. What it now costs is churn
+	// — each displaced session respawns its observer (~1-2s) on its next
+	// tool call — and a genuine wait only when every slot has a turn in
+	// flight at that moment. Found originally by running three real
+	// concurrent sessions against the default capacity of 2: two were
+	// captured, the third produced nothing; the eviction closed that.
 	if workerRunning && stats.PoolCapacity > 0 && stats.PoolInFlight >= stats.PoolCapacity {
 		fmt.Printf("… all %d observer slot(s) are held by cached sessions — a NEW concurrent\n"+
-			"  session's observations will wait, and eventually be dropped, until one goes idle.\n"+
+			"  session evicts the idlest one and takes its slot, so nothing is dropped, but\n"+
+			"  sessions respawn their observer each time they are displaced.\n"+
 			"  Raise -max-concurrent if you routinely run more than %d sessions at once.\n",
 			stats.PoolCapacity, stats.PoolCapacity)
 	}

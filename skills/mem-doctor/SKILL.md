@@ -70,11 +70,12 @@ Don't use this for "did we solve X before" — that's `mem-search`.
     so writes and reads can silently disagree. SessionStart replaces it
     automatically, so this normally resolves itself; only flag it if it
     persists.
-  - `… all N observer slot(s) are held by cached sessions` — a NEW
-    concurrent session's observations will wait and eventually be
-    dropped. Relevant when the user runs several Claude Code sessions at
-    once and only some are being remembered. The fix is a larger
-    `-max-concurrent`.
+  - `… all N observer slot(s) are held by cached sessions` — an arriving
+    session evicts the idlest cached one and takes its slot, so nothing
+    is dropped, but sessions that keep displacing each other respawn
+    their observer on every tool call (slower capture, more spend).
+    Relevant when the user runs more than N Claude Code sessions at
+    once. The fix is a larger `-max-concurrent`.
 
   None of these appear when the daemon is not running: they are claims
   about a live daemon, and `doctor` reports the stats of a stopped one as

@@ -14,6 +14,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -39,6 +40,10 @@ const sessionIdleTimeout = 10 * time.Minute
 // A var, not a const, so a test can shrink it: exercising the real
 // two-minute deadline honestly would mean a two-minute test.
 var sessionSlotWait = 2 * time.Minute
+
+// slotRetryInterval is how often a session waiting for a slot re-checks
+// whether a cached session has gone idle and can be evicted for it.
+var slotRetryInterval = 250 * time.Millisecond
 
 type sessionEntry struct {
 	// mu serializes turns on this one subprocess — Observe must never be
@@ -220,12 +225,47 @@ func (c *sessionCache) getOrCreate(ctx context.Context, sessionID string) (*sess
 	// passes, but it was already lost when this blocked forever — the
 	// session ends long before a ten-minute eviction — and blocking also
 	// pinned a goroutine and its connection the whole time.
-	if !c.pool.TryAcquire() {
-		c.logf("waiting for an observer slot: all %d in use by cached sessions "+
+	// Before waiting, make room: the slots are almost always held by
+	// sessions that are cached but idle — a Claude Code window whose
+	// last tool call was seconds or minutes ago — not by turns in flight.
+	// Measured end to end with the default capacity of 2: eight new
+	// sessions arriving while one idle session was cached got one slot
+	// between them; the other seven waited the full two minutes and were
+	// dropped, with nothing but worker.log to say so. Evicting the
+	// least-recently-used idle session costs that session one respawn on
+	// its next tool call (~1-2s) and costs the arriving session nothing;
+	// dropping the arriving session's event costs it the memory forever.
+	acquired := c.pool.TryAcquire()
+	if !acquired && c.evictLRUIdle() {
+		c.logf("evicted the least-recently-used idle observer session to make room for %s", sessionID)
+		acquired = c.pool.TryAcquire()
+	}
+	if !acquired {
+		c.logf("waiting for an observer slot: all %d in use by sessions with a turn in flight "+
 			"(raise -max-concurrent if you run more sessions at once)", c.pool.Capacity())
-		if !c.pool.AcquireContext(ctx, sessionSlotWait) {
-			return nil, fmt.Errorf("no observer slot free after %s: all %d are held by cached sessions; "+
-				"raise -max-concurrent to capture more concurrent sessions", sessionSlotWait, c.pool.Capacity())
+		// Poll rather than block on the pool: a cached session keeps its
+		// slot after its turn ends, so a pure pool wait only wakes when a
+		// session is evicted or closed — which, with every slot busy,
+		// never happens inside the deadline. Eight sessions arriving in
+		// the same second reproduced exactly that: two got slots, the
+		// other six saw both mid-turn, blocked, and timed out although
+		// both turns had finished ten seconds in. Re-trying eviction
+		// every slotRetryInterval turns "busy right now" into a short
+		// wait instead of a dropped event.
+		deadline := time.Now().Add(sessionSlotWait)
+		for !acquired {
+			if c.pool.AcquireContext(ctx, slotRetryInterval) {
+				acquired = true
+				break
+			}
+			if c.evictLRUIdle() {
+				c.logf("evicted the least-recently-used idle observer session to make room for %s", sessionID)
+				acquired = c.pool.TryAcquire()
+			}
+			if !acquired && (ctx.Err() != nil || time.Now().After(deadline)) {
+				return nil, fmt.Errorf("no observer slot free after %s: all %d had a turn in flight the whole time; "+
+					"raise -max-concurrent to capture more concurrent sessions", sessionSlotWait, c.pool.Capacity())
+			}
 		}
 	}
 	h, err := c.newFunc(ctx)
@@ -318,6 +358,46 @@ func (c *sessionCache) touch(sessionID string) {
 // (cur == e) guards the (safe, already-handled-by-existing-retry-logic)
 // case where a concurrent getOrCreate grabbed this same entry between
 // the snapshot above and the lock being acquired here.
+// evictLRUIdle closes the cached session that has gone longest without a
+// turn, provided no turn is in flight on it, and releases its slot.
+// Returns false when every cached session is mid-turn (nothing safe to
+// evict) or the cache is empty. Unlike evictIdle it ignores
+// sessionIdleTimeout: it runs only when a new session would otherwise be
+// refused a slot, and an idle-for-ten-seconds session is a better thing
+// to respawn later than an arriving session's event is to lose now.
+func (c *sessionCache) evictLRUIdle() bool {
+	c.mu.Lock()
+	type cand struct {
+		id string
+		e  *sessionEntry
+	}
+	var order []cand
+	for id, e := range c.byID {
+		order = append(order, cand{id, e})
+	}
+	c.mu.Unlock()
+	sort.Slice(order, func(i, j int) bool { return order[i].e.lastUsed.Before(order[j].e.lastUsed) })
+	for _, cd := range order {
+		if !cd.e.mu.TryLock() {
+			continue // a turn is in flight on this one; try the next-oldest
+		}
+		c.mu.Lock()
+		cur, ok := c.byID[cd.id]
+		stillLive := ok && cur == cd.e
+		if stillLive {
+			delete(c.byID, cd.id)
+		}
+		c.mu.Unlock()
+		cd.e.mu.Unlock()
+		if stillLive {
+			cd.e.handle.Close()
+			c.pool.Release()
+			return true
+		}
+	}
+	return false
+}
+
 func (c *sessionCache) evictIdle() {
 	c.mu.Lock()
 	var stale []*sessionEntry

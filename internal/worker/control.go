@@ -18,7 +18,7 @@ func WaitForReady(socketPath string, l *logging.Logger) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	l.Printf("WARNING: worker did not become ready within 5s")
+	l.Warnf("worker did not become ready within 5s — if it exited, the reason is the last line of worker.log")
 }
 
 // stopDaemon asks the daemon to shut down gracefully and waits for its
