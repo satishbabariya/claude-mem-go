@@ -150,7 +150,10 @@ const (
 // conversation, no tool calls at all) pays the full wait budget before
 // this gives up — an acceptable cost since Stop runs fire-and-forget,
 // not a cost the user waiting on their own session ever sees.
-func WaitForSessionObservations(ctx context.Context, st memory.Backend, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]memory.SearchResult, error) {
+//
+// project is passed straight through to BySessionID (empty = every
+// project); the Stop hook passes the project the worker recorded under.
+func WaitForSessionObservations(ctx context.Context, st memory.Backend, project, sessionID string, limit int, inFlight func(sessionID string) (int, bool)) ([]memory.SearchResult, error) {
 	var observations []memory.SearchResult
 	prevCount := -1
 	streak := 0
@@ -165,7 +168,7 @@ func WaitForSessionObservations(ctx context.Context, st memory.Backend, sessionI
 	// ever anything to wait for.
 	sawActivity := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		obs, err := st.BySessionID(ctx, sessionID, limit)
+		obs, err := st.BySessionID(ctx, project, sessionID, limit)
 		if err != nil {
 			return nil, err
 		}

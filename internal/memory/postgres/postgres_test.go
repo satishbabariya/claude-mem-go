@@ -794,7 +794,7 @@ func TestPostgresBySessionIDOrdersOldestFirst(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.BySessionID(context.Background(), sessionID, 10)
+	results, err := st.BySessionID(context.Background(), "", sessionID, 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}
@@ -804,6 +804,37 @@ func TestPostgresBySessionIDOrdersOldestFirst(t *testing.T) {
 	if results[0].ID != first.ID || results[1].ID != second.ID {
 		t.Fatalf("BySessionID order = [%d, %d], want oldest first [%d, %d]",
 			results[0].ID, results[1].ID, first.ID, second.ID)
+	}
+}
+
+// TestPostgresBySessionIDScopesToProject mirrors the SQLite backend's
+// test of the same name: a project scope excludes the session's rows
+// recorded under another project; an empty project includes them.
+func TestPostgresBySessionIDScopesToProject(t *testing.T) {
+	st := openTestStore(t)
+	projA, projB := uniqueProject(t), uniqueProject(t)+"-b"
+	sessionID := fmt.Sprintf("session-%d", time.Now().UnixNano())
+
+	for _, project := range []string{projA, projB} {
+		hash := memory.ContentHash(sessionID, "Bash", "1", project)
+		if _, err := st.Insert(context.Background(), sessionID, project, "Bash", hash, memory.Observation{Type: "discovery", Title: project}, 0); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+	}
+
+	scoped, err := st.BySessionID(context.Background(), projA, sessionID, 10)
+	if err != nil {
+		t.Fatalf("BySessionID(%s): %v", projA, err)
+	}
+	if len(scoped) != 1 || scoped[0].Project != projA {
+		t.Fatalf("BySessionID(%s) = %+v, want exactly the one %s row", projA, scoped, projA)
+	}
+	all, err := st.BySessionID(context.Background(), "", sessionID, 10)
+	if err != nil {
+		t.Fatalf("BySessionID(\"\"): %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("BySessionID(\"\") returned %d rows, want 2 (every project)", len(all))
 	}
 }
 

@@ -44,6 +44,10 @@ func ObserveOneShot(ctx context.Context, model string, tc transcript.ToolCall) (
 	return o.Observe(tc)
 }
 
+// observeOneShot is the retry path's seam: tests override it to drive the
+// retry loop without spawning a real claude subprocess.
+var observeOneShot = ObserveOneShot
+
 // ObserveResilient tries tc on the given persistent session first — the
 // normal path, which preserves multi-turn context. Only if that fails with
 // a retryable error does it fall back to fresh one-shot sessions (losing
@@ -63,10 +67,16 @@ func ObserveResilient(ctx context.Context, o Handle, model string, tc transcript
 	lastErr := err
 	delay := policy.BaseDelay
 	for attempt := 2; attempt <= policy.MaxAttempts; attempt++ {
-		time.Sleep(delay)
+		// A cancelled ctx (a hook budget expiring, shutdown) must not sit
+		// out the backoff only to then fail the spawn anyway.
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return Turn{}, ctx.Err()
+		}
 		delay *= 2
 
-		turn, err := ObserveOneShot(ctx, model, tc)
+		turn, err := observeOneShot(ctx, model, tc)
 		if err == nil {
 			return turn, nil
 		}

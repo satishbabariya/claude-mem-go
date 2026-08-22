@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // DialTimeout bounds how long Forward waits to reach the worker daemon.
@@ -66,6 +67,23 @@ func Forward(socketPath string, r io.Reader) (bytesSent int, err error) {
 	return n, err
 }
 
+// validSessionID reports whether s can travel safely in this package's
+// plain-text socket protocol, whose parsers split on whitespace: a
+// session ID (or prompt hash) that is empty or contains whitespace would
+// produce a message the worker silently fails to parse, so every sender
+// below rejects it up front with an explicit error instead of sending
+// something unparseable. Real Claude Code session IDs are UUIDs and
+// prompt hashes are hex, so this only ever fires on a malformed payload.
+func validSessionID(s string) bool {
+	return s != "" && strings.IndexFunc(s, unicode.IsSpace) < 0
+}
+
+// errInvalidSessionID builds the shared rejection for validSessionID
+// failures so every sender reports it identically.
+func errInvalidSessionID(field, s string) error {
+	return fmt.Errorf("%s %q is empty or contains whitespace, which the socket protocol cannot carry", field, s)
+}
+
 // inFlightQueryPrefix opens the small plain-text query protocol the worker
 // daemon's handleConn recognizes ahead of the real (always-JSON,
 // always-"{"-prefixed) hook-forwarding payload, so the two can never be
@@ -103,6 +121,9 @@ func ParseInFlightQuery(raw []byte) (sessionID string, ok bool) {
 // caller should treat that as "unknown," not "zero," and fall back to a
 // heuristic rather than assuming nothing is in flight.
 func QueryInFlight(socketPath, sessionID string) (int, error) {
+	if !validSessionID(sessionID) {
+		return 0, errInvalidSessionID("session_id", sessionID)
+	}
 	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
 	if err != nil {
 		return 0, err
@@ -175,6 +196,9 @@ func ParsePrivacyMarker(raw []byte) (sessionID string, private bool, ok bool) {
 // unreachable daemon the same way Forward's own callers do — log it, but
 // never fail or block the hook that triggered this.
 func SetSessionPrivate(socketPath, sessionID string, private bool) error {
+	if !validSessionID(sessionID) {
+		return errInvalidSessionID("session_id", sessionID)
+	}
 	flag := "0"
 	if private {
 		flag = "1"
@@ -210,6 +234,9 @@ func ParsePrivacyQuery(raw []byte) (sessionID string, ok bool) {
 // rather than silently dropping a real session's summary because the
 // daemon happened to be unreachable.
 func QueryPrivate(socketPath, sessionID string) (bool, error) {
+	if !validSessionID(sessionID) {
+		return false, errInvalidSessionID("session_id", sessionID)
+	}
 	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
 	if err != nil {
 		return false, err
@@ -282,6 +309,12 @@ func ParseDedupeQuery(raw []byte) (sessionID, promptHash string, ok bool) {
 // silently dropping a real prompt's context injection because the daemon
 // happened to be unreachable.
 func CheckDuplicatePrompt(socketPath, sessionID, promptHash string) (bool, error) {
+	if !validSessionID(sessionID) {
+		return false, errInvalidSessionID("session_id", sessionID)
+	}
+	if !validSessionID(promptHash) {
+		return false, errInvalidSessionID("prompt hash", promptHash)
+	}
 	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
 	if err != nil {
 		return false, err

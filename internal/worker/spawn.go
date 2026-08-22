@@ -120,5 +120,10 @@ func SpawnDetached(binPath string, args []string) error {
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	return cmd.Start()
+	// The child holds its own dup of the descriptor once Start returns
+	// (whether or not it succeeded); the parent's copy was never closed
+	// and leaked an FD per spawn attempt.
+	err = cmd.Start()
+	devnull.Close()
+	return err
 }

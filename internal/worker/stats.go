@@ -217,16 +217,40 @@ func (c *statsCounters) snapshot(cachedSessions, poolInFlight, poolCapacity int)
 // writeStatsFile writes s to path atomically (temp file + rename) so a
 // concurrent reader (doctor, or anything else polling this file) never
 // observes a partially-written JSON document.
+//
+// The temp file is unique per call (os.CreateTemp), not a single shared
+// path+".tmp": recordStats is reached concurrently — from every process()
+// goroutine's deferred call and from handleConn's recall-report path —
+// and two writers sharing one temp name could interleave (one's rename
+// moving the other's half-written file into place, or one's WriteFile
+// failing on a name the other just renamed away).
 func writeStatsFile(path string, s Stats) error {
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal worker stats: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".worker-stats-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create worker stats temp file: %w", err)
+	}
+	tmp := f.Name()
+	// Any failure below leaves nothing behind: a stray temp file per
+	// failed write would otherwise accumulate in the home directory.
+	cleanup := func() { f.Close(); os.Remove(tmp) }
+	if err := f.Chmod(0o600); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod worker stats temp file: %w", err)
+	}
+	if _, err := f.Write(b); err != nil {
+		cleanup()
 		return fmt.Errorf("write worker stats temp file: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close worker stats temp file: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename worker stats file into place: %w", err)
 	}
 	return nil

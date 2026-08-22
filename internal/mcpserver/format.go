@@ -77,28 +77,35 @@ func formatFullObservations(results []memory.SearchResult) string {
 		if len(r.Observation.FilesModified) > 0 {
 			fmt.Fprintf(&b, "Files modified: %s\n", strings.Join(r.Observation.FilesModified, ", "))
 		}
+		// Rendered here as well as in contextfmt.SessionStart: a summary's
+		// next_steps are its most actionable field, and get_observations is
+		// the one tool that claims to show everything about a row.
+		if len(r.Observation.NextSteps) > 0 {
+			fmt.Fprintf(&b, "Next steps: %s\n", strings.Join(r.Observation.NextSteps, "; "))
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// formatObservationContext mirrors cmd/claude-mem-go/prompt_context.go's
-// formatPromptContext exactly, byte for byte — duplicated rather than
-// imported, since mcpserver can't import package main (which itself
-// imports mcpserver for cmdMCP; importing it back would be a cycle). The
-// whole point of this tool is returning the identical ready-to-inject
-// shape that hook already produces automatically, not a fresh format
-// only coincidentally similar to it.
+// formatObservationContext delegates to contextfmt.PromptContext, the
+// same function cmd/claude-mem-go/prompt_context.go's formatPromptContext
+// calls — so observation_context returns the identical ready-to-inject
+// text the UserPromptSubmit hook produces automatically, not a fresh
+// format only coincidentally similar to it. contextfmt exists precisely
+// because mcpserver can't import package main (which imports mcpserver
+// for cmdMCP; importing it back would be a cycle): a shared leaf package
+// is the only way both callers can use one implementation rather than
+// two copies that drift.
 func formatObservationContext(matches []memory.VectorMatch) string {
 	return contextfmt.PromptContext(matches)
 }
 
-// formatSessionStartContext mirrors cmd/claude-mem-go/context.go's
-// formatContext exactly, byte for byte — duplicated rather than imported,
-// the same import-cycle constraint formatObservationContext's own doc
-// comment explains (mcpserver can't import package main, which imports
-// mcpserver for cmdMCP). The whole point of session_start_context is
-// returning the identical text the real SessionStart hook injects, not a
-// fresh format only coincidentally similar to it.
+// formatSessionStartContext delegates to contextfmt.SessionStart, the
+// same function cmd/claude-mem-go/context.go's real SessionStart hook
+// calls, for the reason formatObservationContext's own doc comment
+// explains: the whole point of session_start_context is returning the
+// identical text that hook injects, and a shared package is the only way
+// to guarantee that across the import-cycle boundary.
 func formatSessionStartContext(recent []memory.SearchResult) string {
 	return contextfmt.SessionStart(recent)
 }

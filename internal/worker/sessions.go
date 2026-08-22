@@ -223,7 +223,7 @@ func (c *sessionCache) getOrCreate(ctx context.Context, sessionID string) (*sess
 	if !c.pool.TryAcquire() {
 		c.logf("waiting for an observer slot: all %d in use by cached sessions "+
 			"(raise -max-concurrent if you run more sessions at once)", c.pool.Capacity())
-		if !c.pool.AcquireWithin(sessionSlotWait) {
+		if !c.pool.AcquireContext(ctx, sessionSlotWait) {
 			return nil, fmt.Errorf("no observer slot free after %s: all %d are held by cached sessions; "+
 				"raise -max-concurrent to capture more concurrent sessions", sessionSlotWait, c.pool.Capacity())
 		}

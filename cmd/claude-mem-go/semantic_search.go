@@ -28,14 +28,14 @@ func cmdSemanticSearch(args []string) int {
 	}
 	query := fs.Arg(0)
 
-	queryVec, err := embed.NewClient(*embedModel).Embed(query)
+	ctx, cancel := cliContext()
+	defer cancel()
+	queryVec, err := embed.NewClient(*embedModel).Embed(ctx, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to embed query: %v\n", err)
 		return 1
 	}
 
-	ctx, cancel := cliContext()
-	defer cancel()
 	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)

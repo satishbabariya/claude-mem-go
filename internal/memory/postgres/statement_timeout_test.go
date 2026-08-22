@@ -43,6 +43,32 @@ func TestWithStatementTimeout(t *testing.T) {
 		}
 	})
 
+	t.Run("appends a space-separated token to a keyword/value DSN", func(t *testing.T) {
+		// url.Parse accepts this form without error and would mangle it
+		// (see withStatementTimeout's doc comment), so the exact output
+		// matters, not just "contains statement_timeout".
+		got := withStatementTimeout("host=localhost user=x password=y dbname=z")
+		want := "host=localhost user=x password=y dbname=z statement_timeout=30000"
+		if got != want {
+			t.Fatalf("withStatementTimeout(keyword/value DSN) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("leaves a keyword/value DSN with its own statement_timeout untouched", func(t *testing.T) {
+		in := "host=localhost dbname=z statement_timeout=5000 user=x"
+		if got := withStatementTimeout(in); got != in {
+			t.Fatalf("withStatementTimeout(%q) = %q, want it unchanged", in, got)
+		}
+	})
+
+	t.Run("keeps the URL path for URL DSNs", func(t *testing.T) {
+		got := withStatementTimeout("postgres://user:pass@host:5432/db?sslmode=disable")
+		want := "postgres://user:pass@host:5432/db?sslmode=disable&statement_timeout=30000"
+		if got != want {
+			t.Fatalf("withStatementTimeout(URL DSN) = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("returns an unparseable DSN unchanged rather than erroring", func(t *testing.T) {
 		in := "postgres://user:pass@[invalid host/db"
 		if got := withStatementTimeout(in); got != in {

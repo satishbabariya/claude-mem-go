@@ -134,3 +134,55 @@ func TestNewRotatingWriterReopensAnExistingFileWithoutTruncating(t *testing.T) {
 		t.Fatalf("content = %q, want the newly appended line too", content)
 	}
 }
+
+// TestRotatingWriterRetriesRotationAfterRenameFails covers a cap-defeating
+// bug: when os.Rename failed, rotateLocked reopened the same oversized
+// file but reset size to 0, so the writer believed it was empty and did
+// not try to rotate again until the process restarted. Blocking the
+// rename with a non-empty directory at path+".1" (Remove and Rename both
+// fail on it, on macOS and Linux alike) reproduces that, then unblocking
+// it proves the next write re-attempts and succeeds.
+func TestRotatingWriterRetriesRotationAfterRenameFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	blocker := path + ".1"
+	if err := os.MkdirAll(filepath.Join(blocker, "child"), 0o700); err != nil {
+		t.Fatalf("mkdir blocker: %v", err)
+	}
+
+	w, err := NewRotatingWriter(path, 50)
+	if err != nil {
+		t.Fatalf("NewRotatingWriter: %v", err)
+	}
+	line := []byte("0123456789\n") // 11 bytes
+	for i := 0; i < 5; i++ {       // the 5th write (55 bytes) triggers a rotation that cannot rename
+		if _, err := w.Write(line); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+	if got := w.size; got != 55 {
+		t.Fatalf("size after a failed rotation = %d, want 55 (the reopened file's real size, not 0)", got)
+	}
+
+	// Unblock and write once more: the writer must rotate now, moving all
+	// six prior lines aside, rather than believing the file is tiny.
+	if err := os.RemoveAll(blocker); err != nil {
+		t.Fatalf("remove blocker: %v", err)
+	}
+	if _, err := w.Write(line); err != nil {
+		t.Fatalf("Write (should rotate): %v", err)
+	}
+	oldGen, err := os.ReadFile(path + ".1")
+	if err != nil {
+		t.Fatalf("rotation was not re-attempted after the failed rename: %v", err)
+	}
+	if n := bytes.Count(oldGen, []byte("\n")); n != 5 {
+		t.Fatalf("rotated generation has %d lines, want 5", n)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read current: %v", err)
+	}
+	if n := bytes.Count(current, []byte("\n")); n != 1 {
+		t.Fatalf("current file has %d lines, want 1", n)
+	}
+}

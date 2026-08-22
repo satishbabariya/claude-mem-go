@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"unicode/utf8"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
@@ -142,15 +143,15 @@ func cmdPromptContext(args []string) int {
 		return 0
 	}
 
-	vec, err := embed.NewClient(*embedModel).Embed(prompt)
+	ctx, cancel := hookContext(promptContextBudget)
+	defer cancel()
+	vec, err := embed.NewClient(*embedModel).Embed(ctx, prompt)
 	if err != nil {
 		l.Errorf("FAILED embedding prompt (%d chars): %v", len(prompt), err)
 		fmt.Println("{}")
 		return 0
 	}
 
-	ctx, cancel := hookContext(promptContextBudget)
-	defer cancel()
 	st, err := backend.Open(ctx, *dbPath, 0, *hnswEfSearch)
 	if err != nil {
 		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
@@ -197,13 +198,20 @@ func cmdPromptContext(args []string) int {
 // truncateForLog keeps a real user prompt (which may be long, or contain
 // sensitive-looking text) out of the log file beyond a short preview —
 // this hook's log line exists to debug "why didn't it inject," not to
-// duplicate the transcript.
+// duplicate the transcript. Cuts on a rune boundary, the same way
+// transcript's truncate does: a byte slice through the middle of a
+// multi-byte character (non-English prompts, emoji) leaves invalid UTF-8
+// in the log, and %q then renders it as escaped garbage.
 func truncateForLog(s string) string {
 	const max = 80
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // promptHash hashes the (already tag-stripped) prompt text for the

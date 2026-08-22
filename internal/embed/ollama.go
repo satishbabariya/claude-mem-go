@@ -13,13 +13,26 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 )
+
+// maxResponseBytes caps how much of an Ollama reply is read before JSON
+// decoding. An embedding is a few KB and /api/tags a few hundred bytes; a
+// misconfigured base URL pointing at something that streams forever must
+// not let the daemon read it into memory unbounded.
+const maxResponseBytes = 16 << 20
+
+// embedRetryDelay is the pause before Embed's single retry — long enough
+// for a momentary Ollama hiccup to clear, short enough not to matter on
+// the hook budgets that call this.
+var embedRetryDelay = 250 * time.Millisecond
 
 // DefaultBaseURL is Ollama's default local server address.
 const DefaultBaseURL = "http://localhost:11434"
@@ -95,10 +108,21 @@ const embedMaxAttempts = 2
 // 5xx status) but not on one that retrying identically won't fix (a 4xx
 // status, or a successful response with an empty embedding — the model
 // genuinely isn't pulled, and it won't be moments later either).
-func (c *Client) Embed(text string) ([]float32, error) {
+//
+// ctx bounds the whole call, retry pause included: every caller is
+// either a hook on a budget or a daemon that must stop promptly on
+// shutdown, and the old ctx-less request could outlive both.
+func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	var lastErr error
 	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
-		vec, retryable, err := c.embedOnce(text)
+		if attempt > 1 {
+			select {
+			case <-time.After(embedRetryDelay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		vec, retryable, err := c.embedOnce(ctx, text)
 		if err == nil {
 			return vec, nil
 		}
@@ -110,14 +134,23 @@ func (c *Client) Embed(text string) ([]float32, error) {
 	return nil, lastErr
 }
 
-func (c *Client) embedOnce(text string) (vec []float32, retryable bool, err error) {
+func (c *Client) embedOnce(ctx context.Context, text string) (vec []float32, retryable bool, err error) {
 	body, err := json.Marshal(embedRequest{Model: c.Model, Prompt: text})
 	if err != nil {
 		return nil, false, err
 	}
 
-	resp, err := c.HTTP.Post(c.BaseURL+"/api/embeddings", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/embeddings", bytes.NewReader(body))
 	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		// A cancelled ctx is the caller's decision, not a transient blip.
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err()
+		}
 		return nil, true, fmt.Errorf("ollama embeddings request (is `ollama serve` running?): %w", err)
 	}
 	defer resp.Body.Close()
@@ -130,7 +163,7 @@ func (c *Client) embedOnce(text string) (vec []float32, retryable bool, err erro
 	}
 
 	var er embedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&er); err != nil {
 		return nil, false, fmt.Errorf("decode ollama embeddings response: %w", err)
 	}
 	if len(er.Embedding) == 0 {
@@ -151,8 +184,12 @@ type tagsResponse struct {
 // running" from "server running but this model was never pulled," which
 // Embed's own error message can only guess at from an empty-embedding
 // response.
-func (c *Client) Ping() error {
-	resp, err := c.HTTP.Get(c.BaseURL + "/api/tags")
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/tags", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("ollama not reachable at %s (is `ollama serve` running?): %w", c.BaseURL, err)
 	}
@@ -162,7 +199,7 @@ func (c *Client) Ping() error {
 	}
 
 	var tr tagsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&tr); err != nil {
 		return fmt.Errorf("decode ollama /api/tags response: %w", err)
 	}
 	for _, m := range tr.Models {

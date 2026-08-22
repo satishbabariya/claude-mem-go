@@ -428,7 +428,7 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	// not a substitute for fixing root causes when they're found.
 	defer func() {
 		if r := recover(); r != nil {
-			d.Log.Printf("PANIC recovered in process (%d byte payload): %v", len(raw), r)
+			d.Log.Errorf("PANIC recovered in process (%d byte payload): %v", len(raw), r)
 			d.counters.observerErrors.Add(1)
 		}
 	}()
@@ -529,28 +529,9 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 		ToolOutput: transcript.Truncate(privacy.StripMemoryTags(string(in.ToolResponse))),
 	}
 
-	turn, turnErr := entry.handle.Observe(tc)
-	if turnErr != nil {
-		// A broken subprocess must not stay cached to fail identically on
-		// every future turn for this session — evict it regardless of what
-		// happens next. The next turn for this session_id will lazily spawn
-		// a fresh one via getOrCreate.
-		d.sessions.evict(in.SessionID)
-
-		// Transient/rate-limit failures get exactly one retry on a fresh
-		// one-shot session — the same class of failure this project's
-		// classify package exists to distinguish from a hopeless retry
-		// (auth/setup/quota/unrecoverable, which would just fail identically
-		// again). Anything else fails this turn immediately.
-		if ce, ok := turnErr.(*classify.Error); ok && (ce.Kind == classify.Transient || ce.Kind == classify.RateLimit) {
-			d.Log.Warnf("observer turn failed (session evicted), retrying once on a fresh session: %v", turnErr)
-			turn, turnErr = observer.ObserveOneShot(ctx, d.Model, tc)
-		}
-		if turnErr != nil {
-			d.Log.Errorf("FAILED observer turn: %v", turnErr)
-			d.counters.observerErrors.Add(1)
-			return
-		}
+	turn, ok := d.observeTurn(ctx, entry, in.SessionID, tc)
+	if !ok {
+		return
 	}
 	// Refresh lastUsed now that the turn actually finished, not just when
 	// it started (getOrCreate already covers that half) — see touch's own
@@ -598,22 +579,59 @@ func (d *Daemon) process(ctx context.Context, raw []byte) {
 	d.counters.processed.Add(1)
 	d.counters.touch()
 
+	d.embedObservation(ctx, res.ID, turn.Observation)
+}
+
+// observeTurn runs one observer turn on entry's cached session, retrying
+// once on a fresh one-shot session for a transient failure. Reports
+// false when the turn failed for good — the error has already been
+// logged and counted, so the caller just returns.
+func (d *Daemon) observeTurn(ctx context.Context, entry *sessionEntry, sessionID string, tc transcript.ToolCall) (observer.Turn, bool) {
+	turn, turnErr := entry.handle.Observe(tc)
+	if turnErr != nil {
+		// A broken subprocess must not stay cached to fail identically on
+		// every future turn for this session — evict it regardless of what
+		// happens next. The next turn for this session_id will lazily spawn
+		// a fresh one via getOrCreate.
+		d.sessions.evict(sessionID)
+
+		// Transient/rate-limit failures get exactly one retry on a fresh
+		// one-shot session — the same class of failure this project's
+		// classify package exists to distinguish from a hopeless retry
+		// (auth/setup/quota/unrecoverable, which would just fail identically
+		// again). Anything else fails this turn immediately.
+		if ce, ok := turnErr.(*classify.Error); ok && (ce.Kind == classify.Transient || ce.Kind == classify.RateLimit) {
+			d.Log.Warnf("observer turn failed (session evicted), retrying once on a fresh session: %v", turnErr)
+			turn, turnErr = observer.ObserveOneShot(ctx, d.Model, tc)
+		}
+		if turnErr != nil {
+			d.Log.Errorf("FAILED observer turn: %v", turnErr)
+			d.counters.observerErrors.Add(1)
+			return observer.Turn{}, false
+		}
+	}
+	return turn, true
+}
+
+// embedObservation computes and stores the embedding for the observation
+// just persisted as id — the tail of process(), kept separate because it
+// is the one step whose failure is non-fatal.
+func (d *Daemon) embedObservation(ctx context.Context, id int64, obs memory.Observation) {
 	if d.EmbedModel == "" {
 		return
 	}
-	text := embed.ObservationText(turn.Observation.Title, turn.Observation.Subtitle,
-		turn.Observation.Narrative, turn.Observation.Facts)
-	vec, err := embed.NewClient(d.EmbedModel).Embed(text)
+	text := embed.ObservationText(obs.Title, obs.Subtitle, obs.Narrative, obs.Facts)
+	vec, err := embed.NewClient(d.EmbedModel).Embed(ctx, text)
 	if err != nil {
 		// Additive only — keyword search on the row just inserted still
 		// works without it. A missing/unreachable Ollama must not undo a
 		// successful observation.
-		d.Log.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
+		d.Log.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", id, err)
 		d.counters.embedErrors.Add(1)
 		return
 	}
-	if err := d.st.SaveEmbedding(ctx, res.ID, vec); err != nil {
-		d.Log.Warnf("saving embedding for observations.id=%d failed: %v", res.ID, err)
+	if err := d.st.SaveEmbedding(ctx, id, vec); err != nil {
+		d.Log.Warnf("saving embedding for observations.id=%d failed: %v", id, err)
 		d.counters.embedErrors.Add(1)
 	}
 }

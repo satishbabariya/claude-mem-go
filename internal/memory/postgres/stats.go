@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
@@ -22,7 +23,7 @@ func (s *Store) Stats(ctx context.Context) (memory.StoreStats, error) {
 		FROM observations`).Scan(&out.Observations, &out.Projects, &out.Sessions,
 		&oldest, &newest, &out.Embedded)
 	if err != nil {
-		return memory.StoreStats{}, err
+		return memory.StoreStats{}, fmt.Errorf("stats: aggregate counts: %w", err)
 	}
 	if oldest.Valid {
 		out.OldestEpochMs = oldest.Int64
@@ -33,19 +34,19 @@ func (s *Store) Stats(ctx context.Context) (memory.StoreStats, error) {
 
 	rows, err := s.db.QueryContext(ctx, `SELECT type, count(*) FROM observations GROUP BY type`)
 	if err != nil {
-		return memory.StoreStats{}, err
+		return memory.StoreStats{}, fmt.Errorf("stats: count by type: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var t string
 		var n int
 		if err := rows.Scan(&t, &n); err != nil {
-			return memory.StoreStats{}, err
+			return memory.StoreStats{}, fmt.Errorf("stats: scan count by type: %w", err)
 		}
 		out.ByType[t] = n
 	}
 	if err := rows.Err(); err != nil {
-		return memory.StoreStats{}, err
+		return memory.StoreStats{}, fmt.Errorf("stats: count by type: %w", err)
 	}
 	return out, nil
 }

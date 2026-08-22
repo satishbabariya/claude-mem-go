@@ -1,6 +1,9 @@
 package memory
 
-import "sort"
+import (
+	"sort"
+	"strconv"
+)
 
 // fileContextCandidateFactor is how many extra rows the file-context hook
 // should fetch per display slot before SelectFileContext narrows them.
@@ -65,7 +68,7 @@ func SelectFileContext(candidates []SearchResult, targetPath string, limit int) 
 		// such row collapse into one bucket.
 		key := r.SessionID
 		if key == "" {
-			key = "no-session-" + itoa(r.ID)
+			key = "no-session-" + strconv.FormatInt(r.ID, 10)
 		}
 		if seen[key] {
 			continue
@@ -109,23 +112,4 @@ func fileContextScore(r SearchResult, targetPath string) int {
 		score++
 	}
 	return score
-}
-
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var d []byte
-	for n > 0 {
-		d = append([]byte{byte('0' + n%10)}, d...)
-		n /= 10
-	}
-	if neg {
-		return "-" + string(d)
-	}
-	return string(d)
 }

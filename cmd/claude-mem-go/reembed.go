@@ -89,21 +89,21 @@ func cmdReembed(args []string) int {
 	yes := fs.Bool("yes", false, "actually re-embed — without this, reembed only reports how many rows WOULD be re-embedded")
 	fs.Parse(args)
 
+	ctx, cancel := cliContext()
+	defer cancel()
 	client := embed.NewClient(*embedModel)
 	// The current model's real dimension count, learned from the model
 	// itself rather than hardcoded — nothing in this codebase maintains a
 	// model-name-to-dimension lookup table, and a probe embed call is the
 	// only way to know for certain what THIS model actually produces
 	// right now.
-	probe, err := client.Embed("dimension probe")
+	probe, err := client.Embed(ctx, "dimension probe")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to reach Ollama with model %q: %v\n", *embedModel, err)
 		return 1
 	}
 	expectedDims := int64(len(probe))
 
-	ctx, cancel := cliContext()
-	defer cancel()
 	st, err := backend.Open(ctx, *dbPath, 0, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED to open store: %v\n", err)
@@ -131,12 +131,15 @@ pager:
 		}
 		for _, r := range batch {
 			candidates++
+			// Advanced before the dry-run continue, not after the embed:
+			// pagination is keyed on afterID, so a dry run that skipped
+			// this would re-fetch page 1 forever.
 			afterID = r.ID
 			if !*yes {
 				continue
 			}
 			text := embed.ObservationText(r.Observation.Title, r.Observation.Subtitle, r.Observation.Narrative, r.Observation.Facts)
-			vec, err := client.Embed(text)
+			vec, err := client.Embed(ctx, text)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "FAILED embedding observation id=%d: %v\n", r.ID, err)
 				failed++

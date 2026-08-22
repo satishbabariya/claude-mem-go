@@ -44,7 +44,9 @@ type Backend interface {
 	// BySessionID returns every observation recorded for one Claude Code
 	// session, oldest first — the read path for Stop-hook session
 	// summarization: what actually happened this session, in order.
-	BySessionID(ctx context.Context, sessionID string, limit int) ([]SearchResult, error)
+	// project has the same scoping meaning as Search's: non-empty
+	// restricts to that project, empty means every project.
+	BySessionID(ctx context.Context, project, sessionID string, limit int) ([]SearchResult, error)
 	// ObservationsForFile returns observations whose files_read or
 	// files_modified mentions filePath — the read path for PreToolUse's
 	// file-context hook.

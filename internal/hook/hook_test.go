@@ -161,3 +161,59 @@ func TestForwardPropagatesReadError(t *testing.T) {
 		t.Fatal("Forward with a failing reader: want an error, got nil")
 	}
 }
+
+// TestSendersRejectUnparseableSessionIDs: the plain-text protocol splits
+// on whitespace, so a session ID (or prompt hash) containing any would
+// produce a message the worker's parsers silently drop. Every sender must
+// refuse such input with an error before dialing — the listener here
+// records any connection so "nothing was sent" is asserted, not assumed.
+func TestSendersRejectUnparseableSessionIDs(t *testing.T) {
+	dir, err := os.MkdirTemp("", "hooksid")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	socketPath := filepath.Join(dir, "w.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer ln.Close()
+	connected := make(chan struct{}, 16)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			connected <- struct{}{}
+			c.Close()
+		}
+	}()
+
+	for _, bad := range []string{"", "has space", "tab\there", "new\nline"} {
+		if err := SetSessionPrivate(socketPath, bad, true); err == nil {
+			t.Errorf("SetSessionPrivate(%q): want error, got nil", bad)
+		}
+		if _, err := QueryPrivate(socketPath, bad); err == nil {
+			t.Errorf("QueryPrivate(%q): want error, got nil", bad)
+		}
+		if _, err := QueryInFlight(socketPath, bad); err == nil {
+			t.Errorf("QueryInFlight(%q): want error, got nil", bad)
+		}
+		if _, err := CheckDuplicatePrompt(socketPath, bad, "abc"); err == nil {
+			t.Errorf("CheckDuplicatePrompt(%q, ok): want error, got nil", bad)
+		}
+		if _, err := CheckDuplicatePrompt(socketPath, "ok", bad); err == nil {
+			t.Errorf("CheckDuplicatePrompt(ok, %q): want error, got nil", bad)
+		}
+	}
+	select {
+	case <-connected:
+		t.Fatal("a sender dialed the worker despite an unparseable session id — the message would have been silently dropped server-side")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !validSessionID("0f4c2a9e-1234-4bcd-9abc-0123456789ab") {
+		t.Fatal("a real UUID session id must be accepted")
+	}
+}

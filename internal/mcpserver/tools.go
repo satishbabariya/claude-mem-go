@@ -201,6 +201,21 @@ type toolCallResult struct {
 	IsError bool          `json:"isError,omitempty"`
 }
 
+// okResult wraps text as a successful single-text-block tool result, and
+// errResult formats a failed one (isError: true) — the only two shapes any
+// tool here produces. Tool-level failures are reported this way rather
+// than as JSON-RPC errors so the calling model sees the message as tool
+// output and can act on it, instead of the client surfacing a protocol
+// fault. errResult is printf-style: pass a literal that already contains
+// "%" through errResult("%s", text), never as the format.
+func okResult(text string) toolCallResult {
+	return toolCallResult{Content: []toolContent{{Type: "text", Text: text}}}
+}
+
+func errResult(format string, a ...any) toolCallResult {
+	return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: fmt.Sprintf(format, a...)}}}
+}
+
 // Server serves the MCP stdio protocol against one sqlite Store.
 type toolCallParams struct {
 	Name      string `json:"name"`
@@ -274,9 +289,9 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 		dateStartMs, dsErr := memory.ParseDateArg(params.Arguments.DateStart)
 		dateEndMs, deErr := memory.ParseDateArg(params.Arguments.DateEnd)
 		if dsErr != nil {
-			result = toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search_observations: invalid dateStart: " + dsErr.Error()}}}
+			result = errResult("search_observations: invalid dateStart: %v", dsErr)
 		} else if deErr != nil {
-			result = toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search_observations: invalid dateEnd: " + deErr.Error()}}}
+			result = errResult("search_observations: invalid dateEnd: %v", deErr)
 		} else {
 			result = s.runSearch(ctx, project, params.Arguments.Query, params.Arguments.ObsType, limit, offset,
 				dateStartMs, dateEndMs, params.Arguments.OrderBy)
@@ -300,7 +315,7 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 		}
 		result = s.runSessionStartContext(ctx, scopedProject, startLimit)
 	case "session_observations":
-		result = s.runSession(ctx, params.Arguments.SessionID, limit)
+		result = s.runSession(ctx, scopedProject, params.Arguments.SessionID, limit)
 	case "file_observations":
 		result = s.runFile(ctx, scopedProject, params.Arguments.FilePath, limit)
 	case "get_observations":
@@ -381,14 +396,13 @@ func validateAddObservationSize(title, subtitle, narrative string, facts, concep
 // previously reachable on demand.
 func (s *Server) runRecent(ctx context.Context, project string, limit int) toolCallResult {
 	if project == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+		return errResult("no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given")
 	}
 	results, err := s.st.RecentByProject(ctx, project, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "recent_observations failed: " + err.Error()}}}
+		return errResult("recent_observations failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+	return okResult(formatSearchResults(results))
 }
 
 // runSessionStartContext is session_start_context — matches real
@@ -404,46 +418,49 @@ func (s *Server) runRecent(ctx context.Context, project string, limit int) toolC
 // abbreviated [id]-prefixed list shape.
 func (s *Server) runSessionStartContext(ctx context.Context, project string, limit int) toolCallResult {
 	if project == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+		return errResult("no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given")
 	}
 	recent, err := s.st.RecentByProject(ctx, project, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_start_context failed: " + err.Error()}}}
+		return errResult("session_start_context failed: %v", err)
 	}
 	if len(recent) == 0 {
 		// The real hook would inject nothing at all in this case (an
 		// empty additionalContext) — this text exists only because an MCP
 		// tool call still needs a non-empty response to say so explicitly.
-		return toolCallResult{Content: []toolContent{{Type: "text", Text: "No prior observations for this project — SessionStart would inject nothing."}}}
+		return okResult("No prior observations for this project — SessionStart would inject nothing.")
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSessionStartContext(recent)}}}
+	return okResult(formatSessionStartContext(recent))
 }
 
-func (s *Server) runSession(ctx context.Context, sessionID string, limit int) toolCallResult {
+// runSession takes the same scopedProject as runRecent/runFile: the
+// server's own project unless the caller overrode it with "project". An
+// empty project (no cwd, no argument) reads the session unscoped rather
+// than erroring the way runFile does — a session id is already a globally
+// unique key, so the scope here is a guard, not a requirement.
+func (s *Server) runSession(ctx context.Context, project, sessionID string, limit int) toolCallResult {
 	if sessionID == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_observations requires a \"session_id\" argument"}}}
+		return errResult("session_observations requires a \"session_id\" argument")
 	}
-	results, err := s.st.BySessionID(ctx, sessionID, limit)
+	results, err := s.st.BySessionID(ctx, project, sessionID, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "session_observations failed: " + err.Error()}}}
+		return errResult("session_observations failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+	return okResult(formatSearchResults(results))
 }
 
 func (s *Server) runFile(ctx context.Context, project, filePath string, limit int) toolCallResult {
 	if project == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+		return errResult("no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given")
 	}
 	if filePath == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations requires a \"file_path\" argument"}}}
+		return errResult("file_observations requires a \"file_path\" argument")
 	}
 	results, err := s.st.ObservationsForFile(ctx, project, filePath, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "file_observations failed: " + err.Error()}}}
+		return errResult("file_observations failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+	return okResult(formatSearchResults(results))
 }
 
 // runGetObservations is the detail-lookup companion to every list-shaped
@@ -461,11 +478,11 @@ func (s *Server) runFile(ctx context.Context, project, filePath string, limit in
 // Search/SemanticSearch were fixed for earlier.
 func (s *Server) runGetObservations(ctx context.Context, project string, ids []int64) toolCallResult {
 	if len(ids) == 0 {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "get_observations requires a non-empty \"ids\" argument"}}}
+		return errResult("get_observations requires a non-empty \"ids\" argument")
 	}
 	results, err := s.st.ByIDs(ctx, ids)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "get_observations failed: " + err.Error()}}}
+		return errResult("get_observations failed: %v", err)
 	}
 	if project != "" {
 		scoped := results[:0]
@@ -476,7 +493,7 @@ func (s *Server) runGetObservations(ctx context.Context, project string, ids []i
 		}
 		results = scoped
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatFullObservations(results)}}}
+	return okResult(formatFullObservations(results))
 }
 
 // runTimeline is the chronological-context companion to search: real
@@ -496,11 +513,10 @@ func (s *Server) runGetObservations(ctx context.Context, project string, ids []i
 // project-safety checks.
 func (s *Server) runTimeline(ctx context.Context, project string, anchor int64, query string, depthBefore, depthAfter int) toolCallResult {
 	if project == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+		return errResult("no project to look up — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given")
 	}
 	if anchor == 0 && query == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline requires either an \"anchor\" (observation id) or a \"query\" to find one"}}}
+		return errResult("timeline requires either an \"anchor\" (observation id) or a \"query\" to find one")
 	}
 	if anchor != 0 && query != "" {
 		// Matches real claude-mem's own SearchManager.timeline explicit
@@ -508,7 +524,7 @@ func (s *Server) runTimeline(ctx context.Context, project string, anchor int64, 
 		// ignore query with no error at all, which could hide a genuine
 		// caller mistake (e.g. a stale query left over from copy-pasting
 		// a different call) rather than surfacing it.
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: cannot provide both \"anchor\" and \"query\" — use one or the other"}}}
+		return errResult("timeline: cannot provide both \"anchor\" and \"query\" — use one or the other")
 	}
 	// 10, not 3: real claude-mem's own SearchManager.timeline defaults
 	// depth_before/depth_after to 10 when omitted (its tool schema's own
@@ -525,19 +541,19 @@ func (s *Server) runTimeline(ctx context.Context, project string, anchor int64, 
 	if anchor == 0 {
 		matches, err := s.st.Search(ctx, project, query, "", 1, 0, 0, 0, "")
 		if err != nil {
-			return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline: resolving anchor via query failed: " + err.Error()}}}
+			return errResult("timeline: resolving anchor via query failed: %v", err)
 		}
 		if len(matches) == 0 {
-			return toolCallResult{Content: []toolContent{{Type: "text", Text: "No observations matched that query, so there's no anchor to build a timeline around."}}}
+			return okResult("No observations matched that query, so there's no anchor to build a timeline around.")
 		}
 		anchor = matches[0].ID
 	}
 
 	results, err := s.st.Timeline(ctx, project, anchor, depthBefore, depthAfter)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "timeline failed: " + err.Error()}}}
+		return errResult("timeline failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatTimeline(results, anchor)}}}
+	return okResult(formatTimeline(results, anchor))
 }
 
 // Size bounds for add_observation's free-text arguments — unlike every

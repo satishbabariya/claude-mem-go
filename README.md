@@ -68,10 +68,31 @@ started a fresh one on its very first log line.
 ```
 transcript / hook payload  →  observer (claude-agent-sdk-go Session)  →  classify
                                                                             │
-                                                       store.Backend (SQLite or Postgres)
+                                                      memory.Backend (SQLite or Postgres)
 ```
 
-`store.Backend` is one interface with two implementations, selected by what
+Package layout (everything under `internal/` is private to this module;
+`cmd/claude-mem-go` is the one binary):
+
+```
+cmd/claude-mem-go/        one thin file per subcommand; dispatch in main.go
+internal/
+  memory/                 storage-neutral domain: Backend interface, Observation,
+                          SearchResult, ExportRow, ContentHash, path/project helpers
+  memory/sqlite/          the SQLite implementation (zero-dependency default)
+  memory/postgres/        the Postgres + pgvector implementation
+  memory/backend/         DSN → implementation dispatcher (backend.Open)
+  migrate/  pool/         shared infrastructure
+  worker/                 the daemon: socket server, session cache, spawn/stop control
+  observer/ classify/     the LLM observer session and its error classification
+  hook/ transcript/       the hook-side client protocol and transcript parsing
+  privacy/ excludeproject/ contextfmt/ logging/ plugincheck/ cli/
+  mcpserver/              the MCP server (transport, tool table, handlers, formatters)
+bench/recall/             ANN recall benchmark harness (not part of the binary)
+scripts/  deploy/  hooks/  skills/  .claude-plugin/   plugin surface and ops files
+```
+
+`memory.Backend` is one interface with two implementations, selected by what
 the `-db` flag looks like:
 
 - **SQLite** (default, zero dependencies) — a file path. FTS5 keyword
@@ -276,7 +297,7 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
 - **worker** — a persistent daemon, meant to be started once (see `start`)
   and left running. Listens on a Unix socket, processes PostToolUse
   payloads through a bounded `pool` of observer sessions. Opens its
-  `store.Backend` exactly once for the daemon's whole lifetime (fixed from
+  `memory.Backend` exactly once for the daemon's whole lifetime (fixed from
   opening and closing a fresh one on every single event) — real connection
   churn otherwise, since a daemon meant to run for days would pay a fresh
   connection (a real TCP handshake against Postgres) per tool call
@@ -383,7 +404,7 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
   tool calls back to back: even the corrected "two consecutive matching
   non-zero reads = stable" rule was still wrong, because observations
   for one session are processed *sequentially* — one worker mutex
-  serializes turns per session (see `worker/sessions.go`) — so the count
+  serializes turns per session (see `internal/worker/sessions.go`) — so the count
   can sit at 1 for several real seconds while the second tool call's
   observation is still mid-flight, and two quick matching reads during
   that plateau falsely "confirm" stability. Reproduced live down to the
@@ -499,7 +520,7 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
   found it fine; fixed and locked in with a real Ollama-backed test (skips
   cleanly when Ollama isn't reachable, the same pattern `postgres_test.go`
   uses for a missing container). Wire format confirmed against a real
-  `claude` session, not assumed from the spec (see `mcpserver/`'s doc
+  `claude` session, not assumed from the spec (see `internal/mcpserver/`'s doc
   comment); every tool's end-to-end call verified against the real CLI,
   not just unit-tested — including a live plugin install where a manually
   added observation was found afterward through `semantic_search_observations`
@@ -509,7 +530,7 @@ it and every path (hooks, MCP, `worker`, `reembed`, `doctor`) follows.
   ever recorded on the machine, so an unscoped search is a real
   cross-project leak, not just a ranking nuisance; found via a Postgres
   test flake (accumulated rows from unrelated projects crowded a fixed
-  `LIMIT`), fixed at the `store.Backend` interface level so both backends
+  `LIMIT`), fixed at the `memory.Backend` interface level so both backends
   and the CLI got it too. Pass `all_projects: true` to a search tool call
   to search everything on purpose, or `project: "..."` to `recent_observations`/
   `file_observations` to look at a different single project.
@@ -2203,7 +2224,7 @@ passed this."
 The SQLite backend's FTS5 table has always covered five columns —
 `title, subtitle, narrative, facts, concepts`. The Postgres backend's
 generated `search_vector` covered only three, leaving `facts` and
-`concepts` unreachable by keyword search entirely. Two `store.Backend`
+`concepts` unreachable by keyword search entirely. Two `memory.Backend`
 implementations returning different results for the same query against
 the same data, which is exactly the contract that interface exists to
 guarantee. Real claude-mem covers them on both its engines (its SQLite
@@ -2264,7 +2285,7 @@ unquoted so FTS5 treats them as real operators — a documented, intentional
 feature of the SQLite backend. The Postgres backend used
 `plainto_tsquery`, which ANDs every token and treats `OR`/`NOT` as
 ordinary words (English stopwords, so they vanish entirely). Same
-`store.Backend` interface, same data, different answers.
+`memory.Backend` interface, same data, different answers.
 
 Measured against three identical rows seeded into both backends:
 
@@ -2455,7 +2476,7 @@ migration path, `import` aborts on the first bad row and leaves a
 logged and counted, so ingestion proceeds forever with zero embeddings —
 semantic search dead, nothing visible outside a log line.
 
-And `postgres/reembed.go` asserted that "a genuine dimension mismatch
+And `internal/memory/postgres/reembed.go` asserted that "a genuine dimension mismatch
 can't actually occur here." That was measured false: calling
 `ObservationsNeedingEmbedding` with a mismatched `expectedDims` returns
 *every* embedded row as needing work, and `SaveEmbedding` then rejects each
@@ -2613,12 +2634,12 @@ go test ./... -race
 docker compose up -d
 docker compose exec postgres createdb -U claudemem claudemem_test
 CLAUDE_MEM_GO_TEST_POSTGRES_DSN=postgres://claudemem:claudemem@localhost:55432/claudemem_test?sslmode=disable \
-  go test ./postgres/... -v
+  go test ./internal/memory/postgres/... -v
 ```
 
 **Point that variable at a throwaway database, never one you actually
 use.** These tests write real rows, and the variable is mandatory
-precisely because it used to be optional. `postgres/postgres_test.go`
+precisely because it used to be optional. `internal/memory/postgres/postgres_test.go`
 previously fell back to `postgres://…@localhost:55432/claudemem` — the
 same DSN this README documents for a real store, a few lines up at the
 Postgres setup section. Nobody had to opt in to that; running
@@ -2627,7 +2648,7 @@ Postgres setup section. Nobody had to opt in to that; running
 The damage was measured, not hypothesized. In the development store here:
 **7,275 observations total, of which 7,217 (99.2%) were test debris**,
 spread across 3,968 synthetic `test-*` projects. Only 58 rows were real,
-and most of those were e2e artifacts too. A `backend/backend_test.go`
+and most of those were e2e artifacts too. A `internal/memory/backend/backend_test.go`
 dispatch test had the identical defect on a smaller scale and left 2 rows
 under project `backend-dispatch-test`; it now runs against a closed port
 instead, since its assertion never needed a live database in the first
@@ -2656,7 +2677,7 @@ against at the time, since the hosted runners weren't reachable at all.
 The billing lock has since been resolved; hosted-runner CI is the current
 source of truth again.
 
-`postgres/`'s tests skip cleanly (not fail) when nothing is listening at
+`internal/memory/postgres/`'s tests skip cleanly (not fail) when nothing is listening at
 `localhost:55432` — start `docker compose up -d` first if you want them to
 actually run. They're real integration tests against a live container, not
 mocks: dedup, hyphenated-query full-text search, and vector-similarity

@@ -35,7 +35,7 @@ func (panickingBackend) SemanticSearch(context.Context, string, []float32, int) 
 func (panickingBackend) RecentByProject(context.Context, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: RecentByProject")
 }
-func (panickingBackend) BySessionID(context.Context, string, int) ([]memory.SearchResult, error) {
+func (panickingBackend) BySessionID(context.Context, string, string, int) ([]memory.SearchResult, error) {
 	panic("panickingBackend: BySessionID")
 }
 func (panickingBackend) ObservationsForFile(context.Context, string, string, int) ([]memory.SearchResult, error) {

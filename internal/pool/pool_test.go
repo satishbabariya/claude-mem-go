@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -123,5 +124,37 @@ func TestInFlightAndCapacityReflectRealState(t *testing.T) {
 	p.Release()
 	if got := p.InFlight(); got != 0 {
 		t.Fatalf("InFlight() after both Released = %d, want 0", got)
+	}
+}
+
+func TestAcquireContextReturnsOnCancel(t *testing.T) {
+	p := New(1)
+	p.Acquire()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if p.AcquireContext(ctx, 5*time.Second) {
+		t.Fatal("AcquireContext got a slot from a full pool")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("AcquireContext waited out the timeout instead of returning on ctx cancel")
+	}
+	if p.InFlight() != 1 {
+		t.Fatalf("InFlight = %d after a failed acquire, want 1", p.InFlight())
+	}
+}
+
+func TestAcquireContextTimesOutAndSucceeds(t *testing.T) {
+	p := New(1)
+	p.Acquire()
+	if p.AcquireContext(context.Background(), 10*time.Millisecond) {
+		t.Fatal("AcquireContext got a slot from a full pool before the timeout")
+	}
+	p.Release()
+	if !p.AcquireContext(context.Background(), 10*time.Millisecond) {
+		t.Fatal("AcquireContext failed on a pool with a free slot")
 	}
 }

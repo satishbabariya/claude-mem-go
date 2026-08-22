@@ -2,7 +2,9 @@ package worker
 
 import (
 	"io"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/satishbabariya/claude-mem-go/internal/logging"
@@ -107,4 +109,41 @@ func TestDaemonStatsReflectsCountersWithoutARunningSessionCache(t *testing.T) {
 func TestRecordStatsIsANoopWithoutAStatsPath(t *testing.T) {
 	d := &Daemon{Log: nopLogger()} // StatsPath left empty on purpose
 	d.recordStats()                // must not panic or attempt to write anywhere
+}
+
+// TestWriteStatsFileConcurrentWritersLeaveValidJSON is the regression
+// test for the shared path+".tmp" race: process() goroutines and
+// handleConn's recall-report path both call recordStats, so concurrent
+// writers must never clobber each other's temp file or leave a torn
+// document behind. Run under -race.
+func TestWriteStatsFileConcurrentWritersLeaveValidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker-stats.json")
+	const n = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := writeStatsFile(path, Stats{Processed: int64(i)}); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("writeStatsFile: %v", err)
+	}
+	if _, err := ReadStatsFile(path); err != nil {
+		t.Fatalf("final stats file is not valid JSON: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("directory holds %d entries, want only the stats file (no leftover temp files)", len(entries))
+	}
 }

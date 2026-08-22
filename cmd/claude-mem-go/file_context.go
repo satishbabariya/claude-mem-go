@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
@@ -97,42 +99,65 @@ func cmdFileContext(args []string) int {
 	// never matched.
 	targetPath := memory.NormalizeFilePath(in.Cwd, toolInput.FilePath)
 
-	results, err := st.ObservationsForFile(ctx, project, targetPath, memory.FileContextCandidateLimit(*limit))
+	results, ok := fetchFileObservations(ctx, l, st, project, targetPath, *limit, *socketPath)
+	if !ok {
+		return 0
+	}
+	results, ok = filterFileObservations(l, in.Cwd, targetPath, results, *limit)
+	if !ok {
+		return 0
+	}
+	return emitFileContext(l, targetPath, project, results)
+}
+
+// fetchFileObservations is the read step: the candidate rows for
+// targetPath, with the recall outcome reported. Returns false when there
+// is nothing to inject (error or no rows) — "{}" has already been printed.
+func fetchFileObservations(ctx context.Context, l *logging.Logger, st memory.Backend, project, targetPath string, limit int, socketPath string) ([]memory.SearchResult, bool) {
+	results, err := st.ObservationsForFile(ctx, project, targetPath, memory.FileContextCandidateLimit(limit))
 	if err != nil {
 		l.Errorf("FAILED ObservationsForFile(%s): %v", targetPath, err)
 		fmt.Println("{}")
-		return 0
+		return nil, false
 	}
 	// Counted separately from the prompt and session paths, and never
 	// alarming on its own: most files genuinely have no prior
 	// observations, so this path's empty rate is high on a perfectly
 	// healthy install.
-	if err := hook.ReportRecall(*socketPath, hook.RecallFile, len(results)); err != nil {
+	if err := hook.ReportRecall(socketPath, hook.RecallFile, len(results)); err != nil {
 		l.Debugf("skip: could not report recall outcome to the worker: %v", err)
 	}
 	if len(results) == 0 {
 		l.Printf("no prior observations for file=%s project=%s", targetPath, project)
 		fmt.Println("{}")
-		return 0
+		return nil, false
 	}
+	return results, true
+}
 
-	// Don't inject memory that predates the file's current contents.
-	//
-	// This hook fires immediately before Claude reads a file, and says
-	// "here's what we already know about it." If the file has been
-	// rewritten since the newest of those observations was recorded, then
-	// everything being injected describes a version that no longer
-	// exists — and it is being asserted as current, right at the moment
-	// Claude is about to form an impression of the file. Stale memory
-	// presented confidently is worse than no memory: Claude is about to
-	// read the real contents anyway, so suppressing this costs nothing
-	// and injecting it can actively mislead.
-	//
-	// Real claude-mem's own file-context handler makes exactly this
-	// comparison (buildFileContextTimeline: "File modified since last
-	// observation, skipping context injection"). This port had no way to
-	// even ask — SearchResult carried no timestamp until now.
-	if mtimeMs, ok := fileMtimeMs(in.Cwd, targetPath); ok {
+// filterFileObservations is the selection step: drop everything when the
+// file has changed since the newest observation, otherwise narrow the
+// candidates to the limit. Returns false when nothing should be injected
+// — "{}" has already been printed.
+//
+// Don't inject memory that predates the file's current contents.
+//
+// This hook fires immediately before Claude reads a file, and says
+// "here's what we already know about it." If the file has been
+// rewritten since the newest of those observations was recorded, then
+// everything being injected describes a version that no longer
+// exists — and it is being asserted as current, right at the moment
+// Claude is about to form an impression of the file. Stale memory
+// presented confidently is worse than no memory: Claude is about to
+// read the real contents anyway, so suppressing this costs nothing
+// and injecting it can actively mislead.
+//
+// Real claude-mem's own file-context handler makes exactly this
+// comparison (buildFileContextTimeline: "File modified since last
+// observation, skipping context injection"). This port had no way to
+// even ask — SearchResult carried no timestamp until now.
+func filterFileObservations(l *logging.Logger, cwd, targetPath string, results []memory.SearchResult, limit int) ([]memory.SearchResult, bool) {
+	if mtimeMs, ok := fileMtimeMs(cwd, targetPath); ok {
 		newest := int64(0)
 		for _, r := range results {
 			if r.CreatedAtEpoch > newest {
@@ -144,17 +169,22 @@ func cmdFileContext(args []string) int {
 				"what we remember describes an older version of this file",
 				targetPath, mtimeMs, len(results), newest)
 			fmt.Println("{}")
-			return 0
+			return nil, false
 		}
 	}
 
 	candidates := len(results)
-	results = memory.SelectFileContext(results, targetPath, *limit)
+	results = memory.SelectFileContext(results, targetPath, limit)
 	if candidates > len(results) {
 		l.Printf("narrowed %d candidate observation(s) to %d for file=%s (one per session, most specific first)",
 			candidates, len(results), targetPath)
 	}
+	return results, true
+}
 
+// emitFileContext is the output step: format the selected rows and print
+// the PreToolUse hook JSON.
+func emitFileContext(l *logging.Logger, targetPath, project string, results []memory.SearchResult) int {
 	injected := formatFileContext(targetPath, results)
 	out := hookOutput{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",

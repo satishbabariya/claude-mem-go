@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -152,7 +153,7 @@ func main() {
 	// milliseconds actually being compared.
 	vecs := make([]pgvector.Vector, len(queries))
 	for i, q := range queries {
-		v, err := cl.Embed(q)
+		v, err := cl.Embed(context.Background(), q)
 		if err != nil {
 			panic(err)
 		}

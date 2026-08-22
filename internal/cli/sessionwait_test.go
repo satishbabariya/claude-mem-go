@@ -33,7 +33,7 @@ type sequencedBackend struct {
 	calls  int
 }
 
-func (s *sequencedBackend) BySessionID(ctx context.Context, sessionID string, limit int) ([]memory.SearchResult, error) {
+func (s *sequencedBackend) BySessionID(ctx context.Context, project, sessionID string, limit int) ([]memory.SearchResult, error) {
 	i := s.calls
 	if i >= len(s.counts) {
 		i = len(s.counts) - 1
@@ -60,7 +60,7 @@ func TestWaitForSessionObservationsStopsOnceCountStabilizes(t *testing.T) {
 
 	be := &sequencedBackend{counts: []int{0, 1, 2, 2, 2}}
 	start := time.Now()
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, nil)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestWaitForSessionObservationsGivesUpAfterMaxAttempts(t *testing.T) {
 		counts[i] = i // never stabilizes
 	}
 	be := &sequencedBackend{counts: counts}
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, nil)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestWaitForSessionObservationsWaitsFullBudgetWhenGenuinelyEmpty(t *testing.
 	setFastPollIntervalForTest(t)
 
 	be := &sequencedBackend{counts: []int{0, 0, 0, 0, 0}}
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, nil)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestWaitForSessionObservationsDoesNotStabilizeFalselyAtZero(t *testing.T) {
 	setFastPollIntervalForTest(t)
 
 	be := &sequencedBackend{counts: []int{0, 0, 1, 1, 1}}
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, nil)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestWaitForSessionObservationsWaitsPastAPlateauForASecondToolCall(t *testin
 
 	counts := []int{0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
 	be := &sequencedBackend{counts: counts}
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, nil)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, nil)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestWaitForSessionObservationsFallsBackWhenWorkerUnreachable(t *testing.T) 
 
 	be := &sequencedBackend{counts: []int{0, 1, 2, 2, 2}}
 	unreachable := func(sessionID string) (int, bool) { return 0, false }
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, unreachable)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, unreachable)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestWaitForSessionObservationsInFlightFastPathShortensWait(t *testing.T) {
 		return 0, true // worker confirms nothing left in flight
 	}
 
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, inFlight)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, inFlight)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestWaitForSessionObservationsExtendsBudgetPastOldCeilingWhenWorkerConfirms
 		return 0, true
 	}
 
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, inFlight)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, inFlight)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestWaitForSessionObservationsGenuinelyEmptySessionStillBoundedEvenWhenWork
 	be := &sequencedBackend{counts: []int{0}} // sequencedBackend repeats the last entry forever
 	alwaysIdle := func(sessionID string) (int, bool) { return 0, true }
 
-	got, err := WaitForSessionObservations(context.Background(), be, "s1", 50, alwaysIdle)
+	got, err := WaitForSessionObservations(context.Background(), be, "proj", "s1", 50, alwaysIdle)
 	if err != nil {
 		t.Fatalf("WaitForSessionObservations: %v", err)
 	}

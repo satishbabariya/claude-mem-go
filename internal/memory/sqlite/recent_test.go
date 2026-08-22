@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -122,7 +123,7 @@ func TestBySessionIDOrdersOldestFirstAndScopesToSession(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	results, err := st.BySessionID(context.Background(), "session-a", 10)
+	results, err := st.BySessionID(context.Background(), "", "session-a", 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}
@@ -132,6 +133,39 @@ func TestBySessionIDOrdersOldestFirstAndScopesToSession(t *testing.T) {
 	if results[0].ID != first.ID || results[1].ID != second.ID {
 		t.Fatalf("BySessionID order = [%d, %d], want oldest first [%d, %d]",
 			results[0].ID, results[1].ID, first.ID, second.ID)
+	}
+}
+
+// TestBySessionIDScopesToProject: a project scope excludes the session's
+// rows recorded under another project; an empty project includes them.
+func TestBySessionIDScopesToProject(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	for i, project := range []string{"proj-a", "proj-b"} {
+		hash := memory.ContentHash("session-x", "Bash", fmt.Sprint(i), project)
+		if _, err := st.Insert(context.Background(), "session-x", project, "Bash", hash, memory.Observation{Type: "discovery", Title: project}, 0); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+	}
+
+	scoped, err := st.BySessionID(context.Background(), "proj-a", "session-x", 10)
+	if err != nil {
+		t.Fatalf("BySessionID(proj-a): %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].Project != "proj-a" {
+		t.Fatalf("BySessionID(proj-a) = %+v, want exactly the one proj-a row", scoped)
+	}
+	all, err := st.BySessionID(context.Background(), "", "session-x", 10)
+	if err != nil {
+		t.Fatalf("BySessionID(\"\"): %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("BySessionID(\"\") returned %d rows, want 2 (every project)", len(all))
 	}
 }
 

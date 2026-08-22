@@ -75,7 +75,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		vec, err := cl.Embed(embed.ObservationText(title, "", text, nil))
+		vec, err := cl.Embed(ctx, embed.ObservationText(title, "", text, nil))
 		if err != nil {
 			panic(err)
 		}

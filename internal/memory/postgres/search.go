@@ -215,7 +215,7 @@ func (s *Store) Search(ctx context.Context, project, query, obsType string, limi
 	offsetPlaceholder := fmt.Sprintf("$%d", len(args))
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE `+matchPredicate+` `+scope+`
 		`+searchOrderClause(orderBy, enumerate)+`
@@ -224,26 +224,7 @@ func (s *Store) Search(ctx context.Context, project, query, obsType string, limi
 	if err != nil {
 		return nil, fmt.Errorf("full text search %q: %w", query, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan search row: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // RecentByProject returns a project's most recent observations, newest
@@ -261,63 +242,32 @@ func (s *Store) RecentByProject(ctx context.Context, project string, limit int) 
 	if err != nil {
 		return nil, fmt.Errorf("recent observations for project %q: %w", project, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified, nextSteps []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan recent observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		r.Observation.NextSteps = jsonDecode(nextSteps)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // BySessionID returns every observation recorded for one session, oldest
-// first — the read path for Stop-hook session summarization.
-func (s *Store) BySessionID(ctx context.Context, sessionID string, limit int) ([]memory.SearchResult, error) {
+// first — the read path for Stop-hook session summarization. project
+// scopes it exactly as the SQLite backend's does (empty = every project).
+func (s *Store) BySessionID(ctx context.Context, project, sessionID string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
+	args := []any{sessionID}
+	scope := ""
+	if project != "" {
+		args = append(args, project)
+		scope = fmt.Sprintf(" AND project = $%d", len(args))
+	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
-		WHERE session_id = $1
+		WHERE session_id = $1`+scope+`
 		ORDER BY created_at_epoch ASC, id ASC
-		LIMIT $2`, sessionID, limit)
+		LIMIT $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, fmt.Errorf("observations for session %q: %w", sessionID, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan session observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // ByIDs fetches specific observations by ID — the one lookup shape none of
@@ -343,32 +293,13 @@ func (s *Store) ByIDs(ctx context.Context, ids []int64) ([]memory.SearchResult, 
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("fetch observations by id: %w", err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan observation by id: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // ObservationsForFile returns observations whose files_read or
@@ -381,7 +312,7 @@ func (s *Store) ObservationsForFile(ctx context.Context, project, filePath strin
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE project = $1
 		  AND (files_read ? $2 OR files_modified ? $2)
@@ -390,26 +321,7 @@ func (s *Store) ObservationsForFile(ctx context.Context, project, filePath strin
 	if err != nil {
 		return nil, fmt.Errorf("observations for file %q: %w", filePath, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan file-context observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // Timeline mirrors sqlite.Store's Timeline exactly, including the same
@@ -452,7 +364,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 
 	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id < $1 AND project = $2
 		ORDER BY id DESC
@@ -460,7 +372,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	if err != nil {
 		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
 	}
-	before, err := scanTimelineRows(beforeRows)
+	before, err := scanSearchResults(beforeRows)
 	if err != nil {
 		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
 	}
@@ -470,7 +382,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 
 	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id > $1 AND project = $2
 		ORDER BY id ASC
@@ -478,7 +390,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	if err != nil {
 		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
 	}
-	after, err := scanTimelineRows(afterRows)
+	after, err := scanSearchResults(afterRows)
 	if err != nil {
 		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
 	}
@@ -490,26 +402,33 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	return out, nil
 }
 
-// scanTimelineRows is Timeline's own scan helper — see the SQLite
-// backend's identically-named function for why it isn't shared more
-// broadly across this file's other queries.
-func scanTimelineRows(rows *sql.Rows) ([]memory.SearchResult, error) {
+// scanSearchResults drains rows into SearchResults and closes them — the
+// shared scan loop for every read path selecting the standard column list
+// (see the SQLite backend's identically-named helper for which queries
+// deliberately keep their own loop).
+//
+// Callers MUST select exactly these columns, in this order:
+//
+//	id, session_id, project, tool_name, type, title, subtitle,
+//	facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
+func scanSearchResults(rows *sql.Rows) ([]memory.SearchResult, error) {
 	defer rows.Close()
 	var out []memory.SearchResult
 	for rows.Next() {
 		var r memory.SearchResult
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
+		var facts, concepts, filesRead, filesModified, nextSteps []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan timeline row: %w", err)
+			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
+			return nil, fmt.Errorf("scan observation row: %w", err)
 		}
 		nf.apply(&r.Observation)
 		r.Observation.Facts = jsonDecode(facts)
 		r.Observation.Concepts = jsonDecode(concepts)
 		r.Observation.FilesRead = jsonDecode(filesRead)
 		r.Observation.FilesModified = jsonDecode(filesModified)
+		r.Observation.NextSteps = jsonDecode(nextSteps)
 		out = append(out, r)
 	}
 	return out, rows.Err()

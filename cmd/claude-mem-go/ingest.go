@@ -92,7 +92,7 @@ func cmdIngest(args []string) int {
 		}
 		text := embed.ObservationText(turn.Observation.Title, turn.Observation.Subtitle,
 			turn.Observation.Narrative, turn.Observation.Facts)
-		vec, err := embed.NewClient(*embedModel).Embed(text)
+		vec, err := embed.NewClient(*embedModel).Embed(ctx, text)
 		if err != nil {
 			// Embedding is additive — keyword search (already persisted above)
 			// still works without it. A missing/unreachable Ollama must not

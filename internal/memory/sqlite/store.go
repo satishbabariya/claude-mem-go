@@ -87,6 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at_e
 //     observation_vectors row behind, orphaned, forever.
 const sqliteDSNParams = "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
 
+// sqliteMaxOpenConns caps each Store's pool — see Open for why a small
+// number is right for a single-writer file.
+const sqliteMaxOpenConns = 4
+
 // Open opens (creating if needed) the sqlite file at path and ensures the
 // schema exists.
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -98,6 +102,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
+	// Bound the pool the way postgres.Open does. database/sql's default is
+	// unlimited, and every hook process plus the worker daemon opens its
+	// own *sql.DB against this one file: WAL lets readers run concurrently,
+	// but there is only ever one writer, and every extra connection past a
+	// handful just queues on _busy_timeout holding an fd and a page cache.
+	db.SetMaxOpenConns(sqliteMaxOpenConns)
+	db.SetMaxIdleConns(sqliteMaxOpenConns)
 	if err := runMigrations(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
@@ -158,7 +169,7 @@ func (s *Store) insertRow(ctx context.Context, sessionID, project, toolName, con
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return memory.InsertResult{}, err
+		return memory.InsertResult{}, fmt.Errorf("insert observation, reading last insert id: %w", err)
 	}
 	return memory.InsertResult{ID: id, Inserted: true}, nil
 }

@@ -267,7 +267,7 @@ func (s *Store) Search(ctx context.Context, project, query, obsType string, limi
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
-		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.next_steps, o.created_at_epoch
 		FROM `+from+`
 		WHERE `+where+` `+scope+`
 		`+searchOrderClause(orderBy, enumerate)+`
@@ -275,26 +275,7 @@ func (s *Store) Search(ctx context.Context, project, query, obsType string, limi
 	if err != nil {
 		return nil, fmt.Errorf("search %q: %w", query, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan search result: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // RecentByProject returns a project's most recent observations, newest
@@ -313,64 +294,36 @@ func (s *Store) RecentByProject(ctx context.Context, project string, limit int) 
 	if err != nil {
 		return nil, fmt.Errorf("recent observations for project %q: %w", project, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified, nextSteps string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan recent observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		r.Observation.NextSteps = parseJSONArray(nextSteps)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // BySessionID returns every observation recorded for one session, oldest
 // first — the read path for Stop-hook session summarization: the narrative
-// arc of what happened, not a ranked search.
-func (s *Store) BySessionID(ctx context.Context, sessionID string, limit int) ([]memory.SearchResult, error) {
+// arc of what happened, not a ranked search. project scopes it the same
+// way Search's does: non-empty restricts to that project, empty means
+// every project — session ids are globally unique, but the MCP tool takes
+// a caller-supplied id, so the scope is what keeps one project's tool
+// from reading another project's session.
+func (s *Store) BySessionID(ctx context.Context, project, sessionID string, limit int) ([]memory.SearchResult, error) {
 	limit = clampNegativeLimit(limit)
+	args := []any{sessionID}
+	scope := ""
+	if project != "" {
+		scope = " AND project = ?"
+		args = append(args, project)
+	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
-		WHERE session_id = ?
+		WHERE session_id = ?`+scope+`
 		ORDER BY created_at_epoch ASC, id ASC
-		LIMIT ?`, sessionID, limit)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("observations for session %q: %w", sessionID, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan session observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // ObservationsForFile returns observations whose files_read or
@@ -392,7 +345,7 @@ func (s *Store) ObservationsForFile(ctx context.Context, project, filePath strin
 	// keeping it here would re-introduce a sort this shape does not need.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
-		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.next_steps, o.created_at_epoch
 		FROM observation_files f
 		JOIN observations o ON o.id = f.observation_id
 		WHERE f.path = ? AND o.project = ?
@@ -401,26 +354,7 @@ func (s *Store) ObservationsForFile(ctx context.Context, project, filePath strin
 	if err != nil {
 		return nil, fmt.Errorf("observations for file %q: %w", filePath, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan file-context observation: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }
 
 // Timeline returns up to depthBefore observations immediately before
@@ -476,7 +410,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 
 	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id < ? AND project = ?
 		ORDER BY id DESC
@@ -484,7 +418,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	if err != nil {
 		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
 	}
-	before, err := scanTimelineRows(beforeRows)
+	before, err := scanSearchResults(beforeRows)
 	if err != nil {
 		return nil, fmt.Errorf("timeline before id %d: %w", anchorID, err)
 	}
@@ -496,7 +430,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 
 	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id > ? AND project = ?
 		ORDER BY id ASC
@@ -504,7 +438,7 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	if err != nil {
 		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
 	}
-	after, err := scanTimelineRows(afterRows)
+	after, err := scanSearchResults(afterRows)
 	if err != nil {
 		return nil, fmt.Errorf("timeline after id %d: %w", anchorID, err)
 	}
@@ -516,29 +450,35 @@ func (s *Store) Timeline(ctx context.Context, project string, anchorID int64, de
 	return out, nil
 }
 
-// scanTimelineRows is Timeline's own scan helper, not shared with the rest
-// of this file's queries (each already has its own inline scan loop,
-// matching this file's existing convention) — factored out only because
-// Timeline's before/after queries are otherwise identical to each other
-// and it would otherwise be the third copy of the exact same block within
-// one function.
-func scanTimelineRows(rows *sql.Rows) ([]memory.SearchResult, error) {
+// scanSearchResults drains rows into SearchResults and closes them. It is
+// the one scan loop shared by every read path that selects the standard
+// column list — Search, RecentByProject, BySessionID, ObservationsForFile,
+// ByIDs, Timeline and ObservationsNeedingEmbedding. A query that selects anything else
+// (ExportAll adds cost/hash/embedding) keeps its own loop rather than
+// bending this one.
+//
+// Callers MUST select exactly these columns, in this order:
+//
+//	id, session_id, project, tool_name, type, title, subtitle,
+//	facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
+func scanSearchResults(rows *sql.Rows) ([]memory.SearchResult, error) {
 	defer rows.Close()
 	var out []memory.SearchResult
 	for rows.Next() {
 		var r memory.SearchResult
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
+		var facts, concepts, filesRead, filesModified, nextSteps string
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan timeline row: %w", err)
+			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
+			return nil, fmt.Errorf("scan observation row: %w", err)
 		}
 		nf.apply(&r.Observation)
 		r.Observation.Facts = parseJSONArray(facts)
 		r.Observation.Concepts = parseJSONArray(concepts)
 		r.Observation.FilesRead = parseJSONArray(filesRead)
 		r.Observation.FilesModified = parseJSONArray(filesModified)
+		r.Observation.NextSteps = parseJSONArray(nextSteps)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -580,30 +520,11 @@ func (s *Store) ByIDs(ctx context.Context, ids []int64) ([]memory.SearchResult, 
 	}
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id IN (%s)`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch observations by id: %w", err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan observation by id: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }

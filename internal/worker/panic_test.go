@@ -46,8 +46,10 @@ func TestProcessPanicRecoverySurvives(t *testing.T) {
 		t.Fatal("process did not return — recover() may not be catching the panic")
 	}
 
-	if !strings.Contains(logBuf.String(), "PANIC recovered") {
-		t.Errorf("log output = %q, want a PANIC recovered line", logBuf.String())
+	// At ERROR level, same as handleConn's recovery: a recovered panic is
+	// a failed operation, and `grep ERROR` is what an operator reads.
+	if !strings.Contains(logBuf.String(), "ERROR PANIC recovered") {
+		t.Errorf("log output = %q, want an ERROR-level PANIC recovered line", logBuf.String())
 	}
 	if d.counters.observerErrors.Load() != 1 {
 		t.Errorf("observerErrors = %d, want 1 (the recovered panic should count as an observer error)", d.counters.observerErrors.Load())

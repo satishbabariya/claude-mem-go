@@ -33,7 +33,7 @@ func (s *Store) ObservationsNeedingEmbedding(ctx context.Context, project string
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
-		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at_epoch
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.next_steps, o.created_at_epoch
 		FROM observations o
 		LEFT JOIN observation_vectors v ON v.observation_id = o.id
 		WHERE o.id > ?
@@ -44,24 +44,5 @@ func (s *Store) ObservationsNeedingEmbedding(ctx context.Context, project string
 	if err != nil {
 		return nil, fmt.Errorf("observations needing embedding after id %d: %w", afterID, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan observation needing embedding: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = parseJSONArray(facts)
-		r.Observation.Concepts = parseJSONArray(concepts)
-		r.Observation.FilesRead = parseJSONArray(filesRead)
-		r.Observation.FilesModified = parseJSONArray(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }

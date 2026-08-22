@@ -300,25 +300,37 @@ const defaultStatementTimeoutMS = 30_000
 
 const statementTimeoutEnvVar = "CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS"
 
-// withStatementTimeout returns dsn with a statement_timeout query
-// parameter appended, so pgx applies it as a startup runtime parameter
-// on every physical connection this DSN ever opens — the direct
-// equivalent of real claude-mem's own statement_timeout pool option
-// (createPostgresPool, which the "pg" driver applies identically on
-// connect). Without this, nothing here ever bounded how long a single
-// query could run: MaxOpenConns caps this pool at 10 connections total,
-// shared by every hook process and the worker daemon, and a single
-// query that hangs (lock contention from a concurrent prune/reembed, a
-// pathological query plan, a network stall) would hold its connection
-// forever — a handful of stuck queries exhausts the whole pool and
-// every subsequent caller blocks indefinitely with no self-healing.
+// withStatementTimeout returns dsn with statement_timeout set, so pgx
+// applies it as a startup runtime parameter on every physical connection
+// this DSN ever opens — the direct equivalent of real claude-mem's own
+// statement_timeout pool option (createPostgresPool, which the "pg"
+// driver applies identically on connect). Without this, nothing here
+// ever bounded how long a single query could run: MaxOpenConns caps this
+// pool at 10 connections total, shared by every hook process and the
+// worker daemon, and a single query that hangs (lock contention from a
+// concurrent prune/reembed, a pathological query plan, a network stall)
+// would hold its connection forever — a handful of stuck queries
+// exhausts the whole pool and every subsequent caller blocks
+// indefinitely with no self-healing.
+//
+// pgx accepts two DSN shapes and each needs its own treatment:
+//
+//   - URL ("postgres://user:pw@host/db?sslmode=disable"): the value is
+//     added as a query parameter.
+//   - keyword/value ("host=localhost user=x dbname=z"): the value is
+//     appended as a space-separated token. This form has no "://", and
+//     url.Parse does NOT reject it — it parses the whole thing as a path
+//     and re-encodes it into garbage ("host=localhost%20user=x...") with
+//     a bogus ?statement_timeout= suffix, which pgx then cannot connect
+//     with. Found by reading, not by a live failure, but the outcome
+//     would be every keyword/value DSN failing to connect.
 //
 // Left untouched if the DSN already specifies statement_timeout
-// explicitly (an operator's own choice wins), or if the DSN doesn't
-// parse as a URL at all — in the latter case sql.Open/pingWithRetry
-// fail on their own shortly after, same as any other malformed DSN;
-// silently swallowing that error here to force a timeout in would be
-// worse than just letting the real failure surface.
+// explicitly (an operator's own choice wins), or if a URL-form DSN
+// doesn't parse — in the latter case sql.Open/pingWithRetry fail on
+// their own shortly after, same as any other malformed DSN; silently
+// swallowing that error here to force a timeout in would be worse than
+// just letting the real failure surface.
 //
 // Confirmed empirically against a real container, not assumed from
 // pgx's own docs: a DSN with statement_timeout=2000 appended, run
@@ -326,6 +338,20 @@ const statementTimeoutEnvVar = "CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS"
 // own "canceling statement due to statement timeout" (SQLSTATE 57014)
 // rather than the parameter being silently ignored.
 func withStatementTimeout(dsn string) string {
+	ms := defaultStatementTimeoutMS
+	if v := os.Getenv(statementTimeoutEnvVar); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ms = n
+		}
+	}
+	if !strings.Contains(dsn, "://") {
+		for _, tok := range strings.Fields(dsn) {
+			if strings.HasPrefix(tok, "statement_timeout=") {
+				return dsn
+			}
+		}
+		return strings.TrimSpace(dsn) + " statement_timeout=" + strconv.Itoa(ms)
+	}
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return dsn
@@ -333,12 +359,6 @@ func withStatementTimeout(dsn string) string {
 	q := u.Query()
 	if q.Get("statement_timeout") != "" {
 		return dsn
-	}
-	ms := defaultStatementTimeoutMS
-	if v := os.Getenv(statementTimeoutEnvVar); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			ms = n
-		}
 	}
 	q.Set("statement_timeout", strconv.Itoa(ms))
 	u.RawQuery = q.Encode()
@@ -464,6 +484,18 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 			// is the one migration here heavy enough to plausibly be
 			// interrupted on a large table) re-runs cleanly, as
 			// migrate.Run requires of every migration.
+			//
+			// Plain CREATE INDEX, not CONCURRENTLY, deliberately: this
+			// Apply (and v4's) is one multi-statement string sent in a
+			// single Exec, which pgx runs through the simple protocol as
+			// one implicit transaction — and CREATE INDEX CONCURRENTLY
+			// refuses to run inside any transaction block. Splitting
+			// into separate Execs would make CONCURRENTLY possible but
+			// lose the all-or-nothing application of the drop/re-add,
+			// and on a large table a failed CONCURRENTLY build leaves an
+			// INVALID index behind that IF NOT EXISTS then treats as
+			// present. The cost is a write lock on observations for the
+			// build's duration at upgrade time, once.
 			Version: 3,
 			Name:    "index facts and concepts in search_vector",
 			Apply: func(ctx context.Context, db *sql.DB) error {
@@ -483,6 +515,9 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 			},
 		},
 		{
+			// Plain CREATE INDEX for the same reason as v3: both
+			// statements go out as one string in one Exec, i.e. one
+			// implicit transaction, where CONCURRENTLY is not allowed.
 			Version: 4,
 			Name:    "GIN-index files_read and files_modified",
 			Apply: func(ctx context.Context, db *sql.DB) error {

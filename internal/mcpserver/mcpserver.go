@@ -158,21 +158,48 @@ func (s *Server) Run(r io.Reader, w io.Writer) error {
 		s.SessionID = generateSessionID()
 	}
 
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
+	// A bufio.Reader rather than a Scanner: Scanner's ErrTooLong is
+	// terminal — one line over the cap ended the whole session, taking
+	// every later request down with it. readLine keeps the same 8MB cap
+	// but makes an oversized line a per-request error instead.
+	br := bufio.NewReaderSize(r, 64*1024)
+	for {
+		line, tooLong, err := readLine(br, MaxLineBytes)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
-		var req rpcRequest
-		if err := json.Unmarshal(line, &req); err != nil {
-			s.Log.Printf("malformed json-rpc line, skipping: %v (%d bytes)", err, len(line))
-			continue
+		var resp *rpcResponse
+		switch {
+		case tooLong:
+			s.Log.Printf("json-rpc line exceeds %d bytes, rejecting", MaxLineBytes)
+			resp = protocolError(-32600, fmt.Sprintf("invalid request: line exceeds the %d-byte size limit", MaxLineBytes))
+		default:
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var req rpcRequest
+			if uerr := json.Unmarshal(line, &req); uerr != nil {
+				// JSON-RPC 2.0 §5.1: a parse error is answered with
+				// -32700 and a null id — the request's own id is by
+				// definition unreadable, and a client that sent something
+				// this server can't parse deserves to be told so rather
+				// than left waiting on a reply that never comes.
+				s.Log.Printf("malformed json-rpc line, rejecting: %v (%d bytes)", uerr, len(line))
+				resp = protocolError(-32700, fmt.Sprintf("parse error: %v", uerr))
+			} else if req.JSONRPC != "" && req.JSONRPC != "2.0" {
+				// An absent "jsonrpc" is tolerated (every real client
+				// sends it, but it's cheap to be lenient and nothing here
+				// depends on it); a PRESENT wrong version is a different
+				// protocol and gets the spec's -32600.
+				resp = s.errorReply(req, -32600, fmt.Sprintf("invalid request: unsupported jsonrpc version %q", req.JSONRPC))
+			} else {
+				resp = s.handle(req)
+			}
 		}
-
-		resp := s.handle(req)
 		if resp == nil {
 			continue // notification — MCP forbids responding to these
 		}
@@ -185,11 +212,52 @@ func (s *Server) Run(r io.Reader, w io.Writer) error {
 			return fmt.Errorf("write response: %w", err)
 		}
 	}
-	return scanner.Err()
+}
+
+// MaxLineBytes caps one JSON-RPC line. Same 8MB hook.MaxPayloadBytes uses
+// — no real request needs anywhere near it, so it only fires on the
+// pathological case it exists for.
+const MaxLineBytes = 8 * 1024 * 1024
+
+// readLine returns the next newline-terminated line (without the
+// terminator), accumulating bufio.Reader's partial reads up to max bytes.
+// A line longer than max is consumed to its end and discarded, reported
+// via tooLong=true with a nil line, so the caller can answer it and keep
+// serving. io.EOF is returned only once no bytes remain; a final
+// unterminated line is returned normally first.
+func readLine(br *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
+	var buf []byte
+	for {
+		chunk, isPrefix, rerr := br.ReadLine()
+		if rerr != nil {
+			if rerr == io.EOF && (len(buf) > 0 || tooLong) {
+				return buf, tooLong, nil
+			}
+			return nil, false, rerr
+		}
+		if !tooLong {
+			if len(buf)+len(chunk) > max {
+				tooLong, buf = true, nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if !isPrefix {
+			return buf, tooLong, nil
+		}
+	}
+}
+
+// protocolError is the reply for a request whose id can't be trusted or
+// read at all (a parse error, an oversized line): JSON-RPC 2.0 says such
+// responses carry id null, which the explicit "null" here produces —
+// rpcResponse's id is omitempty, so leaving it nil would drop the field.
+func protocolError(code int, message string) *rpcResponse {
+	return &rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: code, Message: message}}
 }
 
 // RequestTimeout bounds one JSON-RPC request's backend work. handle runs
-// synchronously in Run's scanner loop, so a single stuck query would
+// synchronously in Run's read loop, so a single stuck query would
 // otherwise block every later request on the session — including
 // trivially fast ones like tools/list — with nothing to cut it short.
 // Postgres had a statement_timeout as a backstop; SQLite had nothing.
@@ -198,7 +266,7 @@ const RequestTimeout = 30 * time.Second
 func (s *Server) handle(req rpcRequest) (resp *rpcResponse) {
 	ctx, cancel := context.WithTimeout(context.Background(), RequestTimeout)
 	defer cancel()
-	// handle runs synchronously in Run's scanner loop, not a spawned
+	// handle runs synchronously in Run's read loop, not a spawned
 	// goroutine — an unrecovered panic here doesn't just fail one tool
 	// call, it terminates the entire process (Go's default for a panic
 	// that unwinds past main), ending the whole MCP session and, if this

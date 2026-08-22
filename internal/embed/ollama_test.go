@@ -1,12 +1,15 @@
 package embed
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPingModelPulled(t *testing.T) {
@@ -17,7 +20,7 @@ func TestPingModelPulled(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	if err := c.Ping(); err != nil {
+	if err := c.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping() with the model present in /api/tags: want nil, got %v", err)
 	}
 }
@@ -30,7 +33,7 @@ func TestPingModelNotPulled(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	err := c.Ping()
+	err := c.Ping(context.Background())
 	if err == nil {
 		t.Fatal("Ping() with the model absent from /api/tags: want an error, got nil")
 	}
@@ -42,7 +45,7 @@ func TestPingModelNotPulled(t *testing.T) {
 func TestPingServerUnreachable(t *testing.T) {
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = "http://127.0.0.1:1" // nothing listens here
-	err := c.Ping()
+	err := c.Ping(context.Background())
 	if err == nil {
 		t.Fatal("Ping() against an unreachable server: want an error, got nil")
 	}
@@ -59,7 +62,7 @@ func TestPingServerErrorStatus(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	if err := c.Ping(); err == nil {
+	if err := c.Ping(context.Background()); err == nil {
 		t.Fatal("Ping() against a server returning 500: want an error, got nil")
 	}
 }
@@ -80,7 +83,7 @@ func TestEmbedRetriesOnceOnServerError(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	vec, err := c.Embed("some text")
+	vec, err := c.Embed(context.Background(), "some text")
 	if err != nil {
 		t.Fatalf("Embed after one transient 500: want it to succeed on retry, got error: %v", err)
 	}
@@ -121,7 +124,7 @@ func TestEmbedRetriesOnceOnNetworkError(t *testing.T) {
 	c.BaseURL = srv.URL
 	c.HTTP = &http.Client{Transport: transport}
 
-	vec, err := c.Embed("some text")
+	vec, err := c.Embed(context.Background(), "some text")
 	if err != nil {
 		t.Fatalf("Embed after one simulated network error: want it to succeed on retry, got error: %v", err)
 	}
@@ -147,7 +150,7 @@ func TestEmbedDoesNotRetryOnEmptyEmbedding(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	if _, err := c.Embed("some text"); err == nil {
+	if _, err := c.Embed(context.Background(), "some text"); err == nil {
 		t.Fatal("Embed with an empty embedding response: want an error, got nil")
 	}
 	if got := calls.Load(); got != 1 {
@@ -167,7 +170,7 @@ func TestEmbedDoesNotRetryOnClientErrorStatus(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	if _, err := c.Embed("some text"); err == nil {
+	if _, err := c.Embed(context.Background(), "some text"); err == nil {
 		t.Fatal("Embed with a 400 response: want an error, got nil")
 	}
 	if got := calls.Load(); got != 1 {
@@ -188,10 +191,73 @@ func TestEmbedGivesUpAfterMaxAttempts(t *testing.T) {
 
 	c := NewClient("nomic-embed-text")
 	c.BaseURL = srv.URL
-	if _, err := c.Embed("some text"); err == nil {
+	if _, err := c.Embed(context.Background(), "some text"); err == nil {
 		t.Fatal("Embed against a persistently-failing server: want an error, got nil")
 	}
 	if got := calls.Load(); got != embedMaxAttempts {
 		t.Fatalf("server received %d calls, want exactly %d (bounded retries, not unbounded)", got, embedMaxAttempts)
+	}
+}
+
+// TestEmbedCapsResponseSize: a reply larger than maxResponseBytes must be
+// rejected as a decode error rather than read into memory whole.
+func TestEmbedCapsResponseSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"embedding":[`))
+		chunk := []byte(strings.Repeat("1,", 1<<16))
+		for written := 0; written < maxResponseBytes+len(chunk); written += len(chunk) {
+			w.Write(chunk)
+		}
+		w.Write([]byte(`1]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("nomic-embed-text")
+	c.BaseURL = srv.URL
+	if _, err := c.Embed(context.Background(), "some text"); err == nil {
+		t.Fatal("Embed with an oversized response: want a decode error, got nil")
+	}
+}
+
+// TestEmbedHonorsContextCancel: a cancelled ctx must abort the request
+// (and not count as a transient failure worth retrying).
+func TestEmbedHonorsContextCancel(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := NewClient("nomic-embed-text")
+	c.BaseURL = srv.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.Embed(ctx, "some text")
+	if err == nil {
+		t.Fatal("Embed with an expired ctx: want an error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("server received %d calls, want 1 (no retry after ctx cancellation)", got)
+	}
+}
+
+func TestPingHonorsContextCancel(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+
+	c := NewClient("nomic-embed-text")
+	c.BaseURL = srv.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := c.Ping(ctx); err == nil {
+		t.Fatal("Ping with an expired ctx: want an error, got nil")
 	}
 }

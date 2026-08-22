@@ -30,7 +30,7 @@ func (s *Store) ObservationsNeedingEmbedding(ctx context.Context, project string
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE id > $1
 		  AND (embedding IS NULL OR vector_dims(embedding) != $2)
@@ -40,24 +40,5 @@ func (s *Store) ObservationsNeedingEmbedding(ctx context.Context, project string
 	if err != nil {
 		return nil, fmt.Errorf("observations needing embedding after id %d: %w", afterID, err)
 	}
-	defer rows.Close()
-
-	var out []memory.SearchResult
-	for rows.Next() {
-		var r memory.SearchResult
-		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
-			return nil, fmt.Errorf("scan observation needing embedding: %w", err)
-		}
-		nf.apply(&r.Observation)
-		r.Observation.Facts = jsonDecode(facts)
-		r.Observation.Concepts = jsonDecode(concepts)
-		r.Observation.FilesRead = jsonDecode(filesRead)
-		r.Observation.FilesModified = jsonDecode(filesModified)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return scanSearchResults(rows)
 }

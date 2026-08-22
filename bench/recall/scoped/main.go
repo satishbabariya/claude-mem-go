@@ -81,7 +81,7 @@ func main() {
 
 	vecs := make([]pgvector.Vector, len(queries))
 	for i, q := range queries {
-		v, err := cl.Embed(q)
+		v, err := cl.Embed(ctx, q)
 		if err != nil {
 			panic(err)
 		}
@@ -201,7 +201,7 @@ func main() {
 	fmt.Printf("\n  Simulating a larger corpus by lowering hnsw.max_scan_tuples (default 20000)\n")
 	fmt.Printf("  on these %d rows — a cap of C is equivalent to a corpus of %d*20000/C rows.\n\n", rows, rows)
 	fmt.Printf("  %-14s %-16s %s\n", "max_scan", "~equivalent rows", "scoped recall@10")
-	for _, cap := range []int{20000, 10000, 4000, 2000, 1000} {
+	for _, maxScan := range []int{20000, 10000, 4000, 2000, 1000} {
 		var h, tot int
 		for _, vec := range vecs {
 			for _, proj := range projects {
@@ -212,7 +212,7 @@ func main() {
 				if len(truth) == 0 {
 					continue
 				}
-				got, err := annScopedCapped(raw, proj, vec, k, cap)
+				got, err := annScopedCapped(raw, proj, vec, k, maxScan)
 				if err != nil {
 					panic(err)
 				}
@@ -225,6 +225,6 @@ func main() {
 				tot += len(truth)
 			}
 		}
-		fmt.Printf("  %-14d %-16d %.1f%%\n", cap, rows*20000/cap, 100*float64(h)/float64(tot))
+		fmt.Printf("  %-14d %-16d %.1f%%\n", maxScan, rows*20000/maxScan, 100*float64(h)/float64(tot))
 	}
 }

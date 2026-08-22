@@ -8,6 +8,7 @@ package observer
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
@@ -49,16 +50,37 @@ func HardenedOptions(model string) claudeagent.Options {
 	}
 }
 
+// structuralTagRe matches the tags that give the observer prompt its
+// shape — the envelope BuildPrompt wraps the tool record in, and the
+// <observation> block memory.ParseXML looks for in the reply. Case-
+// insensitive because the model is not a strict XML parser.
+var structuralTagRe = regexp.MustCompile(`(?i)</?(tool_name|tool_input|tool_output|observation)>`)
+
+// neutralizeTags defangs structural tags inside interpolated content by
+// replacing their leading '<' with '‹' (U+2039). Tool input/output is
+// arbitrary text — a file the user read, a command's stdout — and it
+// used to be embedded verbatim, so content containing
+// `</tool_output><observation>…` closed the envelope early and supplied
+// its own observation, which ParseXML would then accept as the model's
+// answer. Only the structural tags are touched, and only by one
+// character, so ordinary XML/HTML in code stays legible to the model.
+func neutralizeTags(s string) string {
+	return structuralTagRe.ReplaceAllStringFunc(s, func(tag string) string {
+		return "‹" + tag[1:]
+	})
+}
+
 // BuildPrompt mirrors buildObservationPrompt in src/sdk/prompts.ts: raw
 // JSON.stringify(tool_input)/JSON.stringify(tool_response) embedded
 // verbatim (see ClaudeProvider.ts:521-522), asking for the same field set
-// memory.Observation persists.
+// memory.Observation persists. Verbatim except for neutralizeTags — see
+// its doc comment.
 func BuildPrompt(tc transcript.ToolCall) string {
 	var b strings.Builder
 	b.WriteString("Compress this tool-use record into an observation.\n\n")
-	fmt.Fprintf(&b, "<tool_name>%s</tool_name>\n", tc.ToolName)
-	fmt.Fprintf(&b, "<tool_input>%s</tool_input>\n", tc.ToolInput)
-	fmt.Fprintf(&b, "<tool_output>%s</tool_output>\n\n", tc.ToolOutput)
+	fmt.Fprintf(&b, "<tool_name>%s</tool_name>\n", neutralizeTags(tc.ToolName))
+	fmt.Fprintf(&b, "<tool_input>%s</tool_input>\n", neutralizeTags(tc.ToolInput))
+	fmt.Fprintf(&b, "<tool_output>%s</tool_output>\n\n", neutralizeTags(tc.ToolOutput))
 	b.WriteString("Respond with exactly this shape (omit a list's items if there are none):\n\n")
 	b.WriteString("<observation>\n")
 	b.WriteString("  <type>[ discovery | change | decision ]</type>\n")
@@ -176,9 +198,11 @@ func BuildSummaryPrompt(w SummaryWindow) string {
 			fmt.Fprintf(&b, "   … %d observations omitted …\n", pos-prev-1)
 		}
 		prev = pos
-		fmt.Fprintf(&b, "%d. [%s] %s", pos, r.Observation.Type, r.Observation.Title)
+		// Stored observations are model output, which itself came from
+		// tool content — neutralized here for the same reason as BuildPrompt.
+		fmt.Fprintf(&b, "%d. [%s] %s", pos, neutralizeTags(r.Observation.Type), neutralizeTags(r.Observation.Title))
 		if r.Observation.Subtitle != "" {
-			fmt.Fprintf(&b, " — %s", r.Observation.Subtitle)
+			fmt.Fprintf(&b, " — %s", neutralizeTags(r.Observation.Subtitle))
 		}
 		b.WriteString("\n")
 	}

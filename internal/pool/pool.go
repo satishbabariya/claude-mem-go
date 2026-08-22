@@ -6,7 +6,10 @@
 // concurrently is this application's policy, not the SDK's concern.
 package pool
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Pool is a buffered-channel semaphore: Acquire blocks until a slot is
 // free, Release frees it. This is admission control only — same contract
@@ -81,6 +84,27 @@ func (p *Pool) AcquireWithin(d time.Duration) bool {
 	case p.sem <- struct{}{}:
 		return true
 	case <-t.C:
+		return false
+	}
+}
+
+// AcquireContext is AcquireWithin with a ctx as well: it reports false
+// when either d elapses or ctx is done, whichever comes first. The worker
+// daemon's event path carries its shutdown ctx, and a caller waiting the
+// full sessionSlotWait for a slot during shutdown was holding up the
+// drain for a session that will never be spawned.
+func (p *Pool) AcquireContext(ctx context.Context, d time.Duration) bool {
+	if p.TryAcquire() {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case p.sem <- struct{}{}:
+		return true
+	case <-t.C:
+		return false
+	case <-ctx.Done():
 		return false
 	}
 }

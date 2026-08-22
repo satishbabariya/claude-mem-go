@@ -37,6 +37,20 @@ func TestOpenEnablesWALAndForeignKeys(t *testing.T) {
 	}
 }
 
+// TestOpenBoundsThePool locks in that Open caps the pool (see
+// sqliteMaxOpenConns) rather than leaving database/sql's unlimited
+// default, the way postgres.Open already did.
+func TestOpenBoundsThePool(t *testing.T) {
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	if got := st.db.Stats().MaxOpenConnections; got != sqliteMaxOpenConns {
+		t.Fatalf("MaxOpenConnections = %d, want %d", got, sqliteMaxOpenConns)
+	}
+}
+
 // TestConcurrentStoresCanBothWriteWithoutLockErrors is the real regression
 // this exists for: this project's actual deployment shape is the worker
 // daemon and every CLI subcommand (search, doctor, context, stop,

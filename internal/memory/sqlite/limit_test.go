@@ -49,7 +49,7 @@ func TestNegativeLimitDoesNotReturnUnlimitedRows(t *testing.T) {
 		}
 	})
 	t.Run("BySessionID", func(t *testing.T) {
-		results, err := st.BySessionID(context.Background(), "s1", -1)
+		results, err := st.BySessionID(context.Background(), "", "s1", -1)
 		if err != nil {
 			t.Fatalf("BySessionID: %v", err)
 		}

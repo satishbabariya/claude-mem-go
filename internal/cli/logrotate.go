@@ -80,5 +80,15 @@ func (w *RotatingWriter) rotateLocked() error {
 	}
 	w.f = f
 	w.size = 0
+	if renameErr != nil {
+		// The rename failed, so this reopened (O_APPEND) the same oversized
+		// file — seeding size from 0 would count it as empty and defeat the
+		// cap until the next process restart. Stat it so the next write
+		// re-attempts rotation; if even Stat fails, 0 is the only honest
+		// fallback and the rename error below is already being reported.
+		if info, serr := f.Stat(); serr == nil {
+			w.size = info.Size()
+		}
+	}
 	return renameErr
 }

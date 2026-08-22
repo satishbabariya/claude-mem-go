@@ -9,7 +9,7 @@ import (
 )
 
 func runImportantWorkflow() toolCallResult {
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: `# Memory Search Workflow
+	return okResult(`# Memory Search Workflow
 
 **3-Layer Pattern (ALWAYS follow this):**
 
@@ -25,15 +25,15 @@ func runImportantWorkflow() toolCallResult {
    get_observations(ids=[...])  # batch for 2+ items
    Returns: Complete details — narrative, facts, concepts, files (~500-1000 tokens/result)
 
-**Why:** 10x token savings. Never fetch full details without filtering first.`}}}
+**Why:** 10x token savings. Never fetch full details without filtering first.`)
 }
 
 func (s *Server) runSearch(ctx context.Context, project, query, obsType string, limit, offset int, dateStartMs, dateEndMs int64, orderBy string) toolCallResult {
 	results, err := s.st.Search(ctx, project, query, obsType, limit, offset, dateStartMs, dateEndMs, orderBy)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "search failed: " + err.Error()}}}
+		return errResult("search failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatSearchResults(results)}}}
+	return okResult(formatSearchResults(results))
 }
 
 // validateAddObservationSize checks add_observation's free-text arguments
@@ -42,25 +42,23 @@ func (s *Server) runSearch(ctx context.Context, project, query, obsType string, 
 // declared in toolCallParams) or "" if everything is within bounds.
 func (s *Server) runAddObservation(ctx context.Context, project, title, subtitle, narrative string, facts, concepts []string) toolCallResult {
 	if title == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "add_observation requires a \"title\" argument"}}}
+		return errResult("add_observation requires a \"title\" argument")
 	}
 	if project == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "no project to add to — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given"}}}
+		return errResult("no project to add to — the server has no current project (unusual outside a real cwd) and no \"project\" argument was given")
 	}
 	if msg := validateAddObservationSize(title, subtitle, narrative, facts, concepts); msg != "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: msg}}}
+		return errResult("%s", msg)
 	}
 
 	o := memory.Observation{Type: "manual", Title: title, Subtitle: subtitle, Narrative: narrative, Facts: facts, Concepts: concepts}
 	hash := memory.ContentHash(s.SessionID, "manual", title, narrative)
 	res, err := s.st.Insert(ctx, s.SessionID, project, "manual", hash, o, 0)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "add_observation failed: " + err.Error()}}}
+		return errResult("add_observation failed: %v", err)
 	}
 	if !res.Inserted {
-		return toolCallResult{Content: []toolContent{{Type: "text",
-			Text: fmt.Sprintf("Already remembered (id=%d) — an identical observation (same title and narrative) was already added this session.", res.ID)}}}
+		return okResult(fmt.Sprintf("Already remembered (id=%d) — an identical observation (same title and narrative) was already added this session.", res.ID))
 	}
 
 	// Additive only, same as worker.process's own embedding step: keyword
@@ -72,7 +70,7 @@ func (s *Server) runAddObservation(ctx context.Context, project, title, subtitle
 	embedNote := ""
 	if s.EmbedModel != "" {
 		text := embed.ObservationText(title, subtitle, narrative, facts)
-		if vec, embedErr := embed.NewClient(s.EmbedModel).Embed(text); embedErr != nil {
+		if vec, embedErr := embed.NewClient(s.EmbedModel).Embed(ctx, text); embedErr != nil {
 			s.Log.Warnf("add_observation: embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, embedErr)
 			embedNote = " (embedding failed, so semantic search won't find it — keyword search still will)"
 		} else if saveErr := s.st.SaveEmbedding(ctx, res.ID, vec); saveErr != nil {
@@ -81,23 +79,22 @@ func (s *Server) runAddObservation(ctx context.Context, project, title, subtitle
 		}
 	}
 
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: fmt.Sprintf("Remembered (id=%d): %s%s", res.ID, title, embedNote)}}}
+	return okResult(fmt.Sprintf("Remembered (id=%d): %s%s", res.ID, title, embedNote))
 }
 
 func (s *Server) runSemanticSearch(ctx context.Context, project, query string, limit int) toolCallResult {
 	if s.EmbedModel == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "semantic search is disabled on this server (no embed model configured)"}}}
+		return errResult("semantic search is disabled on this server (no embed model configured)")
 	}
-	vec, err := embed.NewClient(s.EmbedModel).Embed(query)
+	vec, err := embed.NewClient(s.EmbedModel).Embed(ctx, query)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "embedding the query failed: " + err.Error()}}}
+		return errResult("embedding the query failed: %v", err)
 	}
 	matches, err := s.st.SemanticSearch(ctx, project, vec, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "semantic search failed: " + err.Error()}}}
+		return errResult("semantic search failed: %v", err)
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatVectorMatches(matches)}}}
+	return okResult(formatVectorMatches(matches))
 }
 
 // runObservationContext is observation_context — the on-demand form of
@@ -115,22 +112,21 @@ func (s *Server) runSemanticSearch(ctx context.Context, project, query string, l
 // (recent_observations/session_observations/file_observations).
 func (s *Server) runObservationContext(ctx context.Context, project, query string, limit int) toolCallResult {
 	if s.EmbedModel == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text",
-			Text: "observation_context is disabled on this server (no embed model configured)"}}}
+		return errResult("observation_context is disabled on this server (no embed model configured)")
 	}
 	if query == "" {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "observation_context requires a \"query\" argument"}}}
+		return errResult("observation_context requires a \"query\" argument")
 	}
-	vec, err := embed.NewClient(s.EmbedModel).Embed(query)
+	vec, err := embed.NewClient(s.EmbedModel).Embed(ctx, query)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "embedding the query failed: " + err.Error()}}}
+		return errResult("embedding the query failed: %v", err)
 	}
 	matches, err := s.st.SemanticSearch(ctx, project, vec, limit)
 	if err != nil {
-		return toolCallResult{IsError: true, Content: []toolContent{{Type: "text", Text: "observation_context failed: " + err.Error()}}}
+		return errResult("observation_context failed: %v", err)
 	}
 	if len(matches) == 0 {
-		return toolCallResult{Content: []toolContent{{Type: "text", Text: "No embedded observations relevant to that query."}}}
+		return okResult("No embedded observations relevant to that query.")
 	}
-	return toolCallResult{Content: []toolContent{{Type: "text", Text: formatObservationContext(matches)}}}
+	return okResult(formatObservationContext(matches))
 }

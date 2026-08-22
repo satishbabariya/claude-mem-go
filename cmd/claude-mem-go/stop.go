@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
@@ -51,17 +53,47 @@ func cmdStop(args []string) int {
 		l.Errorf("FAILED parsing hook payload: %v", err)
 		return 0
 	}
-	if in.SessionID == "" {
-		l.Printf("no session_id in Stop payload, skipping")
+	if !stopGuardsPass(l, in, *excludedProjects, *socketPath) {
 		return 0
 	}
-	if excludeproject.IsExcluded(in.Cwd, *excludedProjects) {
-		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
+
+	ctx, cancel := hookContext(stopBudget)
+	defer cancel()
+	st, err := backend.Open(ctx, *dbPath, 0, 0)
+	if err != nil {
+		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
 		return 0
+	}
+	defer st.Close()
+
+	// The same derivation the worker uses when it records each observation
+	// (worker.go's process), so scoping the session reads below to it is
+	// exact, not a guess — a worktree session reads back under its
+	// parent/worktree composite name, the same one its rows were written
+	// with.
+	project := memory.ProjectFor(in.Cwd)
+	if project == "" || project == "." {
+		project = filepath.Base(filepath.Dir(in.TranscriptPath))
+	}
+
+	return summarizeSession(ctx, l, st, in, project, *socketPath, *model, *limit, *embedModel)
+}
+
+// stopGuardsPass runs every reason to skip summarizing before the store
+// is opened or any budget spent, logging the one that applies. Returns
+// false to skip; cmdStop always exits 0 either way (nothing reads it).
+func stopGuardsPass(l *logging.Logger, in claudeagent.HookInput, excludedProjects, socketPath string) bool {
+	if in.SessionID == "" {
+		l.Printf("no session_id in Stop payload, skipping")
+		return false
+	}
+	if excludeproject.IsExcluded(in.Cwd, excludedProjects) {
+		l.Printf("skip: project excluded (cwd=%s)", in.Cwd)
+		return false
 	}
 	if in.AgentID != "" || in.AgentType != "" {
 		l.Printf("skip: subagent context detected (agent_id=%s agent_type=%s)", in.AgentID, in.AgentType)
-		return 0
+		return false
 	}
 	// Claude Code asks for this one explicitly. When a Stop hook blocks a
 	// turn from ending, the turn is retried and every Stop hook fires
@@ -86,7 +118,7 @@ func cmdStop(args []string) int {
 	if in.StopHookActive {
 		l.Printf("skip: stop_hook_active — this turn is being retried because a Stop hook blocked it; "+
 			"session %s will be summarized when the turn actually ends", in.SessionID)
-		return 0
+		return false
 	}
 	// Real claude-mem's own PrivacyCheckValidator makes this same check
 	// before generating a Stop-time summary (SessionRoutes.ts), not just
@@ -99,20 +131,18 @@ func cmdStop(args []string) int {
 	// rather than skipping — an unknown signal must never be treated as
 	// "private," the same reasoning d.sessions.isPrivate's own doc comment
 	// gives for why an absent flag defaults to false.
-	if private, err := hook.QueryPrivate(*socketPath, in.SessionID); err == nil && private {
+	if private, err := hook.QueryPrivate(socketPath, in.SessionID); err == nil && private {
 		l.Printf("skip: session %s marked private for this turn", in.SessionID)
-		return 0
+		return false
 	}
 
-	ctx, cancel := hookContext(stopBudget)
-	defer cancel()
-	st, err := backend.Open(ctx, *dbPath, 0, 0)
-	if err != nil {
-		l.Errorf("FAILED opening store at %s: %v", memory.RedactDSN(*dbPath), err)
-		return 0
-	}
-	defer st.Close()
+	return true
+}
 
+// summarizeSession is cmdStop's work after the guards and the store
+// open: skip an already-summarized session, wait for in-flight
+// observations, choose a window, run the observer, persist, embed.
+func summarizeSession(ctx context.Context, l *logging.Logger, st memory.Backend, in claudeagent.HookInput, project, socketPath, model string, limit int, embedModel string) int {
 	// Bail before the wait budget AND before the model call if this
 	// session already has its summary.
 	//
@@ -129,7 +159,7 @@ func cmdStop(args []string) int {
 	// after its summary was already written — without needing to enumerate
 	// them. It costs one extra query on the normal path, where it finds
 	// nothing and falls through.
-	if existing, err := st.BySessionID(ctx, in.SessionID, *limit); err == nil {
+	if existing, err := st.BySessionID(ctx, project, in.SessionID, limit); err == nil {
 		for _, o := range existing {
 			if o.Observation.Type == "summary" {
 				l.Printf("skip: session %s already summarized (observations.id=%d) — "+
@@ -140,13 +170,13 @@ func cmdStop(args []string) int {
 	}
 
 	inFlight := func(sessionID string) (int, bool) {
-		n, err := hook.QueryInFlight(*socketPath, sessionID)
+		n, err := hook.QueryInFlight(socketPath, sessionID)
 		if err != nil {
 			return 0, false
 		}
 		return n, true
 	}
-	observations, err := cli.WaitForSessionObservations(ctx, st, in.SessionID, *limit, inFlight)
+	observations, err := cli.WaitForSessionObservations(ctx, st, project, in.SessionID, limit, inFlight)
 	if err != nil {
 		l.Errorf("FAILED BySessionID(%s): %v", in.SessionID, err)
 		return 0
@@ -161,14 +191,9 @@ func cmdStop(args []string) int {
 	// fires or how the observation count changes between firings.
 	hash := memory.ContentHash(in.SessionID, "SessionSummary", "session-summary", "")
 
-	project := memory.ProjectFor(in.Cwd)
-	if project == "" || project == "." {
-		project = filepath.Base(filepath.Dir(in.TranscriptPath))
-	}
-
-	// `observations` came back capped at *limit, which is where the
+	// `observations` came back capped at limit, which is where the
 	// summary's real defect lived: BySessionID orders oldest-first, so a
-	// plain LIMIT kept the FIRST *limit observations and dropped
+	// plain LIMIT kept the FIRST limit observations and dropped
 	// everything after them — the end of the session, which is where its
 	// conclusions are. Measured on a real 150-observation session at the
 	// default cap of 50: the summary described routine early edits, said
@@ -179,21 +204,21 @@ func cmdStop(args []string) int {
 	// window deliberately (head + tail, middle elided) instead of letting
 	// SQL's LIMIT choose it. summaryFetchCap still bounds the read — an
 	// unbounded query on a pathological session is its own problem — but
-	// it is far above *limit, so Total is the true count in every
+	// it is far above limit, so Total is the true count in every
 	// realistic case and the prompt can say so.
 	all := observations
-	if full, ferr := st.BySessionID(ctx, in.SessionID, summaryFetchCap); ferr != nil {
+	if full, ferr := st.BySessionID(ctx, project, in.SessionID, summaryFetchCap); ferr != nil {
 		l.Warnf("full re-read for windowing failed, falling back to the capped set: %v", ferr)
 	} else if len(full) > len(all) {
 		all = full
 	}
-	window := observer.SelectSummaryWindow(all, *limit)
+	window := observer.SelectSummaryWindow(all, limit)
 	if window.Total > len(window.Observations) {
 		l.Printf("session %s has %d observations; summarizing from %d (earliest + most recent, middle elided)",
 			in.SessionID, window.Total, len(window.Observations))
 	}
 
-	obs, err := observer.New(ctx, *model)
+	obs, err := observer.New(ctx, model)
 	if err != nil {
 		l.Errorf("FAILED to start observer: %v", err)
 		return 0
@@ -225,12 +250,12 @@ func cmdStop(args []string) int {
 	// information-dense observation this project ever produces — was
 	// invisible to semantic_search_observations from the day this hook
 	// was written, findable only by keyword search or by listing.
-	if *embedModel == "" {
+	if embedModel == "" {
 		return 0
 	}
 	text := embed.ObservationText(summaryTurn.Observation.Title, summaryTurn.Observation.Subtitle,
 		summaryTurn.Observation.Narrative, summaryTurn.Observation.Facts)
-	vec, err := embed.NewClient(*embedModel).Embed(text)
+	vec, err := embed.NewClient(embedModel).Embed(ctx, text)
 	if err != nil {
 		l.Warnf("embedding failed for observations.id=%d (semantic search won't find it): %v", res.ID, err)
 		return 0

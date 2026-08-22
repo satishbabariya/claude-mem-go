@@ -33,7 +33,7 @@ func TestEveryReadPathPopulatesCreatedAtEpoch(t *testing.T) {
 			return st.Search(context.Background(), "p", "", "", 10, 0, 0, 0, "")
 		},
 		"RecentByProject": func() ([]memory.SearchResult, error) { return st.RecentByProject(context.Background(), "p", 10) },
-		"BySessionID":     func() ([]memory.SearchResult, error) { return st.BySessionID(context.Background(), "s1", 10) },
+		"BySessionID":     func() ([]memory.SearchResult, error) { return st.BySessionID(context.Background(), "", "s1", 10) },
 		"ObservationsForFile": func() ([]memory.SearchResult, error) {
 			return st.ObservationsForFile(context.Background(), "p", "/tmp/f.go", 10)
 		},

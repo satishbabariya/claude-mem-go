@@ -93,7 +93,7 @@ func TestDispatchProcessIsDrainedBeforeShutdown(t *testing.T) {
 		t.Fatal("waitForProcessDrain did not return after the in-flight turn was released")
 	}
 
-	results, err := st.BySessionID(context.Background(), "brand-new-session", 10)
+	results, err := st.BySessionID(context.Background(), "", "brand-new-session", 10)
 	if err != nil {
 		t.Fatalf("BySessionID: %v", err)
 	}

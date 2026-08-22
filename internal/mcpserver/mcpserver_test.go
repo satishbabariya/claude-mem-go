@@ -25,7 +25,7 @@ import (
 func testEmbedModel(t *testing.T) string {
 	t.Helper()
 	const model = "nomic-embed-text"
-	if err := embed.NewClient(model).Ping(); err != nil {
+	if err := embed.NewClient(model).Ping(context.Background()); err != nil {
 		t.Skipf("Ollama not reachable with model %q: %v", model, err)
 	}
 	return model
@@ -1023,15 +1023,80 @@ func TestToolsCallAddObservationAcceptsFieldsWithinBounds(t *testing.T) {
 
 func TestMalformedLineIsSkippedNotFatal(t *testing.T) {
 	s, _ := newTestServer(t)
-	// One garbage line between two valid requests must not kill the session
-	// — a real client could send something this server doesn't expect, and
-	// dying on it would take down every subsequent request too.
+	// One garbage line before a valid request must not kill the session —
+	// a real client could send something this server doesn't expect, and
+	// dying on it would take down every subsequent request too. It used to
+	// be logged and dropped silently; JSON-RPC 2.0 says answer it with
+	// -32700 and a null id, which is what a client waiting on it needs.
 	resp := runLines(t, s, []string{
 		`not json at all`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/list"}`,
 	})
-	if len(resp) != 1 {
-		t.Fatalf("got %d responses after a malformed line, want 1 (the valid request should still be answered)", len(resp))
+	if len(resp) != 2 {
+		t.Fatalf("got %d responses after a malformed line, want 2 (a parse-error reply, then the valid request's answer)", len(resp))
+	}
+	assertProtocolError(t, resp[0], -32700)
+	if resp[1]["id"] != float64(5) || resp[1]["result"] == nil {
+		t.Fatalf("valid request after the malformed line was not answered normally: %v", resp[1])
+	}
+}
+
+// assertProtocolError checks a reply is a JSON-RPC error with the given
+// code and an explicit null id — the shape the spec mandates when the
+// request's own id could not be read.
+func assertProtocolError(t *testing.T, m map[string]any, code int) {
+	t.Helper()
+	id, present := m["id"]
+	if !present || id != nil {
+		t.Fatalf("error reply id = %v (present=%v), want an explicit null", id, present)
+	}
+	e, _ := m["error"].(map[string]any)
+	if e == nil || e["code"] != float64(code) {
+		t.Fatalf("error reply = %v, want error.code=%d", m, code)
+	}
+}
+
+// TestOversizedLineIsRejectedNotFatal covers the other way one bad line
+// used to end the session: bufio.Scanner's ErrTooLong is terminal, so a
+// single request over the 8MB cap killed every request after it. Now it
+// gets an -32600 reply and the next valid line is still served.
+func TestOversizedLineIsRejectedNotFatal(t *testing.T) {
+	s, _ := newTestServer(t)
+	huge := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"` + strings.Repeat("x", MaxLineBytes+1) + `"}}`
+	resp := runLines(t, s, []string{
+		huge,
+		`{"jsonrpc":"2.0","id":2,"method":"ping"}`,
+	})
+	if len(resp) != 2 {
+		t.Fatalf("got %d responses after an oversized line, want 2 (a size-limit error, then the valid request's answer)", len(resp))
+	}
+	assertProtocolError(t, resp[0], -32600)
+	e := resp[0]["error"].(map[string]any)
+	if msg, _ := e["message"].(string); !strings.Contains(msg, "size limit") {
+		t.Fatalf("oversized-line error message = %q, want it to say the request exceeded the size limit", msg)
+	}
+	if resp[1]["id"] != float64(2) || resp[1]["result"] == nil {
+		t.Fatalf("valid request after the oversized line was not answered normally: %v", resp[1])
+	}
+}
+
+// TestWrongJSONRPCVersionIsInvalidRequest: an absent "jsonrpc" field is
+// tolerated, but a present one naming another version is -32600.
+func TestWrongJSONRPCVersionIsInvalidRequest(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"1.0","id":1,"method":"ping"}`,
+		`{"id":2,"method":"ping"}`,
+	})
+	if len(resp) != 2 {
+		t.Fatalf("got %d responses, want 2", len(resp))
+	}
+	e, _ := resp[0]["error"].(map[string]any)
+	if e == nil || e["code"] != float64(-32600) || resp[0]["id"] != float64(1) {
+		t.Fatalf("jsonrpc 1.0 request reply = %v, want error.code=-32600 with the request's own id", resp[0])
+	}
+	if resp[1]["result"] == nil {
+		t.Fatalf("request with no jsonrpc field should still be served leniently, got %v", resp[1])
 	}
 }
 
@@ -1062,7 +1127,7 @@ func TestToolsCallObservationContextReturnsThePromptContextHookFormat(t *testing
 		t.Fatalf("seed Insert: %v", err)
 	}
 	text := embed.ObservationText(o.Title, o.Subtitle, o.Narrative, o.Facts)
-	vec, err := embed.NewClient(model).Embed(text)
+	vec, err := embed.NewClient(model).Embed(context.Background(), text)
 	if err != nil {
 		t.Fatalf("seed Embed: %v", err)
 	}
@@ -1288,5 +1353,37 @@ func TestToolsCallSessionStartContextIncludesNextSteps(t *testing.T) {
 	}
 	if !strings.Contains(got, "- finish the backfill") {
 		t.Errorf("session_start_context omits the next step itself:\n%s", got)
+	}
+}
+
+// TestToolsCallGetObservationsIncludesNextSteps: get_observations is the
+// one tool that claims to show everything about a row, and it silently
+// omitted next_steps while contextfmt.SessionStart rendered them — the
+// same silent-omission shape TestToolsCallSessionStartContextIncludesNextSteps
+// guards on the other path.
+func TestToolsCallGetObservationsIncludesNextSteps(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	o := memory.Observation{
+		Type:      "summary",
+		Title:     "session summary",
+		NextSteps: []string{"finish the backfill", "rerun doctor"},
+	}
+	res, err := st.Insert(context.Background(), "s1", "proj", "SessionSummary", memory.ContentHash("s1", "SessionSummary", "ns", ""), o, 0)
+	if err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	st.Close()
+
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_observations","arguments":{"ids":[%d]}}}`, res.ID),
+	})
+	got := toolCallText(t, resp[0])
+	if !strings.Contains(got, "Next steps: finish the backfill; rerun doctor") {
+		t.Errorf("get_observations omits the next steps:\n%s", got)
 	}
 }
