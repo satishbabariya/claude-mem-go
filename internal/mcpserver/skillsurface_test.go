@@ -69,32 +69,21 @@ func TestSkillsOnlyReferenceRealToolsAndParameters(t *testing.T) {
 	t.Logf("validated %d tool call(s) across %d skills", checked, len(skills))
 }
 
-// toolsByName parses the server's own tool definitions, so the guard
-// tracks the real surface rather than a hand-maintained list that could
-// drift exactly as the skills did.
+// toolsByName reads the server's real tool table — tools() and each
+// InputSchema's "properties" — so the guard tracks the live surface rather
+// than a regex over source text that a file split or refactor could
+// silently turn into "0 tools found".
 func toolsByName(t *testing.T) map[string]map[string]bool {
 	t.Helper()
-	src, err := os.ReadFile("mcpserver.go")
-	if err != nil {
-		t.Fatalf("read mcpserver.go: %v", err)
-	}
 	out := map[string]map[string]bool{}
-	nameRe := regexp.MustCompile(`Name:\s*"([a-z_]+)"`)
-	propRe := regexp.MustCompile(`"([a-zA-Z_]+)":\s*map\[string\]any\{"type"`)
-
-	locs := nameRe.FindAllStringSubmatchIndex(string(src), -1)
-	for i, loc := range locs {
-		name := string(src[loc[2]:loc[3]])
-		end := len(src)
-		if i+1 < len(locs) {
-			end = locs[i+1][0]
-		}
-		block := string(src[loc[1]:end])
+	for _, td := range tools() {
 		params := map[string]bool{}
-		for _, p := range propRe.FindAllStringSubmatch(block, -1) {
-			params[p[1]] = true
+		if props, ok := td.InputSchema["properties"].(map[string]any); ok {
+			for name := range props {
+				params[name] = true
+			}
 		}
-		out[name] = params
+		out[td.Name] = params
 	}
 	return out
 }
