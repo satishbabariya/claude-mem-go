@@ -161,9 +161,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.st = st
 	defer st.Close()
 
+	if err := ValidateSocketPath(d.SocketPath); err != nil {
+		return err
+	}
 	ln, err := net.Listen("unix", d.SocketPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("listen on %s: %w", d.SocketPath, err)
 	}
 	defer ln.Close()
 	// Also removed at the top of the NEXT Run() regardless, but cleaning up

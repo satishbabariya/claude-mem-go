@@ -31,6 +31,10 @@ func cmdStart(args []string) int {
 
 	l := openLog("start.log")
 
+	if err := worker.ValidateSocketPath(*socketPath); err != nil {
+		l.Errorf("refusing to start: %v", err)
+		return 1
+	}
 	if worker.IsRunning(*socketPath) {
 		// "Running" was the only question asked here, never "which one".
 		// The daemon is the single long-lived process in this system, so

@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -126,4 +127,31 @@ func SpawnDetached(binPath string, args []string) error {
 	err = cmd.Start()
 	devnull.Close()
 	return err
+}
+
+// maxSocketPathLen is the longest unix socket path the kernel accepts:
+// sockaddr_un.sun_path is 104 bytes on macOS/BSD and 108 on Linux,
+// including the trailing NUL. Exceeding it fails bind(2) with EINVAL —
+// "invalid argument" — which says nothing about the path. Found for real
+// when a daemon was pointed at a deeply nested temp directory: it died
+// within milliseconds, logged one INFO line, and `start` reported only
+// "did not become ready within 5s".
+func maxSocketPathLen() int {
+	if runtime.GOOS == "linux" {
+		return 107
+	}
+	return 103
+}
+
+// ValidateSocketPath rejects a socket path the kernel cannot bind, with a
+// message that names the limit, so the failure surfaces where the path
+// was chosen (start, worker) instead of as a bare EINVAL in worker.log.
+func ValidateSocketPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("socket path is empty")
+	}
+	if n, max := len(path), maxSocketPathLen(); n > max {
+		return fmt.Errorf("socket path is %d bytes, longer than the %d the OS allows for a unix socket; use -socket to pick a shorter path: %s", n, max, path)
+	}
+	return nil
 }
