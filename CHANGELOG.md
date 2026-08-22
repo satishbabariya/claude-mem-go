@@ -5,6 +5,91 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.4.0 — 2026-08-22
+
+The first release after a full code, structure and architecture review,
+with every finding implemented, and the first real end-to-end runs:
+Postgres+pgvector and Ollama in Docker, the real `claude` CLI, and Claude
+Code's own hooks through `--plugin-dir`. What that found, and what changed:
+
+- **Concurrent sessions lost their events.** With the default
+  `-max-concurrent 2`, one idle cached session plus eight sessions
+  arriving at once captured **1 of 8**; the other seven waited the full
+  two-minute slot deadline and were dropped, with nothing but
+  `worker.log` to say so. A slot was held for a cached session's whole
+  lifetime, and the wait blocked on a pool release that a cached session
+  never makes after its turn. An arriving session now evicts the
+  least-recently-used idle cached session (never one mid-turn) and
+  re-tries every 250ms while waiting. Same scenario after: **9/9 in 42s**,
+  7 evictions, 0 drops. A displaced session pays one observer respawn on
+  its next tool call. (#3, PR #10)
+
+- **`hnsw.ef_search` now defaults to 200, not pgvector's 40.** Re-measured
+  on a fresh 20,000-row corpus of real `nomic-embed-text` vectors: 40 gave
+  **80.0% recall@10 unscoped and 75.9% project-scoped** — the path every
+  hook takes — with nothing anywhere to say a quarter of the relevant
+  memories were silently absent; 200 gave 93.0% and 100% (the planner
+  goes exact for a 1,000-row project), under 2.3ms p50. `doctor` reports
+  the effective value and warns only when an operator has lowered it.
+  (#2, PR #12)
+
+- **The plugin's self-heal could never repair a broken binary.** Go 1.26+
+  refuses `go build -o X` when X exists and is not an object file, so
+  `scripts/ensure-binary.sh` failed on exactly the corrupt-binary case it
+  exists for, and exited 0. It builds to a temp name and renames into
+  place. `scripts/run-hook.sh` only checked `-x`, so a present-but-broken
+  binary took the healthy path and none of the degraded-mode diagnostics
+  fired; it now probes `version`. CI runs on Go 1.25 and stable because
+  the first bug was invisible on the single pinned version. (PR #9)
+
+- **A socket path over the OS limit killed the daemon silently.** 104
+  bytes on macOS; the daemon died with a bare `bind: invalid argument` at
+  INFO and `start` said only "did not become ready". Both validate the
+  path up front with a message naming the limit; daemon exit logs at
+  ERROR. (PR #10)
+
+- **`start` replaces a daemon that predates the session's store
+  configuration** (daemon on the built-in path, session configured via
+  `$CLAUDE_MEM_DB`). Two explicit, different stores are warned about and
+  left alone — restarting on every SessionStart would thrash the daemon
+  between two shells' stores. (#4, PR #13)
+
+- **`prune -relative-paths`** strips the relative file paths written
+  before paths were canonicalized, which the file-context hook can never
+  match; the observations stay. They cannot be made absolute — the cwd
+  was never stored, and a guess would match the wrong file. (#5, PR #14)
+
+- **CI now guards the ANN recall properties** with 300 committed real
+  embeddings: `SemanticSearch` at the default returns a full top-10 at
+  >= 90% of exact, and a store opened with `ef_search = 3` returns at most
+  3 rows, proving the per-query `SET LOCAL` reaches pgvector. The first CI
+  run of that test failed: a fresh database is small enough that the
+  planner takes a sequential scan, which is exact and blind to
+  `ef_search` — the same trap `bench/recall`'s README describes. The test
+  forces the index through a connection GUC. (#6, PR #15)
+
+- **Structure.** Module path `github.com/satishbabariya/claude-mem-go`
+  (so `go install` works); every library package under `internal/`;
+  `store` split into `internal/memory` (the storage-neutral domain),
+  `memory/sqlite`, `memory/postgres` and `memory/backend`; `ctx` on every
+  `Backend` method with hook budgets pinned under `hooks.json` timeouts;
+  `mcpserver.go` split by role; `internal/cli` and `worker` own what used
+  to be logic in `package main`.
+
+- **Review findings, all fixed.** Stats-file write race; recovered panic
+  logged at INFO; prompt-injection break-out through tool output in the
+  observer prompt; retry backoff ignoring `ctx`; `embed` without `ctx`,
+  size cap or retry delay; keyword/value Postgres DSNs mangled by the
+  statement-timeout rewrite; unbounded SQLite pool; log rotation size
+  reset on rename failure; JSON-RPC `-32700`/`-32600` replies and
+  oversized lines no longer ending the session; `get_observations`
+  missing `next_steps`; `session_observations` unscoped by project; hook
+  senders accepting unparseable session IDs; `x/text` CVE bump;
+  staticcheck and govulncheck in CI.
+
+- **Verified on Linux** (`go1.25.14 linux/arm64`, all packages under
+  `-race`) in addition to macOS.
+
 ## 0.3.0 — 2026-08-21
 
 - **Measured ANN recall — then found the measurement was wrong, retracted

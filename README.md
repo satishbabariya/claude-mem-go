@@ -2574,11 +2574,14 @@ claimed behavior.
   claude-mem's full multi-device sync machinery. What's no longer a gap:
   a real versioned migration path for whatever gets added next (see
   "Schema migrations" above) — neither backend had one before.
-- **`Setup` isn't wired** — real claude-mem uses it for version-checking a
-  Node/Bun install; there's no equivalent check this single static Go
-  binary needs (no runtime to verify, no interpreter version to detect).
-  `UserPromptSubmit` **is** now wired (see below) — the last of the two
-  hooks this section used to list as missing.
+- **`Setup` is wired, but only for one job** — `scripts/ensure-binary.sh`
+  builds the plugin binary from the shipped source when it is missing or
+  not runnable (a git-installed plugin ships no binary). It does not do
+  what real claude-mem's Setup does (version-check a Node/Bun runtime),
+  because a single static Go binary has no runtime to verify. Setup was
+  observed not to fire under `claude -p`, so `scripts/run-hook.sh` also
+  announces a missing/broken binary on SessionStart rather than relying
+  on Setup alone.
 
 ### `UserPromptSubmit` — semantic context injection on the actual prompt
 
