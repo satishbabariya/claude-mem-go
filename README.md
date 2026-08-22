@@ -34,7 +34,7 @@ idea in the abstract.
 - [Ollama](https://ollama.com) running locally, with an embedding model
   pulled (`ollama pull nomic-embed-text`), if you want semantic search.
   Keyword search (`search`) works without it.
-- Go 1.24+.
+- Go 1.25+ (what go.mod requires; CI also tests the latest stable).
 
 ## Quick start
 
