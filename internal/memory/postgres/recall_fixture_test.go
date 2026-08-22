@@ -110,9 +110,18 @@ func topK(t *testing.T, db *sql.DB, project string, vec []float32, k, efSearch i
 // Unscoped on purpose: the scoped path uses hnsw.iterative_scan, which
 // keeps scanning until LIMIT is met and so hides the ef_search bound.
 func TestSemanticSearchDefaultEfSearchIsInEffect(t *testing.T) {
-	dsn := requireTestDSN(t)
-	st := openTestStore(t)
+	// Both stores force the index via a connection-level GUC. On a fresh,
+	// small CI database the planner prefers a sequential scan for the
+	// unscoped query, which is exact and ignores ef_search entirely — the
+	// same trap bench/recall's README describes — so without this the
+	// ef_search=3 bound below is unobservable and the guard proves nothing.
+	dsn := requireTestDSN(t) + "&options=-c%20enable_seqscan%3Doff"
 	ctx := context.Background()
+	st, err := Open(ctx, dsn, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
 	vecs := loadRecallFixture(t)
 	proj := uniqueProject(t)
 	t.Cleanup(func() { st.Prune(ctx, proj, 1<<62, false) })
