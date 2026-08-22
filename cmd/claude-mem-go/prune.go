@@ -63,10 +63,14 @@ func cmdPrune(args []string) int {
 	if *project != "" {
 		scope = fmt.Sprintf("project %q", *project)
 	}
+	// Prune also deletes stored user prompts older than the same cutoff
+	// (see memory.Backend.Prune); the count it returns is observations
+	// only, so both messages say so rather than implying the number
+	// covers everything that went.
 	if *yes {
-		fmt.Printf("Deleted %d observation(s) older than %d days (%s).\n", n, *olderThanDays, scope)
+		fmt.Printf("Deleted %d observation(s) older than %d days (%s), plus any stored user prompts older than that.\n", n, *olderThanDays, scope)
 	} else {
-		fmt.Printf("%d observation(s) older than %d days (%s) would be deleted. Re-run with -yes to actually delete them.\n", n, *olderThanDays, scope)
+		fmt.Printf("%d observation(s) older than %d days (%s) would be deleted, plus any stored user prompts older than that. Re-run with -yes to actually delete them.\n", n, *olderThanDays, scope)
 	}
 	return 0
 }

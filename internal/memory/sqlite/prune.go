@@ -16,7 +16,10 @@ import (
 // FTS5's shadow table stays consistent automatically: the observations_ad
 // trigger (search.go) fires per deleted row regardless of whether the
 // DELETE is single-row or bulk. observation_vectors cleans up the same
-// way via its ON DELETE CASCADE foreign key (vector.go).
+// way via its ON DELETE CASCADE foreign key (vector.go). Stored user
+// prompts older than the same cutoff go too (their own user_prompts_ad
+// trigger keeps user_prompts_fts in step); they are not part of the
+// returned count, which has always meant observations.
 func (s *Store) Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error) {
 	args := []any{cutoffEpoch}
 	scope := ""
@@ -41,6 +44,9 @@ func (s *Store) Prune(ctx context.Context, project string, cutoffEpoch int64, dr
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("rows affected after prune: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_prompts WHERE created_at_epoch < ? `+scope, args...); err != nil {
+		return n, fmt.Errorf("prune user prompts older than cutoff: %w", err)
 	}
 	return n, nil
 }

@@ -48,7 +48,7 @@ func cmdStats(args []string) int {
 	}
 
 	fmt.Printf("store: %s\n\n", memory.RedactDSN(*dbPath))
-	if s.Observations == 0 {
+	if s.Observations == 0 && s.Prompts == 0 {
 		fmt.Println("  The store is EMPTY — nothing has ever been recorded.")
 		fmt.Println("  If the plugin is installed, capture is not working; run `doctor`.")
 		return 0
@@ -65,6 +65,12 @@ func cmdStats(args []string) int {
 		fmt.Printf("  (%d not embedded — invisible to semantic search; `reembed` fixes it)", missing)
 	}
 	fmt.Println()
+	// Only when the opt-in -store-prompts feature has ever written
+	// anything: a line reading "prompts 0" on every store that never
+	// enabled it would suggest something is missing when nothing is.
+	if s.Prompts > 0 {
+		fmt.Printf("  prompts        %d  (verbatim user prompts; -store-prompts is on)\n", s.Prompts)
+	}
 
 	if len(s.ByType) > 0 {
 		types := make([]string, 0, len(s.ByType))

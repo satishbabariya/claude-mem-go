@@ -73,7 +73,10 @@ type Backend interface {
 	// timestamp), scoped to one project when non-empty or every project
 	// when empty. dryRun counts what WOULD be deleted without deleting
 	// anything. This is the store's retention story — without it, the
-	// store only ever grows.
+	// store only ever grows. Stored user prompts older than the cutoff
+	// are deleted in the same scope too; the returned count covers
+	// observations only (the number every existing caller reports), so a
+	// dry run's figure is likewise observations only.
 	Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error)
 	// RepairFilePaths removes RELATIVE entries from files_read and
 	// files_modified — rows written before NormalizeFilePath existed, which
@@ -116,6 +119,30 @@ type Backend interface {
 	// everything. In all of those cases every component is reachable and
 	// the store simply stops growing, which nothing measured.
 	Stats(ctx context.Context) (StoreStats, error)
+	// InsertPrompt stores one user prompt verbatim — the opt-in write
+	// path behind the UserPromptSubmit hook's -store-prompts flag. The
+	// caller is responsible for every privacy gate (project exclusion,
+	// internal-protocol payloads, <private> stripping, the wholly-private
+	// session check) BEFORE calling this; the store never sees a prompt
+	// those gates rejected. prompt_number is assigned here, 1-based within
+	// the session. Returns the new row's ID.
+	InsertPrompt(ctx context.Context, sessionID, project, promptText string) (int64, error)
+	// SearchPrompts keyword-searches stored prompts. Same conventions as
+	// Search: project "" means every project; an empty query enumerates
+	// (newest first) instead of searching; offset pages past limit.
+	SearchPrompts(ctx context.Context, project, query string, limit, offset int) ([]PromptResult, error)
+	// PromptsBySession returns one session's stored prompts, oldest first
+	// (prompt_number order) — the prompt-side counterpart of BySessionID,
+	// with the same project scoping rule.
+	PromptsBySession(ctx context.Context, project, sessionID string, limit int) ([]PromptResult, error)
+	// ExportPrompts pages through stored prompts exactly as ExportAll
+	// pages through observations (id > afterID, oldest first, up to limit).
+	ExportPrompts(ctx context.Context, afterID int64, limit int) ([]PromptRow, error)
+	// ImportPrompt re-inserts a previously exported prompt, preserving its
+	// original prompt_number and timing. Idempotent on (session_id,
+	// prompt_number): returns false, not an error, when that prompt is
+	// already present.
+	ImportPrompt(ctx context.Context, row PromptRow) (bool, error)
 	Close() error
 }
 
@@ -136,6 +163,10 @@ type StoreStats struct {
 	// gap between this and Observations is what semantic search cannot
 	// see.
 	Embedded int
+	// Prompts is how many user prompts the store holds — 0 unless the
+	// opt-in -store-prompts / CLAUDE_MEM_STORE_PROMPTS feature has ever
+	// been on.
+	Prompts int
 	// OldestEpochMs and NewestEpochMs are 0 for an empty store. Newest is
 	// the one that answers "is capture still happening".
 	OldestEpochMs int64

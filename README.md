@@ -127,6 +127,7 @@ enforces that).
 | `CLAUDE_MEM_POSTGRES_POOL_MAX` | Postgres connection-pool size (default 10). |
 | `CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` | How long an idle pooled Postgres connection is kept (default 30000, matching real claude-mem). |
 | `CLAUDE_MEM_POSTGRES_EMBED_DIMS` | Vector column dimension for the Postgres backend (default 768, must match the embedding model). |
+| `CLAUDE_MEM_STORE_PROMPTS` | `1` makes the `UserPromptSubmit` hook persist each prompt's text (after `<private>` stripping); off by default because it stores the user's verbatim words. Same as `-store-prompts`. See [docs/hooks.md](docs/hooks.md#persisting-prompts-opt-in). |
 | `CLAUDE_MEM_EXCLUDED_PROJECTS` | Real claude-mem's variable; this port takes the same patterns via `-excluded-projects` — see [docs/hooks.md](docs/hooks.md#excluding-a-project-from-automatic-capture--a-real-feature-gap-this-port-had-until-now). |
 | `CLAUDE_MEM_GO_TEST_POSTGRES_DSN` | Test-only: the throwaway database the Postgres tests write to. See [Testing](#testing). |
 
@@ -214,8 +215,10 @@ did). Every log file rotates at 5MB, keeping one prior generation
   as tools: `search_observations`, `semantic_search_observations`,
   `recent_observations`, `session_observations`, `session_start_context`,
   `file_observations`, `get_observations`, `timeline`,
-  `observation_context`, `important_workflow`, and the one write tool,
-  `add_observation`.
+  `observation_context`, `important_workflow`, the one write tool,
+  `add_observation`, and — only once prompt persistence is opted into —
+  `search_prompts` and `session_prompts` over the user's own stored prompts
+  (see [Persisting prompts](docs/hooks.md#persisting-prompts-opt-in)).
 - **`export` / `import`** — JSON Lines backup and restore, and the
   SQLite-to-Postgres migration path: `export` from one backend, `import` into
   the other. Import is idempotent (rows are deduped by `content_hash`) and

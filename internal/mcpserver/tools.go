@@ -167,6 +167,36 @@ func tools() []toolDef {
 			},
 		},
 		{
+			Name: "search_prompts",
+			Description: "Keyword (full-text) search over the user's own stored prompts — what the user actually " +
+				"ASKED in past sessions, verbatim, as opposed to observations (a model's summary of what was done). " +
+				"Only populated when the UserPromptSubmit hook runs with -store-prompts / CLAUDE_MEM_STORE_PROMPTS=1 " +
+				"(off by default); <private>…</private> spans are never stored. Omit `query` to enumerate newest first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":        map[string]any{"type": "string", "description": "Search terms. Omit or leave empty to enumerate every stored prompt, newest first"},
+					"limit":        map[string]any{"type": "integer", "description": "Max results (default 10, max 100)"},
+					"offset":       map[string]any{"type": "integer", "description": "Skip this many leading results, for paging past a prior call's limit (default 0)"},
+					"all_projects": map[string]any{"type": "boolean", "description": "Search every project in the store instead of just the current one (default false)"},
+				},
+			},
+		},
+		{
+			Name: "session_prompts",
+			Description: "Every stored user prompt from one Claude Code session, oldest first (prompt_number order) — " +
+				"the prompt-side counterpart of session_observations. Same opt-in caveat as search_prompts: empty " +
+				"unless prompt storage was enabled when the session ran.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{"type": "string", "description": "The session_id to look up"},
+					"limit":      map[string]any{"type": "integer", "description": "Max results (default 10, max 100)"},
+				},
+				"required": []string{"session_id"},
+			},
+		},
+		{
 			Name: "add_observation",
 			Description: "Explicitly persist a fact, decision, or preference into claude-mem-go's memory — " +
 				"for something worth remembering that isn't the direct result of one tool call. Automatic " +
@@ -323,6 +353,10 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 	case "timeline":
 		result = s.runTimeline(ctx, scopedProject, params.Arguments.Anchor, params.Arguments.Query,
 			params.Arguments.DepthBefore, params.Arguments.DepthAfter)
+	case "search_prompts":
+		result = s.runSearchPrompts(ctx, project, params.Arguments.Query, limit, offset)
+	case "session_prompts":
+		result = s.runSessionPrompts(ctx, scopedProject, params.Arguments.SessionID, limit)
 	case "add_observation":
 		result = s.runAddObservation(ctx, scopedProject, params.Arguments.Title, params.Arguments.Subtitle,
 			params.Arguments.Narrative, params.Arguments.Facts, params.Arguments.Concepts)

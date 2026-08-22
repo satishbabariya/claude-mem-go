@@ -69,8 +69,36 @@ func cmdExport(args []string) int {
 		afterID = rows[len(rows)-1].ID
 	}
 
+	// Prompt rows follow the observation rows, each tagged "kind":"prompt"
+	// — observation rows carry no kind at all, so a file written before
+	// prompts existed still imports unchanged, and a file written now
+	// imports into an older binary as observations-only rather than
+	// failing outright. Without this, a backup or a SQLite<->Postgres
+	// migration would silently drop every stored prompt.
+	prompts := 0
+	afterID = 0
+	for {
+		rows, err := st.ExportPrompts(ctx, afterID, exportPageSize)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED export prompts: %v\n", err)
+			return 1
+		}
+		for _, r := range rows {
+			r.Kind = memory.PromptRowKind
+			if err := enc.Encode(r); err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED encoding prompt row %d: %v\n", r.ID, err)
+				return 1
+			}
+			prompts++
+		}
+		if len(rows) < exportPageSize {
+			break
+		}
+		afterID = rows[len(rows)-1].ID
+	}
+
 	if *out != "" {
-		fmt.Fprintf(os.Stderr, "Exported %d observation(s) to %s\n", total, *out)
+		fmt.Fprintf(os.Stderr, "Exported %d observation(s) and %d prompt(s) to %s\n", total, prompts, *out)
 	}
 	return 0
 }
@@ -109,24 +137,65 @@ func cmdImport(args []string) int {
 
 	dec := json.NewDecoder(f)
 	imported, skipped := 0, 0
+	promptsImported, promptsSkipped := 0, 0
 	for dec.More() {
-		var row memory.ExportRow
-		if err := dec.Decode(&row); err != nil {
+		// Each line is decoded once into raw bytes and then into the type
+		// its "kind" says it is: a row without one is an observation (the
+		// format before prompts existed), "prompt" is a user prompt.
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED decoding row from %s: %v\n", *in, err)
 			return 1
 		}
-		res, err := st.ImportRow(ctx, row)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FAILED importing row (content_hash=%s): %v\n", row.ContentHash, err)
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED decoding row from %s: %v\n", *in, err)
 			return 1
 		}
-		if res.Inserted {
-			imported++
-		} else {
-			skipped++
+		switch probe.Kind {
+		case "":
+			var row memory.ExportRow
+			if err := json.Unmarshal(raw, &row); err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED decoding observation row from %s: %v\n", *in, err)
+				return 1
+			}
+			res, err := st.ImportRow(ctx, row)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED importing row (content_hash=%s): %v\n", row.ContentHash, err)
+				return 1
+			}
+			if res.Inserted {
+				imported++
+			} else {
+				skipped++
+			}
+		case memory.PromptRowKind:
+			var row memory.PromptRow
+			if err := json.Unmarshal(raw, &row); err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED decoding prompt row from %s: %v\n", *in, err)
+				return 1
+			}
+			inserted, err := st.ImportPrompt(ctx, row)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED importing prompt (session_id=%s, prompt_number=%d): %v\n", row.SessionID, row.PromptNumber, err)
+				return 1
+			}
+			if inserted {
+				promptsImported++
+			} else {
+				promptsSkipped++
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "FAILED importing row from %s: unknown kind %q\n", *in, probe.Kind)
+			return 1
 		}
 	}
 
 	fmt.Printf("Imported %d observation(s), skipped %d already present (matched by content_hash).\n", imported, skipped)
+	if promptsImported > 0 || promptsSkipped > 0 {
+		fmt.Printf("Imported %d prompt(s), skipped %d already present (matched by session_id + prompt_number).\n", promptsImported, promptsSkipped)
+	}
 	return 0
 }

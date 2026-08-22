@@ -157,6 +157,18 @@ var migrations = []migrate.Migration{
 			return err
 		},
 	},
+	{
+		// user_prompts: the user's own words, stored only when the
+		// opt-in -store-prompts / CLAUDE_MEM_STORE_PROMPTS switch is on.
+		// Every statement is IF NOT EXISTS, so re-running is a no-op. See
+		// prompts.go for the table and its FTS5 shadow.
+		Version: 8,
+		Name:    "user_prompts table + fts5 index",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			_, err := db.ExecContext(ctx, createUserPromptsSQL)
+			return err
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB) error {
