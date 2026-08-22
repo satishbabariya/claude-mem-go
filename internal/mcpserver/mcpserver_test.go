@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -1385,5 +1386,97 @@ func TestToolsCallGetObservationsIncludesNextSteps(t *testing.T) {
 	got := toolCallText(t, resp[0])
 	if !strings.Contains(got, "Next steps: finish the backfill; rerun doctor") {
 		t.Errorf("get_observations omits the next steps:\n%s", got)
+	}
+}
+
+// seedPrompts writes prompts straight through the store, the way the
+// UserPromptSubmit hook does with -store-prompts on, and returns the db
+// path for a Server to open.
+func seedPrompts(t *testing.T) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "prompts.db")
+	st, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	for _, p := range []struct{ sess, proj, text string }{
+		{"session-x", "proj", "why is the prune command deleting nothing"},
+		{"session-x", "proj", "ok now add a retry to the ping"},
+		{"session-y", "proj", "unrelated question about logging"},
+		{"session-z", "other", "prune question from another project"},
+	} {
+		if _, err := st.InsertPrompt(context.Background(), p.sess, p.proj, p.text); err != nil {
+			t.Fatalf("InsertPrompt: %v", err)
+		}
+	}
+	return dbPath
+}
+
+func TestToolsCallSearchPromptsFindsByKeywordScopedToServerProject(t *testing.T) {
+	dbPath := seedPrompts(t)
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_prompts","arguments":{"query":"prune"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_prompts","arguments":{"query":"prune","all_projects":true}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_prompts","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_prompts","arguments":{"query":"nothing-matches-this"}}}`,
+	})
+	scoped := toolCallText(t, resp[0])
+	if !strings.Contains(scoped, "deleting nothing") || strings.Contains(scoped, "another project") || strings.Contains(scoped, "retry") {
+		t.Fatalf("search_prompts(prune) scoped to proj = %q", scoped)
+	}
+	// Output shape: [#<n> <8-char session> <date>] <text>.
+	if !strings.HasPrefix(scoped, "[#1 session-") || !strings.Contains(scoped, " 20") {
+		t.Fatalf("search_prompts line format = %q, want [#1 <session> <date>] ...", scoped)
+	}
+	all := toolCallText(t, resp[1])
+	if !strings.Contains(all, "another project") {
+		t.Fatalf("search_prompts with all_projects did not reach the other project: %q", all)
+	}
+	enumerated := toolCallText(t, resp[2])
+	if strings.Count(enumerated, "\n") != 2 || strings.Contains(enumerated, "another project") {
+		t.Fatalf("search_prompts with no query should enumerate proj's 3 prompts: %q", enumerated)
+	}
+	if empty := toolCallText(t, resp[3]); !strings.Contains(empty, "No matching prompts") {
+		t.Fatalf("empty search_prompts = %q", empty)
+	}
+}
+
+func TestToolsCallSessionPromptsReturnsOneSessionInOrder(t *testing.T) {
+	dbPath := seedPrompts(t)
+	s := &Server{DBPath: dbPath, Project: "proj", Log: logging.New(&bytes.Buffer{}, "", 0)}
+	resp := runLines(t, s, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_prompts","arguments":{"session_id":"session-x"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_prompts","arguments":{"session_id":"session-z"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_prompts","arguments":{}}}`,
+	})
+	text := toolCallText(t, resp[0])
+	if strings.Contains(text, "logging") {
+		t.Fatalf("session_prompts leaked another session: %q", text)
+	}
+	first, second := strings.Index(text, "[#1 "), strings.Index(text, "[#2 ")
+	if first == -1 || second == -1 || first > second {
+		t.Fatalf("session_prompts not in prompt_number order: %q", text)
+	}
+	if other := toolCallText(t, resp[1]); !strings.Contains(other, "No matching prompts") {
+		t.Fatalf("session_prompts for a session in another project should be scoped out, got %q", other)
+	}
+	if !toolCallIsError(t, resp[2]) {
+		t.Fatalf("session_prompts with no session_id: want isError=true, got %v", resp[2])
+	}
+}
+
+func TestFormatPromptResultsTruncatesOnARuneBoundaryAndOneLinePerPrompt(t *testing.T) {
+	long := strings.Repeat("日", promptPreviewRunes+5) + "\nsecond line"
+	out := formatPromptResults([]memory.PromptResult{{PromptNumber: 3, SessionID: "abcdefghijkl", Text: long, CreatedAtEpoch: 0}})
+	if strings.Count(out, "\n") != 0 {
+		t.Fatalf("a prompt must render on one line: %q", out)
+	}
+	if !strings.HasPrefix(out, "[#3 abcdefgh 1970-01-01] ") || !strings.HasSuffix(out, "…") {
+		t.Fatalf("format = %q", out)
+	}
+	if !utf8.ValidString(out) || strings.Contains(out, "second line") {
+		t.Fatalf("truncation broke a rune or kept text past the cap: %q", out)
 	}
 }

@@ -130,3 +130,29 @@ func (s *Server) runObservationContext(ctx context.Context, project, query strin
 	}
 	return okResult(formatObservationContext(matches))
 }
+
+// runSearchPrompts is search_prompts — the read side of the opt-in
+// user_prompts table (see cmd/claude-mem-go/prompt_context.go for the
+// write side and its privacy gates). Scoped exactly like search_observations:
+// the server's project unless all_projects asked for everything.
+func (s *Server) runSearchPrompts(ctx context.Context, project, query string, limit, offset int) toolCallResult {
+	results, err := s.st.SearchPrompts(ctx, project, query, limit, offset)
+	if err != nil {
+		return errResult("search_prompts failed: %v", err)
+	}
+	return okResult(formatPromptResults(results))
+}
+
+// runSessionPrompts is session_prompts, scoped the same way runSession
+// is: the server's project unless overridden, unscoped when there is no
+// project at all, since a session id is already a globally unique key.
+func (s *Server) runSessionPrompts(ctx context.Context, project, sessionID string, limit int) toolCallResult {
+	if sessionID == "" {
+		return errResult("session_prompts requires a \"session_id\" argument")
+	}
+	results, err := s.st.PromptsBySession(ctx, project, sessionID, limit)
+	if err != nil {
+		return errResult("session_prompts failed: %v", err)
+	}
+	return okResult(formatPromptResults(results))
+}

@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -122,4 +124,53 @@ func formatVectorMatches(matches []memory.VectorMatch) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// promptPreviewRunes bounds how much of each prompt a list line shows —
+// a prompt can be pages long, and these are list tools, not detail ones.
+const promptPreviewRunes = 200
+
+// formatPromptResults renders one line per prompt:
+//
+//	[#<prompt_number> <session_id, first 8 chars> <date>] <text, truncated>
+//
+// The session id is shortened because a full UUID on every line is noise
+// when most results come from the same few sessions; the number and date
+// are what place a prompt, and session_prompts(session_id) wants the full
+// id, which search_observations' session-level results already expose.
+func formatPromptResults(results []memory.PromptResult) string {
+	if len(results) == 0 {
+		return "No matching prompts (prompt storage is opt-in: -store-prompts / CLAUDE_MEM_STORE_PROMPTS=1 on the prompt-context hook)."
+	}
+	var b strings.Builder
+	for _, r := range results {
+		fmt.Fprintf(&b, "[#%d %s %s] %s\n", r.PromptNumber, shortSessionID(r.SessionID),
+			time.UnixMilli(r.CreatedAtEpoch).UTC().Format("2006-01-02"), truncateRunes(r.Text, promptPreviewRunes))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// truncateRunes cuts s to at most max runes (never mid-character, so a
+// non-English prompt can't leave invalid UTF-8 in the output), collapsing
+// newlines so each prompt stays on its one list line.
+func truncateRunes(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i] + "…"
+		}
+		n++
+	}
+	return s
 }

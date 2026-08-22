@@ -21,9 +21,9 @@ Use when the user asks about PAST sessions, not the current conversation:
 - "How did we solve X last time?"
 - "What did we find out about Y?"
 
-## Eleven tools, six kinds of job
+## Thirteen tools, seven kinds of job
 
-claude-mem-go exposes eleven MCP tools — independently callable, not a
+claude-mem-go exposes thirteen MCP tools — independently callable, not a
 mandatory staged pipeline the way real claude-mem's own
 search→timeline→get_observations sequence is (that staging exists to
 manage token cost across separate raw-vs-compressed representations this
@@ -35,7 +35,9 @@ detail for IDs any of the others already gave you; `timeline` gets
 chronological context AROUND one result rather than the result in
 isolation; one — `add_observation` — is the only *write* tool among them
 (see below); one — `important_workflow` — is pure guidance, not a lookup
-at all. This skill is mainly about finding what's already remembered,
+at all; two — `search_prompts` and `session_prompts` — read the user's
+own stored prompts rather than observations (opt-in, see below). This
+skill is mainly about finding what's already remembered,
 but recognizing when a request actually needs `add_observation` instead
 of a search matters too:
 
@@ -185,6 +187,30 @@ is still the right call for that:
 ```
 observation_context(query="why did we move off of sqlite")
 ```
+
+### `search_prompts` / `session_prompts` — the user's own words (opt-in)
+
+Every tool above returns *observations* — a model's summary of what was
+done. These two return what the user actually **asked**, verbatim, which
+answers a different question: "what did I ask about X last week?" rather
+than "what did we find out about X?". They only have data when the
+`prompt-context` hook ran with `-store-prompts` (or
+`CLAUDE_MEM_STORE_PROMPTS=1`); it is off by default because it stores the
+user's exact words, and `<private>…</private>` spans are never stored.
+An empty result is therefore usually "not enabled", not "never asked".
+
+```
+search_prompts(query="rate limiting", limit=10)      -- keyword search
+search_prompts(limit=20, offset=20)                  -- no query: enumerate newest first
+session_prompts(session_id="<the session_id>")       -- one session, in order
+```
+
+Each line is `[#<prompt_number> <session> <date>] <text>`; pass
+`all_projects: true` to `search_prompts` to reach beyond the current
+project. Reach for these when the user refers to something they *said*
+or *asked for* ("I told you to skip the tests last time", "what was I
+working on when I asked about the cache?") — an observation may not
+record the request itself, only the work that followed.
 
 ### `add_observation` — the one write tool
 
