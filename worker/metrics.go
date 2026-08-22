@@ -28,6 +28,8 @@ func WriteMetrics(w io.Writer, s Stats) error {
 		{"claude_mem_go_worker_observer_errors_total", "Observer turns that failed.", "counter", float64(s.ObserverErrors)},
 		{"claude_mem_go_worker_insert_errors_total", "Observations produced but the DB insert failed.", "counter", float64(s.InsertErrors)},
 		{"claude_mem_go_worker_embed_errors_total", "Inserts that succeeded but embedding failed.", "counter", float64(s.EmbedErrors)},
+		{"claude_mem_go_recall_searches_total", "Semantic recalls that ran (read path).", "counter", float64(s.RecallSearches)},
+		{"claude_mem_go_recall_empty_total", "Semantic recalls that returned no results at all.", "counter", float64(s.RecallEmpty)},
 		{"claude_mem_go_worker_cached_sessions", "Observer sessions currently cached.", "gauge", float64(s.CachedSessions)},
 		{"claude_mem_go_worker_pool_in_flight", "Pool slots currently held.", "gauge", float64(s.PoolInFlight)},
 		{"claude_mem_go_worker_pool_capacity", "Pool's maximum concurrent slots.", "gauge", float64(s.PoolCapacity)},

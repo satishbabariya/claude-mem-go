@@ -153,13 +153,26 @@ func cmdDoctor(args []string) int {
 		} else {
 			fmt.Print("… last worker activity before it stopped: ")
 		}
-		fmt.Printf("processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d",
+		fmt.Printf("processed=%d duplicates=%d observer_errors=%d insert_errors=%d embed_errors=%d pool=%d/%d cached_sessions=%d recall=%d/%d",
 			stats.Processed, stats.Duplicates, stats.ObserverErrors, stats.InsertErrors, stats.EmbedErrors,
-			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions)
+			stats.PoolInFlight, stats.PoolCapacity, stats.CachedSessions,
+			stats.RecallSearches-stats.RecallEmpty, stats.RecallSearches)
 		if stats.LastActivityAt != "" {
 			fmt.Printf(" last_activity=%s", stats.LastActivityAt)
 		}
 		fmt.Println()
+		// The read path's own failure signal. A recall that returns
+		// nothing raises no error and looks exactly like "nothing was
+		// relevant", so a persistently empty rate is the only way this
+		// surfaces at all — and this project has shipped two bugs (a
+		// cross-project leak, a project post-filter returning zero rows
+		// against 60,000 observations) that would have shown up here and
+		// nowhere else. Reported, never critical: on a young store,
+		// empty recalls are simply correct.
+		if stats.RecallSearches >= minRecallsToJudge && stats.RecallEmpty*2 > stats.RecallSearches {
+			fmt.Printf("  ↳ %d of %d semantic recalls returned NOTHING — expected on a nearly-empty store, but if it has content, semantic search is finding none of it\n",
+				stats.RecallEmpty, stats.RecallSearches)
+		}
 
 		// The daemon opened its store once, at start, and nothing
 		// re-reads $CLAUDE_MEM_DB afterwards — correctly, since a daemon
@@ -369,6 +382,12 @@ func cmdDoctor(args []string) int {
 // claim than the evidence supports. Telling the operator the number, and
 // the flag that fixes it, is the honest version.
 const efSearchRecallFloor = 10000
+
+// minRecallsToJudge is how many recalls must have happened before an
+// empty RATE means anything. Two empties out of two is a brand-new
+// install, not a broken one, and a check that fires there would train the
+// operator to ignore it.
+const minRecallsToJudge = 10
 
 // reportEfSearchRecall warns when a store is large enough for the ANN
 // approximation to matter while still running pgvector's default.

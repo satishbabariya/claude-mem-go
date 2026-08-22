@@ -285,6 +285,20 @@ var handleConnReadTimeout = 30 * time.Second
 // a local Unix socket) nor a real INFLIGHT query ever comes close to it.
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	// The same backstop process() already has, and for a stronger reason:
+	// this runs as a bare `go d.handleConn(...)` off the accept loop, so a
+	// panic here does not fail one turn — it takes down the whole daemon,
+	// and with it every project on the machine. process() is called from
+	// inside this function and protects itself, but everything BEFORE that
+	// call (payload reading, size checks, and the plain-text protocol
+	// dispatch, which reaches into daemon state that keeps growing) was
+	// unprotected. A crash here is also silent from the client's side,
+	// since every one of these messages is fire-and-forget.
+	defer func() {
+		if r := recover(); r != nil {
+			d.Log.Errorf("PANIC recovered in handleConn: %v", r)
+		}
+	}()
 	_ = conn.SetReadDeadline(time.Now().Add(handleConnReadTimeout))
 	// hook.MaxPayloadBytes, not unbounded: hook.Forward already enforces
 	// this on the client side, but this daemon is the one long-lived
@@ -329,6 +343,21 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 			reply = "1"
 		}
 		_, _ = conn.Write([]byte(reply))
+		return
+	}
+	if results, ok := hook.ParseRecallReport(raw); ok {
+		// One-way, like the privacy marker above: no reply, because the
+		// caller is on a latency path the user is waiting on.
+		d.counters.recordRecall(results)
+		// Persist immediately. Every other counter here is written by the
+		// capture path's own deferred recordStats, so without this a
+		// recall counter would only ever reach the stats file when some
+		// UNRELATED write happened to follow it — and doctor reads that
+		// file, not the live daemon. On a machine doing reads without
+		// writes it would have reported recall=0/0 forever, which is
+		// exactly what this instrumentation exists to prevent. Found by
+		// running the whole path end to end; the unit tests all passed.
+		d.recordStats()
 		return
 	}
 	if sid, promptHash, ok := hook.ParseDedupeQuery(raw); ok {

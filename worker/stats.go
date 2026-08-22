@@ -21,11 +21,18 @@ func DefaultStatsPath() string { return filepath.Join(store.DefaultHome(), "work
 
 // Stats is a point-in-time snapshot of the daemon's own activity.
 type Stats struct {
-	Processed      int64  `json:"processed"`       // turns that completed and persisted a new observation
-	Duplicates     int64  `json:"duplicates"`      // turns that hit an already-persisted content_hash (not an error)
-	ObserverErrors int64  `json:"observer_errors"` // the observer turn itself failed (including the one retry)
-	InsertErrors   int64  `json:"insert_errors"`   // an observation was produced but the DB insert failed
-	EmbedErrors    int64  `json:"embed_errors"`    // insert succeeded, embedding failed (keyword search still works)
+	Processed      int64 `json:"processed"`       // turns that completed and persisted a new observation
+	Duplicates     int64 `json:"duplicates"`      // turns that hit an already-persisted content_hash (not an error)
+	ObserverErrors int64 `json:"observer_errors"` // the observer turn itself failed (including the one retry)
+	InsertErrors   int64 `json:"insert_errors"`   // an observation was produced but the DB insert failed
+	EmbedErrors    int64 `json:"embed_errors"`    // insert succeeded, embedding failed (keyword search still works)
+	// RecallSearches/RecallEmpty describe the READ path. Every other
+	// counter here describes writes, which left this system's quietest
+	// failure — recall returning nothing — with no observable signal at
+	// all. Omitempty is deliberately NOT used: a zero RecallEmpty against
+	// a non-zero RecallSearches is a healthy reading worth seeing.
+	RecallSearches int64  `json:"recall_searches"`
+	RecallEmpty    int64  `json:"recall_empty"`
 	CachedSessions int    `json:"cached_sessions"`
 	PoolInFlight   int    `json:"pool_in_flight"`
 	PoolCapacity   int    `json:"pool_capacity"`
@@ -81,7 +88,24 @@ type statsCounters struct {
 	observerErrors atomic.Int64
 	insertErrors   atomic.Int64
 	embedErrors    atomic.Int64
+	// recallSearches/recallEmpty instrument the READ path, which nothing
+	// else here does. recallEmpty is the one that matters: a semantic
+	// search returning zero results is this system's worst failure mode
+	// precisely because it looks identical to "nothing was relevant".
+	recallSearches atomic.Int64
+	recallEmpty    atomic.Int64
 	lastActivityNS atomic.Int64 // UnixNano; 0 means never
+}
+
+// recordRecall notes one completed semantic recall and whether it came
+// back empty. Deliberately does NOT touch() the activity timestamp: that
+// field means "the capture pipeline is alive", and a read arriving while
+// no writes happen would make a stalled capture path look healthy.
+func (c *statsCounters) recordRecall(results int) {
+	c.recallSearches.Add(1)
+	if results == 0 {
+		c.recallEmpty.Add(1)
+	}
 }
 
 func (c *statsCounters) touch() { c.lastActivityNS.Store(time.Now().UnixNano()) }
@@ -97,6 +121,8 @@ func (c *statsCounters) snapshot(cachedSessions, poolInFlight, poolCapacity int)
 		ObserverErrors: c.observerErrors.Load(),
 		InsertErrors:   c.insertErrors.Load(),
 		EmbedErrors:    c.embedErrors.Load(),
+		RecallSearches: c.recallSearches.Load(),
+		RecallEmpty:    c.recallEmpty.Load(),
 		CachedSessions: cachedSessions,
 		PoolInFlight:   poolInFlight,
 		PoolCapacity:   poolCapacity,

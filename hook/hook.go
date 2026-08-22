@@ -308,3 +308,58 @@ func CheckDuplicatePrompt(socketPath, sessionID, promptHash string) (bool, error
 		return false, fmt.Errorf("malformed dedupe-query response %q", raw)
 	}
 }
+
+// recallPrefix opens ReportRecall's one-way protocol, distinct from every
+// other prefix this package defines so handleConn can tell them apart on
+// the shared socket.
+const recallPrefix = "RECALL "
+
+// ParseRecallReport reports whether raw is a recall outcome report (as
+// sent by ReportRecall) rather than a hook payload or another message
+// kind, and if so how many results the search returned. Called by the
+// worker daemon's handleConn.
+func ParseRecallReport(raw []byte) (results int, ok bool) {
+	s := string(raw)
+	if !strings.HasPrefix(s, recallPrefix) {
+		return 0, false
+	}
+	fields := strings.Fields(strings.TrimPrefix(s, recallPrefix))
+	if len(fields) != 1 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// ReportRecall tells the worker daemon that a semantic recall ran and how
+// many observations it returned, so the daemon can aggregate what is
+// otherwise unobservable.
+//
+// Every metric this project exposes describes the WRITE path — observations
+// persisted, duplicates, insert and embed errors. Nothing described the
+// READ path, and that is the half with the worse failure mode: a semantic
+// search that returns nothing raises no error and writes no log anyone
+// reads. It simply injects less memory than the store holds. This project
+// has already shipped that exact failure twice — a cross-project search
+// leak, and a project post-filter that returned zero rows for a project
+// holding 60,000 observations — and in both cases every counter stayed
+// green while recall was silently broken.
+//
+// Fire-and-forget, and deliberately so: recall is what the user is
+// waiting on, and instrumentation that can delay or fail an injection is
+// worse than no instrumentation. Every error here is swallowed by the
+// caller — a daemon that is not running simply means no metric, which is
+// the correct tradeoff for a telemetry write on a latency path.
+func ReportRecall(socketPath string, results int) error {
+	conn, err := net.DialTimeout("unix", socketPath, DialTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(DialTimeout))
+	_, err = conn.Write([]byte(fmt.Sprintf("%s%d", recallPrefix, results)))
+	return err
+}
