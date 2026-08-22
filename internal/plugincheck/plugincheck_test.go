@@ -16,7 +16,7 @@ import (
 // found once in the MCP server's hardcoded serverInfo.version. Reads the
 // REAL .claude-plugin/plugin.json, not a fixture.
 func TestPluginNameMatchesManifest(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", ".claude-plugin", "plugin.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".claude-plugin", "plugin.json"))
 	if err != nil {
 		t.Fatalf("reading the real plugin manifest: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestIsInstalledMatchesAKeyWithNoMarketplaceSuffix(t *testing.T) {
 func buildTestBinary(t *testing.T, dir string) {
 	t.Helper()
 	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, PluginName), "./cmd/claude-mem-go")
-	cmd.Dir = ".."
+	cmd.Dir = filepath.Join("..", "..")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building the test binary: %v\n%s", err, out)
 	}

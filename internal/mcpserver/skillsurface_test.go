@@ -30,7 +30,7 @@ func TestSkillsOnlyReferenceRealToolsAndParameters(t *testing.T) {
 			"broken, which would leave this guard passing forever while checking nothing", len(tools))
 	}
 
-	skills, err := filepath.Glob(filepath.Join("..", "skills", "*", "SKILL.md"))
+	skills, err := filepath.Glob(filepath.Join("..", "..", "skills", "*", "SKILL.md"))
 	if err != nil || len(skills) == 0 {
 		t.Fatalf("no skills found to check (%v)", err)
 	}

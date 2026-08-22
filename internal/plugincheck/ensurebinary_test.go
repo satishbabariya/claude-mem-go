@@ -16,7 +16,7 @@ import (
 // copy that could drift from it.
 func scriptPath(t *testing.T) string {
 	t.Helper()
-	p, err := filepath.Abs(filepath.Join("..", "scripts", "ensure-binary.sh"))
+	p, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ensure-binary.sh"))
 	if err != nil {
 		t.Fatalf("resolve script: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestEnsureBinaryWithoutPluginRootDoesNothing(t *testing.T) {
 
 func runHookScript(t *testing.T, root, arg string) (string, int) {
 	t.Helper()
-	p, err := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	p, err := filepath.Abs(filepath.Join("..", "..", "scripts", "run-hook.sh"))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestRunHookLogsForNonContextHooks(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 
-	p, _ := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	p, _ := filepath.Abs(filepath.Join("..", "..", "scripts", "run-hook.sh"))
 	cmd := exec.Command("bash", p, "hook")
 	cmd.Env = append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+root, "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -346,7 +346,7 @@ func TestRunHookDetachesStopAndStillDeliversThePayload(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	p, _ := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	p, _ := filepath.Abs(filepath.Join("..", "..", "scripts", "run-hook.sh"))
 	cmd := exec.Command("bash", p, "stop")
 	cmd.Env = append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+root, "HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader(`{"session_id":"s1","hook_event_name":"Stop"}`)
@@ -393,7 +393,7 @@ func TestRunHookDoesNotDetachOtherHooks(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	p, _ := filepath.Abs(filepath.Join("..", "scripts", "run-hook.sh"))
+	p, _ := filepath.Abs(filepath.Join("..", "..", "scripts", "run-hook.sh"))
 	cmd := exec.Command("bash", p, "hook")
 	cmd.Env = append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+root, "HOME="+t.TempDir())
 	out, err := cmd.CombinedOutput()
