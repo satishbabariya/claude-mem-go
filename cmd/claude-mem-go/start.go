@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/satishbabariya/claude-mem-go/internal/cli"
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -62,6 +63,19 @@ func cmdStart(args []string) int {
 				l.Warnf("could not stop the stale worker (pid=%d): %v — leaving it running", pid, err)
 				return 0
 			}
+		} else if v := storeMismatch(*statsPath, *dbPath); v.replace {
+			l.Warnf("worker at %s writes to %s but this session is configured for %s — the daemon "+
+				"predates that configuration; replacing it", *socketPath, v.daemonStore, memory.RedactDSN(*dbPath))
+			if err := worker.StopDaemon(v.pid, *socketPath); err != nil {
+				l.Warnf("could not stop the worker (pid=%d): %v — leaving it running", v.pid, err)
+				return 0
+			}
+		} else if v.differs {
+			l.Warnf("worker at %s writes to %s; this session is configured for %s. Both are explicit, "+
+				"so not restarting the daemon (that would thrash between two stores on every "+
+				"SessionStart) — captures from this session land in the daemon's store. Stop the "+
+				"daemon by hand if you actually reconfigured.", *socketPath, v.daemonStore, memory.RedactDSN(*dbPath))
+			return 0
 		} else {
 			l.Printf("worker already running at %s, nothing to do", *socketPath)
 			return 0
@@ -134,4 +148,40 @@ func staleDaemon(statsPath string) (stale bool, running string, pid int) {
 		return false, st.Version, st.PID
 	}
 	return true, st.Version, st.PID
+}
+
+// storeVerdict is storeMismatch's answer: differs says the daemon writes
+// somewhere other than this session's store; replace says it is safe to
+// restart it over that.
+type storeVerdict struct {
+	differs, replace bool
+	daemonStore      string
+	pid              int
+}
+
+// storeMismatch decides whether a running daemon should be replaced
+// because it writes to a different store than this session reads.
+//
+// The daemon opens its store once and never re-reads $CLAUDE_MEM_DB, so
+// a user who sets that variable after the daemon is up keeps writing to
+// the old store while every search reads the new one — doctor already
+// calls that critical. But `start` runs on every SessionStart, and two
+// shells can legitimately configure two stores; restarting on every
+// mismatch would thrash the daemon between them, which is worse than the
+// disease. The discriminator: replace only when the daemon is on the
+// BUILT-IN default path and this session is not — the daemon predates
+// the configuration. Two explicit, different stores are reported, not
+// acted on.
+func storeMismatch(statsPath, dbPath string) storeVerdict {
+	st, err := worker.ReadStatsFile(statsPath)
+	if err != nil || st.Store == "" || st.PID <= 0 {
+		return storeVerdict{}
+	}
+	want := memory.RedactDSN(dbPath)
+	if st.Store == want {
+		return storeVerdict{}
+	}
+	v := storeVerdict{differs: true, daemonStore: st.Store, pid: st.PID}
+	v.replace = st.Store == memory.RedactDSN(memory.BuiltinDBPath())
+	return v
 }

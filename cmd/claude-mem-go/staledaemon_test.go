@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -88,5 +89,41 @@ func TestStaleDaemonIsConservativeWhenUnknown(t *testing.T) {
 	}
 	if stale, _, _ := staleDaemon(bad); stale {
 		t.Error("a corrupt stats file reported stale, want conservative false")
+	}
+}
+
+func TestStoreMismatchReplacesADaemonThatPredatesConfiguration(t *testing.T) {
+	p := writeStats(t, worker.Stats{Version: currentBuildVersion(), PID: 4242, Store: memory.BuiltinDBPath()})
+	v := storeMismatch(p, "/elsewhere/configured.db")
+	if !v.differs || !v.replace {
+		t.Fatalf("daemon on the built-in store vs a configured session = %+v; want differs+replace", v)
+	}
+	if v.pid != 4242 {
+		t.Fatalf("pid = %d, want 4242", v.pid)
+	}
+}
+
+func TestStoreMismatchDoesNotThrashBetweenTwoExplicitStores(t *testing.T) {
+	p := writeStats(t, worker.Stats{Version: currentBuildVersion(), PID: 4242, Store: "/projects/a/mem.db"})
+	v := storeMismatch(p, "/projects/b/mem.db")
+	if !v.differs {
+		t.Fatal("two different explicit stores were not reported as differing")
+	}
+	if v.replace {
+		t.Fatal("two explicit stores triggered a restart — every SessionStart in either shell would bounce the daemon")
+	}
+}
+
+func TestStoreMismatchIsQuietWhenStoresMatchOrUnknown(t *testing.T) {
+	p := writeStats(t, worker.Stats{Version: currentBuildVersion(), PID: 4242, Store: "/same/mem.db"})
+	if v := storeMismatch(p, "/same/mem.db"); v.differs || v.replace {
+		t.Fatalf("matching stores reported %+v", v)
+	}
+	old := writeStats(t, worker.Stats{Version: currentBuildVersion(), PID: 4242}) // pre-Store daemon
+	if v := storeMismatch(old, "/any/mem.db"); v.differs || v.replace {
+		t.Fatalf("a stats file without a store was judged %+v; unknown must be conservative", v)
+	}
+	if v := storeMismatch(filepath.Join(t.TempDir(), "missing.json"), "/any/mem.db"); v.differs {
+		t.Fatal("a missing stats file was judged as a mismatch")
 	}
 }
