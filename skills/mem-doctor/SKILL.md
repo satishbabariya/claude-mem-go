@@ -65,6 +65,11 @@ Don't use this for "did we solve X before" — that's `mem-search`.
     "memory is being written somewhere else", not as data loss — nothing
     is lost, it is in the store `doctor` names. The fix is to restart the
     daemon (stop it; the next SessionStart respawns it).
+    `start` replaces a daemon that predates the user's `$CLAUDE_MEM_DB`
+    on the next SessionStart (daemon on the built-in path, session
+    configured elsewhere). When both stores are explicit it deliberately
+    does not — that would thrash between them — so tell the user to stop
+    the daemon by hand if they really reconfigured.
   - `… the worker daemon is running an older build` — the daemon applies
     the rules it started with, including how project names are derived,
     so writes and reads can silently disagree. SessionStart replaces it

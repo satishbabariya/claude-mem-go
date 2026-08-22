@@ -290,8 +290,9 @@ func checkWorker(socketPath, statsPath, redactedDBPath string, buildInfo *debug.
 		fmt.Printf("✘ the worker daemon is writing to a DIFFERENT store than this command reads:\n")
 		fmt.Printf("    worker:    %s\n", stats.Store)
 		fmt.Printf("    this cmd:  %s\n", redactedDBPath)
-		fmt.Printf("    Every captured observation goes to the worker's store. Restart the daemon to pick up\n")
-		fmt.Printf("    the current $%s (stop it and let SessionStart respawn it).\n", memory.DBPathEnvVar)
+		fmt.Printf("    Every captured observation goes to the worker's store. `start` replaces a daemon\n")
+		fmt.Printf("    that predates your $%s on the next SessionStart; if both stores are explicit\n", memory.DBPathEnvVar)
+		fmt.Printf("    it will not (that would thrash between them) — stop the daemon by hand instead.\n")
 		return false
 	}
 	return true

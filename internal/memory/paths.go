@@ -62,5 +62,12 @@ func DefaultDBPath() string {
 	if v := strings.TrimSpace(os.Getenv(DBPathEnvVar)); v != "" {
 		return v
 	}
-	return filepath.Join(DefaultHome(), "observations.db")
+	return BuiltinDBPath()
 }
+
+// BuiltinDBPath is the store used when nothing configures one: the path
+// DefaultDBPath falls back to with $CLAUDE_MEM_DB unset. Exposed so
+// `start` can tell "the daemon predates the user's configuration" (it is
+// on this path, the session is not) from "two sessions legitimately
+// configured two stores" (both explicit), which must not restart it.
+func BuiltinDBPath() string { return filepath.Join(DefaultHome(), "observations.db") }
