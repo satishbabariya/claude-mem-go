@@ -40,12 +40,73 @@ func testDSN() string { return os.Getenv(testDSNEnvVar) }
 // this package's Postgres tests goes through it — including the few that
 // build their own Store instead of using openTestStore — so there is
 // exactly one place that can decide to run against a real database.
+// nearMissDSNEnvVars are names close enough to testDSNEnvVar that setting
+// one is obviously an attempt to run these tests, not a coincidence.
+//
+// This exists because the failure it prevents actually happened, for a
+// long time, unnoticed: CLAUDE_MEM_TEST_POSTGRES_DSN was exported instead
+// of CLAUDE_MEM_GO_TEST_POSTGRES_DSN — one missing "GO" — and every local
+// run printed
+//
+//	ok  	claude-mem-go/postgres	5.145s
+//
+// while 57 of 68 tests skipped and only 11 ran. `go test` prints "ok" for
+// a package whose tests all skip, and the skip reason only shows under
+// -v, so the output looked like a passing Postgres suite for weeks of
+// local verification. CI had the right name, so the tests were genuinely
+// running there — but every local "verified against real Postgres" claim
+// was weaker than it appeared.
+//
+// CLAUDE_MEM_TEST_POSTGRES_URL is on the list because it is what real
+// claude-mem's own Postgres tests read, which makes it the single most
+// likely thing for someone moving between the two codebases to export.
+//
+// Skipping is the right default for an ABSENT variable — this backend
+// needs Docker and shouldn't break `go test ./...` for someone who hasn't
+// started it. It is the wrong default for someone who plainly meant to
+// run these tests and typo'd the name.
+var nearMissDSNEnvVars = []string{
+	"CLAUDE_MEM_TEST_POSTGRES_DSN",
+	"CLAUDE_MEM_TEST_POSTGRES_URL",
+	"CLAUDE_MEM_GO_TEST_POSTGRES_URL",
+	"CLAUDE_MEM_POSTGRES_DSN",
+	"CLAUDE_MEM_GO_POSTGRES_DSN",
+	"POSTGRES_DSN",
+}
+
+// nearMissDSNSet returns the first near-miss variable that is set, or ""
+// when none is. Split out from requireTestDSN so the detection itself is
+// testable without a t.Fatalf that would abort the test asserting it.
+func nearMissDSNSet() string {
+	if os.Getenv(testDSNEnvVar) != "" {
+		return ""
+	}
+	for _, wrong := range nearMissDSNEnvVars {
+		if os.Getenv(wrong) != "" {
+			return wrong
+		}
+	}
+	return ""
+}
+
 func requireTestDSN(t *testing.T) string {
 	t.Helper()
 	dsn := testDSN()
 	if dsn == "" {
-		t.Skipf("%s is not set — these tests write real rows and will not guess at a database. "+
-			"Point it at a THROWAWAY store, never one you actually use.", testDSNEnvVar)
+		if wrong := nearMissDSNSet(); wrong != "" {
+			// Fatal, not Skip: this person is trying to run these tests,
+			// and silently skipping is how a whole suite reports "ok"
+			// while running almost none of itself.
+			t.Fatalf("%s is set, but these tests read %s — did you mean %s?\n"+
+				"Nothing ran against Postgres. Re-run with:\n"+
+				"  %s=$%s go test ./postgres/...",
+				wrong, testDSNEnvVar, testDSNEnvVar, testDSNEnvVar, wrong)
+		}
+		t.Skipf("%s is not set — these tests write real rows, so they will not guess at a database. "+
+			"Point it at a THROWAWAY store, never the one you actually use, e.g.\n"+
+			"  docker compose up -d && docker exec claude-mem-go-postgres-1 psql -U claudemem -d claudemem -c 'CREATE DATABASE claudemem_test'\n"+
+			"  %s=postgres://claudemem:claudemem@localhost:55432/claudemem_test?sslmode=disable go test ./postgres/...",
+			testDSNEnvVar, testDSNEnvVar)
 	}
 	return dsn
 }
@@ -56,14 +117,7 @@ func requireTestDSN(t *testing.T) string {
 // `go test ./...` for someone who hasn't started it.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skipf("%s is not set — these tests write real rows, so they will not guess at a database. "+
-			"Point it at a THROWAWAY store, never the one you actually use, e.g.\n"+
-			"  docker compose up -d && docker exec claude-mem-go-postgres-1 psql -U claudemem -d claudemem -c 'CREATE DATABASE claudemem_test'\n"+
-			"  %s=postgres://claudemem:claudemem@localhost:55432/claudemem_test?sslmode=disable go test ./postgres/...",
-			testDSNEnvVar, testDSNEnvVar)
-	}
+	dsn := requireTestDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	st, err := Open(ctx, dsn, DefaultEmbedDims, 0)
@@ -1139,4 +1193,51 @@ func TestColumnEmbedDimsReadsTheRealWidth(t *testing.T) {
 	if st.embedDims != typmod {
 		t.Fatalf("Store.embedDims = %d but the column is vector(%d)", st.embedDims, typmod)
 	}
+}
+
+// TestNearMissDSNDetection guards the guard. The bug it exists for was
+// invisible precisely because the failure mode was silence: a package
+// whose tests all skip still prints "ok", so 57 skipped tests looked
+// exactly like a passing Postgres suite.
+func TestNearMissDSNDetection(t *testing.T) {
+	t.Run("the exact mistake that was made", func(t *testing.T) {
+		t.Setenv(testDSNEnvVar, "")
+		t.Setenv("CLAUDE_MEM_TEST_POSTGRES_DSN", "postgres://x/y")
+		if got := nearMissDSNSet(); got != "CLAUDE_MEM_TEST_POSTGRES_DSN" {
+			t.Errorf("nearMissDSNSet() = %q, want the near-miss name", got)
+		}
+	})
+
+	// Real claude-mem's own Postgres tests read this name, which makes it
+	// the likeliest thing for someone moving between the two codebases to
+	// export.
+	t.Run("real claude-mem's variable name", func(t *testing.T) {
+		t.Setenv(testDSNEnvVar, "")
+		t.Setenv("CLAUDE_MEM_TEST_POSTGRES_URL", "postgres://x/y")
+		if got := nearMissDSNSet(); got != "CLAUDE_MEM_TEST_POSTGRES_URL" {
+			t.Errorf("nearMissDSNSet() = %q, want the near-miss name", got)
+		}
+	})
+
+	// The correct variable wins outright: a near-miss left over in a shell
+	// must not turn a correctly-configured run into a failure.
+	t.Run("correct variable set alongside a near-miss", func(t *testing.T) {
+		t.Setenv(testDSNEnvVar, "postgres://real/db")
+		t.Setenv("CLAUDE_MEM_TEST_POSTGRES_DSN", "postgres://x/y")
+		if got := nearMissDSNSet(); got != "" {
+			t.Errorf("nearMissDSNSet() = %q, want \"\" — the correct variable is set, so nothing is wrong", got)
+		}
+	})
+
+	// Nothing set at all is the ordinary "Docker isn't running" case and
+	// must stay a clean skip, not a failure.
+	t.Run("nothing set is not a near miss", func(t *testing.T) {
+		t.Setenv(testDSNEnvVar, "")
+		for _, v := range nearMissDSNEnvVars {
+			t.Setenv(v, "")
+		}
+		if got := nearMissDSNSet(); got != "" {
+			t.Errorf("nearMissDSNSet() = %q, want \"\" when nothing is set", got)
+		}
+	})
 }

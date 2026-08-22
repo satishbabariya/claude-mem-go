@@ -136,10 +136,7 @@ func equalStrs(a, b []string) bool {
 // the target is open, which is why the store is closed first.
 func openThrowawayStore(t *testing.T) (*Store, string) {
 	t.Helper()
-	base := testDSN()
-	if base == "" {
-		t.Skipf("%s is not set", testDSNEnvVar)
-	}
+	base := requireTestDSN(t)
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatalf("parsing %s: %v", testDSNEnvVar, err)
