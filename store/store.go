@@ -94,6 +94,18 @@ type Observation struct {
 	Concepts      []string
 	FilesRead     []string
 	FilesModified []string
+	// NextSteps is what was left unfinished — populated for session
+	// summaries and empty for ordinary per-tool-call observations.
+	//
+	// Real claude-mem keeps a whole separate session_summaries table with
+	// structured request/investigated/learned/completed/next_steps
+	// columns; this port folds the session summary into the same
+	// observations table, which loses nothing EXCEPT this field, because
+	// title/subtitle/narrative/facts already carry the rest. Next steps
+	// are different in kind: every other field records what happened,
+	// while this one records what had not happened yet, which is exactly
+	// what the NEXT session needs told to it first.
+	NextSteps []string
 }
 
 // ValidObservationTypes is the actual, small, fixed vocabulary this
@@ -190,6 +202,11 @@ func ParseXML(raw string) (Observation, error) {
 		Concepts:      extractItems(body, "concepts", "concept"),
 		FilesRead:     extractItems(body, "files_read", "file"),
 		FilesModified: extractItems(body, "files_modified", "file"),
+		// Parsed for every observation, though only the session-summary
+		// prompt asks for it — an ordinary per-tool-call turn simply has
+		// no <next_steps> block and yields nil, which is correct rather
+		// than special-cased.
+		NextSteps: extractItems(body, "next_steps", "step"),
 	}, nil
 }
 
@@ -210,6 +227,7 @@ CREATE TABLE IF NOT EXISTS observations (
 	facts             TEXT NOT NULL DEFAULT '[]',
 	narrative         TEXT,
 	concepts          TEXT NOT NULL DEFAULT '[]',
+	next_steps        TEXT NOT NULL DEFAULT '[]',
 	files_read        TEXT NOT NULL DEFAULT '[]',
 	files_modified    TEXT NOT NULL DEFAULT '[]',
 	cost_usd          REAL NOT NULL DEFAULT 0,
@@ -303,12 +321,12 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o Ob
 	res, err := s.db.Exec(
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
-			 concepts, files_read, files_modified, cost_usd, created_at, created_at_epoch, content_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 concepts, files_read, files_modified, next_steps, cost_usd, created_at, created_at_epoch, content_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(content_hash) DO NOTHING`,
 		sessionID, project, toolName, o.Type, o.Title, o.Subtitle,
 		jsonArray(o.Facts), o.Narrative, jsonArray(o.Concepts),
-		jsonArray(o.FilesRead), jsonArray(o.FilesModified),
+		jsonArray(o.FilesRead), jsonArray(o.FilesModified), jsonArray(o.NextSteps),
 		costUSD, createdAt, createdAtEpoch, contentHash,
 	)
 	if err != nil {

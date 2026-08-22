@@ -79,7 +79,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 	// exclude them from the export.
 	rows, err := s.db.Query(`
 		SELECT o.id, o.session_id, o.project, o.tool_name, o.type, o.title, o.subtitle,
-		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.next_steps,
 		       o.cost_usd, o.created_at, o.created_at_epoch, o.content_hash,
 		       v.dims, v.embedding
 		FROM observations o
@@ -96,11 +96,11 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 	for rows.Next() {
 		var r ExportRow
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
+		var facts, concepts, filesRead, filesModified, nextSteps string
 		var dims sql.NullInt64
 		var embeddingBlob []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative, &concepts, &filesRead, &filesModified,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative, &concepts, &filesRead, &filesModified, &nextSteps,
 			&r.CostUSD, &r.CreatedAt, &r.CreatedAtEpoch, &r.ContentHash,
 			&dims, &embeddingBlob); err != nil {
 			return nil, fmt.Errorf("scan export row: %w", err)
@@ -110,6 +110,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]ExportRow, error) {
 		r.Observation.Concepts = parseJSONArray(concepts)
 		r.Observation.FilesRead = parseJSONArray(filesRead)
 		r.Observation.FilesModified = parseJSONArray(filesModified)
+		r.Observation.NextSteps = parseJSONArray(nextSteps)
 		if dims.Valid {
 			vec, err := decodeVector(embeddingBlob, int(dims.Int64))
 			if err != nil {

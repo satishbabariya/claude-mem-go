@@ -252,7 +252,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE project = $1
 		ORDER BY created_at_epoch DESC, id DESC
@@ -266,10 +266,10 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 	for rows.Next() {
 		var r store.SearchResult
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
+		var facts, concepts, filesRead, filesModified, nextSteps []byte
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
+			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan recent observation: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -277,6 +277,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]store.SearchResult
 		r.Observation.Concepts = jsonDecode(concepts)
 		r.Observation.FilesRead = jsonDecode(filesRead)
 		r.Observation.FilesModified = jsonDecode(filesModified)
+		r.Observation.NextSteps = jsonDecode(nextSteps)
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -34,6 +34,22 @@ process (this project doesn't cut tagged releases on a schedule).
   all under 4ms p50 — monotonic, and the opposite conclusion from the
   retracted one. **The default is not good enough at this size.**
 
+- **`next_steps`: the one field of real claude-mem's session summary this
+  port had no equivalent for.** Real claude-mem keeps a separate
+  `session_summaries` table with structured `request`/`investigated`/
+  `learned`/`completed`/`next_steps`/`files_read`/`files_edited`/`notes`
+  columns. This port folds the session summary into the same
+  `observations` table, which loses nothing except that one column, since
+  title/subtitle/narrative/facts already carry the rest. Next steps are
+  different in kind: every other field records what HAPPENED, while this
+  records what had not happened yet — which is what the next session most
+  needs told to it. SessionStart now leads with an "Unfinished from the
+  last session" block when there is one, taken from the most recent
+  summary only, because next steps from three sessions ago were probably
+  done and presenting stale intentions as current is worse than omitting
+  them. Schema migration 7 (SQLite) and 5 (Postgres), with both upgrade
+  paths tested against a store that predates the column.
+
 - **The read path is now instrumented at all.** Every metric this project
   exposed described writes — observations persisted, duplicates, insert
   and embed errors — and reads have the worse failure mode: a recall that

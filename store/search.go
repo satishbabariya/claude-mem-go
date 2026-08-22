@@ -330,7 +330,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, erro
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified, created_at_epoch
+		       facts, narrative, concepts, files_read, files_modified, next_steps, created_at_epoch
 		FROM observations
 		WHERE project = ?
 		ORDER BY created_at_epoch DESC, id DESC
@@ -344,10 +344,10 @@ func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, erro
 	for rows.Next() {
 		var r SearchResult
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified string
+		var facts, concepts, filesRead, filesModified, nextSteps string
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
 			&nf.title, &nf.subtitle, &facts, &nf.narrative,
-			&concepts, &filesRead, &filesModified, &r.CreatedAtEpoch); err != nil {
+			&concepts, &filesRead, &filesModified, &nextSteps, &r.CreatedAtEpoch); err != nil {
 			return nil, fmt.Errorf("scan recent observation: %w", err)
 		}
 		nf.apply(&r.Observation)
@@ -355,6 +355,7 @@ func (s *Store) RecentByProject(project string, limit int) ([]SearchResult, erro
 		r.Observation.Concepts = parseJSONArray(concepts)
 		r.Observation.FilesRead = parseJSONArray(filesRead)
 		r.Observation.FilesModified = parseJSONArray(filesModified)
+		r.Observation.NextSteps = parseJSONArray(nextSteps)
 		out = append(out, r)
 	}
 	return out, rows.Err()

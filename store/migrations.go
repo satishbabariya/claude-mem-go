@@ -123,6 +123,33 @@ var migrations = []migrate.Migration{
 			return err
 		},
 	},
+	{
+		// next_steps carries what a session left UNFINISHED. Real
+		// claude-mem keeps a separate session_summaries table whose
+		// columns include it; this port folds summaries into observations,
+		// and every other column of that table already had an equivalent
+		// here — this was the one that did not.
+		//
+		// SQLite has no IF NOT EXISTS for ADD COLUMN, and migrations here
+		// must be idempotent because the SessionStart race can retry the
+		// whole sequence. The pragma check below is how that is achieved
+		// without depending on parsing an error string.
+		Version: 7,
+		Name:    "next_steps column for session summaries",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			var n int
+			if err := db.QueryRowContext(ctx,
+				`SELECT count(*) FROM pragma_table_info('observations') WHERE name = 'next_steps'`).Scan(&n); err != nil {
+				return err
+			}
+			if n > 0 {
+				return nil
+			}
+			_, err := db.ExecContext(ctx,
+				`ALTER TABLE observations ADD COLUMN next_steps TEXT NOT NULL DEFAULT '[]'`)
+			return err
+		},
+	},
 }
 
 func runMigrations(db *sql.DB) error {

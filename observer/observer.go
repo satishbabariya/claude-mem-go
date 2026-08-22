@@ -191,7 +191,15 @@ func BuildSummaryPrompt(w SummaryWindow) string {
 	b.WriteString("  <facts>\n    <fact>...</fact>\n    <fact>...</fact>\n  </facts>\n")
 	b.WriteString("  <narrative>one paragraph describing what was accomplished this session</narrative>\n")
 	b.WriteString("  <concepts>\n    <concept>...</concept>\n  </concepts>\n")
-	b.WriteString("</observation>\n")
+	// The one field real claude-mem's separate session_summaries table has
+	// that this port's observation shape did not. Every other field here
+	// records what HAPPENED; this records what had not happened yet, which
+	// is what the next session most needs told to it. Asked for only in
+	// the summary prompt — a per-tool-call turn has no meaningful answer.
+	b.WriteString("  <next_steps>\n    <step>anything left unfinished, or explicitly stated as the next thing to do</step>\n  </next_steps>\n")
+	b.WriteString("</observation>\n\n")
+	b.WriteString("Leave <next_steps> empty if the session genuinely finished what it set out to do. ")
+	b.WriteString("Do not invent follow-up work to fill it.\n")
 	return b.String()
 }
 

@@ -19,7 +19,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]store.ExportRow, error) {
 	limit = clampNegativeLimit(limit)
 	rows, err := s.db.Query(`
 		SELECT id, session_id, project, tool_name, type, title, subtitle,
-		       facts, narrative, concepts, files_read, files_modified,
+		       facts, narrative, concepts, files_read, files_modified, next_steps,
 		       cost_usd, created_at, created_at_epoch, content_hash, embedding
 		FROM observations
 		WHERE id > $1
@@ -34,11 +34,11 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]store.ExportRow, error) {
 	for rows.Next() {
 		var r store.ExportRow
 		var nf nullableTextFields
-		var facts, concepts, filesRead, filesModified []byte
+		var facts, concepts, filesRead, filesModified, nextSteps []byte
 		var createdAt time.Time
 		var embeddingText sql.NullString
 		if err := rows.Scan(&r.ID, &r.SessionID, &r.Project, &r.ToolName, &r.Observation.Type,
-			&nf.title, &nf.subtitle, &facts, &nf.narrative, &concepts, &filesRead, &filesModified,
+			&nf.title, &nf.subtitle, &facts, &nf.narrative, &concepts, &filesRead, &filesModified, &nextSteps,
 			&r.CostUSD, &createdAt, &r.CreatedAtEpoch, &r.ContentHash, &embeddingText); err != nil {
 			return nil, fmt.Errorf("scan export row: %w", err)
 		}
@@ -47,6 +47,7 @@ func (s *Store) ExportAll(afterID int64, limit int) ([]store.ExportRow, error) {
 		r.Observation.Concepts = jsonDecode(concepts)
 		r.Observation.FilesRead = jsonDecode(filesRead)
 		r.Observation.FilesModified = jsonDecode(filesModified)
+		r.Observation.NextSteps = jsonDecode(nextSteps)
 		// CreatedAt travels as an RFC3339 string in ExportRow so both
 		// backends' export files share one on-the-wire format regardless
 		// of whether the source column is SQLite TEXT or Postgres

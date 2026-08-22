@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS observations (
 	facts             JSONB NOT NULL DEFAULT '[]',
 	narrative         TEXT,
 	concepts          JSONB NOT NULL DEFAULT '[]',
+	next_steps        JSONB NOT NULL DEFAULT '[]',
 	files_read        JSONB NOT NULL DEFAULT '[]',
 	files_modified    JSONB NOT NULL DEFAULT '[]',
 	cost_usd          DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -516,6 +517,21 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 				return err
 			},
 		},
+		{
+			// next_steps carries what a session left UNFINISHED — the one
+			// column of real claude-mem's separate session_summaries table
+			// with no equivalent here, since title/subtitle/narrative/facts
+			// already cover the rest. Postgres has IF NOT EXISTS for ADD
+			// COLUMN, so this is idempotent without a catalog probe (the
+			// SQLite side needs one; see store/migrations.go v7).
+			Version: 5,
+			Name:    "next_steps column for session summaries",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx,
+					`ALTER TABLE observations ADD COLUMN IF NOT EXISTS next_steps JSONB NOT NULL DEFAULT '[]'`)
+				return err
+			},
+		},
 	}
 	if err := migrate.Run(ctx, db, migrate.PostgresPlaceholder, migrations); err != nil {
 		db.Close()
@@ -572,13 +588,13 @@ func (s *Store) insertRow(sessionID, project, toolName, contentHash string, o st
 	err := s.db.QueryRow(
 		`INSERT INTO observations
 			(session_id, project, tool_name, type, title, subtitle, facts, narrative,
-			 concepts, files_read, files_modified, cost_usd, created_at, created_at_epoch, content_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			 concepts, files_read, files_modified, next_steps, cost_usd, created_at, created_at_epoch, content_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		 ON CONFLICT (content_hash) DO NOTHING
 		 RETURNING id`,
 		sessionID, project, toolName, o.Type, o.Title, o.Subtitle,
 		jsonEncode(o.Facts), o.Narrative, jsonEncode(o.Concepts),
-		jsonEncode(o.FilesRead), jsonEncode(o.FilesModified),
+		jsonEncode(o.FilesRead), jsonEncode(o.FilesModified), jsonEncode(o.NextSteps),
 		costUSD, createdAt, createdAtEpoch, contentHash,
 	).Scan(&id)
 
