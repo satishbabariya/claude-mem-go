@@ -93,3 +93,42 @@ type ExportRow struct {
 	// that's a legitimate, common state, not an error.
 	Embedding []float32 `json:"embedding,omitempty"`
 }
+
+// PromptResult is one stored user prompt, as returned by SearchPrompts and
+// PromptsBySession. This is the one kind of row in the store that holds
+// the user's VERBATIM words rather than a model's summary of them, which
+// is why writing it is opt-in (see cmd/claude-mem-go/prompt_context.go)
+// and why Text has already had every <private> span stripped before it
+// was ever persisted.
+type PromptResult struct {
+	ID        int64
+	SessionID string
+	Project   string
+	// PromptNumber is the 1-based position of this prompt within its
+	// session — the same column real claude-mem's user_prompts table keeps.
+	PromptNumber   int
+	Text           string
+	CreatedAtEpoch int64 // Unix epoch milliseconds, same unit as SearchResult
+}
+
+// PromptRowKind is the value PromptRow.Kind carries in an export file. The
+// export JSONL format predates prompts, so observation rows have no "kind"
+// at all: a row without one is an observation (backward compatible), and a
+// row with this value is a prompt.
+const PromptRowKind = "prompt"
+
+// PromptRow is one user prompt as read back by ExportPrompts — everything
+// needed to reinsert it via ImportPrompt, preserving its identity
+// ((SessionID, PromptNumber), the idempotency key) and its original
+// timing. Without this, a backup or a SQLite<->Postgres migration would
+// silently drop every stored prompt.
+type PromptRow struct {
+	Kind           string `json:"kind"`
+	ID             int64  `json:"id"`
+	SessionID      string `json:"session_id"`
+	Project        string `json:"project"`
+	PromptNumber   int    `json:"prompt_number"`
+	Text           string `json:"prompt_text"`
+	CreatedAt      string `json:"created_at"`
+	CreatedAtEpoch int64  `json:"created_at_epoch"`
+}

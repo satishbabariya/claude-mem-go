@@ -10,6 +10,8 @@ import (
 // shadow table or cascaded rows to worry about here: search_vector is a
 // generated column on the same row, and embedding is a plain column on the
 // same row, so a plain DELETE cleans up everything in one statement.
+// Stored user prompts older than the same cutoff are deleted too, not
+// counted — the returned figure has always meant observations.
 func (s *Store) Prune(ctx context.Context, project string, cutoffEpoch int64, dryRun bool) (int64, error) {
 	args := []any{cutoffEpoch}
 	scope := ""
@@ -34,6 +36,9 @@ func (s *Store) Prune(ctx context.Context, project string, cutoffEpoch int64, dr
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("rows affected after prune: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_prompts WHERE created_at_epoch < $1 `+scope, args...); err != nil {
+		return n, fmt.Errorf("prune user prompts older than cutoff: %w", err)
 	}
 	return n, nil
 }

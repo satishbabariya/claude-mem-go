@@ -60,5 +60,8 @@ func (s *Store) Stats(ctx context.Context) (memory.StoreStats, error) {
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observation_vectors`).Scan(&out.Embedded); err != nil {
 		return memory.StoreStats{}, fmt.Errorf("stats: count embeddings: %w", err)
 	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM user_prompts`).Scan(&out.Prompts); err != nil {
+		return memory.StoreStats{}, fmt.Errorf("stats: count prompts: %w", err)
+	}
 	return out, nil
 }

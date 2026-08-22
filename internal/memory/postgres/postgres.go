@@ -580,6 +580,17 @@ func Open(ctx context.Context, dsn string, embedDims, hnswEfSearch int) (*Store,
 				return err
 			},
 		},
+		{
+			// user_prompts: the user's own words, written only when the
+			// opt-in -store-prompts / CLAUDE_MEM_STORE_PROMPTS switch is
+			// on. Every statement is IF NOT EXISTS; see prompts.go.
+			Version: 6,
+			Name:    "user_prompts table + tsvector index",
+			Apply: func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx, userPromptsSchemaSQL)
+				return err
+			},
+		},
 	}
 	if err := migrate.Run(ctx, db, migrate.PostgresPlaceholder, migrations); err != nil {
 		db.Close()

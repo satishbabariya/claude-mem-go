@@ -63,6 +63,21 @@ func (panickingBackend) ImportRow(context.Context, memory.ExportRow) (memory.Ins
 	panic("panickingBackend: ImportRow")
 }
 func (panickingBackend) Stats(ctx context.Context) (memory.StoreStats, error) { panic("boom") }
+func (panickingBackend) InsertPrompt(context.Context, string, string, string) (int64, error) {
+	panic("panickingBackend: InsertPrompt")
+}
+func (panickingBackend) SearchPrompts(context.Context, string, string, int, int) ([]memory.PromptResult, error) {
+	panic("panickingBackend: SearchPrompts")
+}
+func (panickingBackend) PromptsBySession(context.Context, string, string, int) ([]memory.PromptResult, error) {
+	panic("panickingBackend: PromptsBySession")
+}
+func (panickingBackend) ExportPrompts(context.Context, int64, int) ([]memory.PromptRow, error) {
+	panic("panickingBackend: ExportPrompts")
+}
+func (panickingBackend) ImportPrompt(context.Context, memory.PromptRow) (bool, error) {
+	panic("panickingBackend: ImportPrompt")
+}
 
 func (panickingBackend) HealthDetails(ctx context.Context) (map[string]string, error) {
 	panic("panickingBackend: HealthDetails")
