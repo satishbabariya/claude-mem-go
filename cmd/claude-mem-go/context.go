@@ -10,6 +10,7 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
@@ -31,7 +32,7 @@ import (
 // exactly like cmdMCP's stdout constraint.
 func cmdContext(args []string) int {
 	fs := flag.NewFlagSet("context", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 5, "how many recent observations to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+

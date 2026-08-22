@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/mcpserver"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
@@ -13,8 +14,8 @@ import (
 // line there would corrupt the stream for whatever real client is reading it.
 func cmdMCP(args []string) int {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for "+
+	dbPath := cli.DBFlag(fs)
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for "+
 		"semantic_search_observations (empty disables that tool)")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+
 		"query-time recall/speed tradeoff for semantic_search_observations/observation_context, "+

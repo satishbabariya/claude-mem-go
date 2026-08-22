@@ -10,6 +10,7 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -26,7 +27,7 @@ import (
 // an actual Read tool call, before writing any of this.
 func cmdFileContext(args []string) int {
 	fs := flag.NewFlagSet("file-context", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 5, "how many prior observations about this file to inject")
 	excludedProjects := fs.String("excluded-projects", "", "comma-separated glob patterns (supports *, **, ?, and a leading ~) — "+
 		"a matching project gets no automatic file-context injection, the real claude-mem CLAUDE_MEM_EXCLUDED_PROJECTS feature; "+

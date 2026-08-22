@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
@@ -16,11 +17,11 @@ import (
 func cmdIngest(args []string) int {
 	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	transcriptPath := fs.String("transcript", "", "transcript .jsonl path; "+
 		"defaults to the most recently modified one under ~/.claude/projects/*/*.jsonl")
 	limit := fs.Int("limit", 3, "how many real tool_use/tool_result pairs to ingest")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embeddings "+
 		"(empty to skip embedding — observations are still persisted, just not semantically searchable)")
 	fs.Parse(args)
 	*limit = clampLimit(*limit, 3, 100)

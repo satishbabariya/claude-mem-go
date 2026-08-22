@@ -6,16 +6,16 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
 func cmdWorker(args []string) int {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings "+
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embeddings "+
 		"(empty to skip embedding — observations are still persisted, just not semantically searchable)")
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket to listen on")
 	// Symmetric with -socket, and needed for the same reason: a daemon
 	// can already be run on a non-default socket, but its stats file was

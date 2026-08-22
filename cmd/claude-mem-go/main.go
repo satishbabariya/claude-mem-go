@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/logging"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 )
@@ -109,7 +110,7 @@ func usage() {
 }
 
 func openLog(name string) *logging.Logger {
-	w, err := newRotatingWriter(memory.DefaultHome()+"/"+name, defaultMaxLogBytes)
+	w, err := cli.NewRotatingWriter(memory.DefaultHome()+"/"+name, cli.DefaultMaxLogBytes)
 	if err != nil {
 		return logging.New(os.Stderr, "", log.LstdFlags)
 	}

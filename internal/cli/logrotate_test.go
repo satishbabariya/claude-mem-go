@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -10,9 +10,9 @@ import (
 
 func TestRotatingWriterRotatesWhenExceedingMaxBytes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	w, err := newRotatingWriter(path, 50)
+	w, err := NewRotatingWriter(path, 50)
 	if err != nil {
-		t.Fatalf("newRotatingWriter: %v", err)
+		t.Fatalf("NewRotatingWriter: %v", err)
 	}
 
 	line := []byte("0123456789\n") // 11 bytes
@@ -53,9 +53,9 @@ func TestRotatingWriterRotatesWhenExceedingMaxBytes(t *testing.T) {
 // deliberately a single-generation scheme, not general log management.
 func TestRotatingWriterKeepsOnlyOnePriorGeneration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	w, err := newRotatingWriter(path, 20)
+	w, err := NewRotatingWriter(path, 20)
 	if err != nil {
-		t.Fatalf("newRotatingWriter: %v", err)
+		t.Fatalf("NewRotatingWriter: %v", err)
 	}
 
 	if _, err := w.Write([]byte("generation-one-marker\n")); err != nil {
@@ -86,9 +86,9 @@ func TestRotatingWriterKeepsOnlyOnePriorGeneration(t *testing.T) {
 
 func TestRotatingWriterConcurrentWritesAreSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	w, err := newRotatingWriter(path, 200) // small enough to force several rotations
+	w, err := NewRotatingWriter(path, 200) // small enough to force several rotations
 	if err != nil {
-		t.Fatalf("newRotatingWriter: %v", err)
+		t.Fatalf("NewRotatingWriter: %v", err)
 	}
 
 	const n = 100
@@ -115,9 +115,9 @@ func TestNewRotatingWriterReopensAnExistingFileWithoutTruncating(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 
-	w, err := newRotatingWriter(path, defaultMaxLogBytes)
+	w, err := NewRotatingWriter(path, DefaultMaxLogBytes)
 	if err != nil {
-		t.Fatalf("newRotatingWriter: %v", err)
+		t.Fatalf("NewRotatingWriter: %v", err)
 	}
 	if _, err := w.Write([]byte("appended line\n")); err != nil {
 		t.Fatalf("Write: %v", err)

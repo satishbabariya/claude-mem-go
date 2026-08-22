@@ -2,15 +2,10 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"strconv"
-	"syscall"
-	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/logging"
-	"github.com/satishbabariya/claude-mem-go/internal/memory"
-
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/worker"
 )
 
@@ -20,8 +15,8 @@ import (
 func cmdStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	model := fs.String("model", "haiku", "model alias for observer sessions")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embeddings (empty to skip)")
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embeddings (empty to skip)")
+	dbPath := cli.DBFlag(fs)
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	// Forwarded to the spawned worker, and read here to identify the
 	// daemon already running on -socket. Symmetric with the worker's and
@@ -59,7 +54,7 @@ func cmdStart(args []string) int {
 		if stale, running, pid := staleDaemon(*statsPath); stale {
 			l.Warnf("worker at %s is running an older build (%s); this binary is %s — replacing it",
 				*socketPath, running, currentBuildVersion())
-			if err := stopDaemon(pid, *socketPath); err != nil {
+			if err := worker.StopDaemon(pid, *socketPath); err != nil {
 				l.Warnf("could not stop the stale worker (pid=%d): %v — leaving it running", pid, err)
 				return 0
 			}
@@ -72,7 +67,7 @@ func cmdStart(args []string) int {
 	lockPath := *socketPath + ".lock"
 	if !worker.AcquireSpawnLock(lockPath) {
 		l.Printf("another launcher is already starting the worker, waiting for it")
-		waitForReady(*socketPath, l)
+		worker.WaitForReady(*socketPath, l)
 		return 0
 	}
 	defer worker.ReleaseSpawnLock(lockPath)
@@ -112,19 +107,8 @@ func cmdStart(args []string) int {
 		return 1
 	}
 	l.Printf("spawned a detached worker, waiting for it to become ready")
-	waitForReady(*socketPath, l)
+	worker.WaitForReady(*socketPath, l)
 	return 0
-}
-func waitForReady(socketPath string, l *logging.Logger) {
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if worker.IsRunning(socketPath) {
-			l.Printf("worker is ready at %s", socketPath)
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	l.Printf("WARNING: worker did not become ready within 5s")
 }
 
 // staleDaemon reports whether the daemon described by statsPath is running
@@ -146,31 +130,4 @@ func staleDaemon(statsPath string) (stale bool, running string, pid int) {
 		return false, st.Version, st.PID
 	}
 	return true, st.Version, st.PID
-}
-
-// stopDaemon asks the daemon to shut down gracefully and waits for its
-// socket to go away, so the caller can bind a replacement without racing
-// the old process.
-//
-// SIGTERM rather than SIGKILL: the daemon drains in-flight observations on
-// a clean signal, and losing whatever was queued would trade a stale-code
-// problem for a lost-memory one.
-func stopDaemon(pid int, socketPath string) error {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return err
-	}
-	// Bounded: a daemon that will not exit must not hang SessionStart,
-	// which is on the user's critical path.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if !worker.IsRunning(socketPath) {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("still running %s after SIGTERM", 10*time.Second)
 }

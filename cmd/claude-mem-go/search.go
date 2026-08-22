@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
 func cmdSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	limit := fs.Int("limit", 10, "max results")
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	obsType := fs.String("type", "", "filter by observation type: discovery, change, decision, summary, or manual. Comma-separated for multiple (default: every type)")

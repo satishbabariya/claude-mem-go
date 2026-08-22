@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// defaultMaxLogBytes bounds a single log file (worker.log, hook.log,
+// DefaultMaxLogBytes bounds a single log file (worker.log, hook.log,
 // context.log, stop.log, mcp.log, file-context.log, start.log) before it
 // rotates. There was no cap at all before this: every one of these opens
 // with O_APPEND and never truncates, and worker.log in particular gets a
@@ -16,14 +16,14 @@ import (
 // own "rotate 1" — this is bounded disk use, not a general log-management
 // story (no compression, no timestamped generations, no external
 // logrotate integration).
-const defaultMaxLogBytes = 5 * 1024 * 1024 // 5MB
+const DefaultMaxLogBytes = 5 * 1024 * 1024 // 5MB
 
-// rotatingWriter is an io.Writer that rotates its underlying file once
+// RotatingWriter is an io.Writer that rotates its underlying file once
 // writing to it would exceed maxBytes, keeping exactly one prior
 // generation. Safe for concurrent use — the worker daemon's process() runs
 // one goroutine per accepted connection, all logging through the same
 // *log.Logger.
-type rotatingWriter struct {
+type RotatingWriter struct {
 	mu       sync.Mutex
 	path     string
 	maxBytes int64
@@ -31,7 +31,7 @@ type rotatingWriter struct {
 	size     int64
 }
 
-func newRotatingWriter(path string, maxBytes int64) (*rotatingWriter, error) {
+func NewRotatingWriter(path string, maxBytes int64) (*RotatingWriter, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
@@ -41,10 +41,10 @@ func newRotatingWriter(path string, maxBytes int64) (*rotatingWriter, error) {
 		f.Close()
 		return nil, err
 	}
-	return &rotatingWriter{path: path, maxBytes: maxBytes, f: f, size: info.Size()}, nil
+	return &RotatingWriter{path: path, maxBytes: maxBytes, f: f, size: info.Size()}, nil
 }
 
-func (w *rotatingWriter) Write(p []byte) (int, error) {
+func (w *RotatingWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -66,7 +66,7 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 // rotateLocked closes the current file, moves it to path+".1" (replacing
 // any previous ".1" — only one prior generation is kept), and opens a
 // fresh file at path. Called with mu held.
-func (w *rotatingWriter) rotateLocked() error {
+func (w *RotatingWriter) rotateLocked() error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}

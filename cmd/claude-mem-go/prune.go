@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/satishbabariya/claude-mem-go/internal/memory"
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
 
@@ -17,7 +17,7 @@ import (
 // delete anything.
 func cmdPrune(args []string) int {
 	fs := flag.NewFlagSet("prune", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	project := fs.String("project", "", "scope to one project (default: every project in the store)")
 	olderThanDays := fs.Int("older-than-days", 0, "delete observations older than this many days (required, must be > 0)")
 	yes := fs.Bool("yes", false, "actually delete — without this, prune only reports how many rows WOULD be deleted")

@@ -10,6 +10,7 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/contextfmt"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/excludeproject"
@@ -45,8 +46,8 @@ import (
 // every single message for no benefit.
 func cmdPromptContext(args []string) int {
 	fs := flag.NewFlagSet("prompt-context", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model for embedding the prompt (empty disables this hook)")
+	dbPath := cli.DBFlag(fs)
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model for embedding the prompt (empty disables this hook)")
 	limit := fs.Int("limit", 5, "how many semantically relevant observations to inject")
 	minPromptLen := fs.Int("min-prompt-len", 20, "prompts shorter than this are skipped, not embedded")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: override pgvector's hnsw.ef_search "+

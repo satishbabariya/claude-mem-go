@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
@@ -22,7 +23,7 @@ const exportPageSize = 500
 // cleanly into either).
 func cmdExport(args []string) int {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	out := fs.String("out", "", "output file (JSON Lines, one observation per line); defaults to stdout")
 	fs.Parse(args)
 
@@ -81,7 +82,7 @@ func cmdExport(args []string) int {
 // duplicating them.
 func cmdImport(args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	in := fs.String("in", "", "input file written by `export` (JSON Lines); required")
 	fs.Parse(args)
 

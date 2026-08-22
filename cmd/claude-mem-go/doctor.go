@@ -10,6 +10,7 @@ import (
 
 	claudeagent "github.com/satishbabariya/claude-agent-sdk-go"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/embed"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
@@ -26,7 +27,7 @@ import (
 // Ollama unreachable — keyword search still works, just not semantic).
 func cmdDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	socketPath := fs.String("socket", worker.DefaultSocketPath(), "unix socket the worker listens on")
 	// Parallel to -socket, and for the same reason: a daemon can be run
 	// on a non-default socket and stats path (the worker subcommand has
@@ -34,7 +35,7 @@ func cmdDoctor(args []string) int {
 	// but not the second — so it silently read a DIFFERENT daemon's
 	// stats file than the socket it was probing.
 	statsPath := fs.String("stats", worker.DefaultStatsPath(), "worker stats file to read (must match the daemon on -socket)")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "Ollama model semantic search would use")
+	embedModel := fs.String("embed-model", cli.DefaultEmbedModel, "Ollama model semantic search would use")
 	hnswEfSearch := fs.Int("hnsw-ef-search", 0, "Postgres backend only: the hnsw.ef_search override configured "+
 		"elsewhere (mcp/semantic-search/prompt-context), so its HealthDetails reflects the same value — "+
 		"valid range 1-1000 (default 0 leaves pgvector's own default of 40 in place)")

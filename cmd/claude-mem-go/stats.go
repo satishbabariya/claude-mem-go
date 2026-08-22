@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/satishbabariya/claude-mem-go/internal/cli"
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
 	"github.com/satishbabariya/claude-mem-go/internal/memory/backend"
 )
@@ -28,7 +29,7 @@ import (
 // sync.
 func cmdStats(args []string) int {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
-	dbPath := fs.String("db", memory.DefaultDBPath(), "sqlite file path, or a postgres:// DSN for the Postgres+pgvector backend")
+	dbPath := cli.DBFlag(fs)
 	fs.Parse(args)
 
 	ctx, cancel := cliContext()
