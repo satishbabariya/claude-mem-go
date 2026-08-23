@@ -8,3 +8,6 @@
 # local memory-plugin state, never source
 .memsearch/
 .remember/
+
+# goreleaser output; untracked files make Go's VCS stamp report -dirty
+dist/
