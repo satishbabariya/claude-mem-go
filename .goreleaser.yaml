@@ -18,7 +18,12 @@ project_name: claude-mem-go
 
 before:
   hooks:
-    - go mod tidy
+    # Verify, never modify: a hook that rewrites go.mod/go.sum on the
+    # runner would make the checkout dirty, and Go's VCS stamp (what
+    # `claude-mem-go version` prints) would then say "-dirty" for a
+    # release built from a clean tag. dist/ is gitignored for the same
+    # reason — untracked files count as dirty too.
+    - go mod tidy -diff
 
 builds:
   - id: claude-mem-go
