@@ -92,6 +92,29 @@ overlap.
 The curve is now monotonic, which is the first thing to check: recall
 cannot fall as `ef_search` rises.
 
+### Latest complete run — 2026-08-23
+
+Fresh database, fresh 20,000-row seed (7m46s), `VACUUM ANALYZE`, pgvector
+0.8.6, Apple Silicon, Ollama and Postgres in Docker:
+
+| `hnsw.ef_search` | recall@10 | p50 query |
+|---|---|---|
+| 20 | 69.0% | 1.6ms |
+| 40 (pgvector default) | **77.0%** | 1.6ms |
+| 100 | 90.0% | 1.8ms |
+| 200 (this port's default) | **95.0%** | 1.9ms |
+| 400 | 100.0% | 2.4ms |
+
+Run-to-run spread against the table above is a few points either way
+(77% vs 80% at 40; 95% vs 94% at 200): HNSW index builds are parallel and
+not deterministic, so two seeds of the same texts produce two different
+graphs. The shape and the conclusion do not move between runs — the
+default of 200 costs ~0.3ms over pgvector's 40 and recovers 15-18 points
+of unscoped recall. Scoped recall on the same corpus at the default:
+100.0% (2000/2000), HNSW plan, 0 short / 0 empty, p50 4.1ms; forced back
+to 40 with `hnsw.max_scan_tuples` lowered to simulate up to ~400,000
+rows: 73.5-73.6% throughout.
+
 One row of this table has been corrected, and the reason is worth
 keeping. `ef_search` 100 originally measured 82.0%; after the corpus was
 bulk-`UPDATE`d to redistribute projects for the scoped benchmark and then
