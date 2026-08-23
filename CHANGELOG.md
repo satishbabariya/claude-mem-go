@@ -90,6 +90,41 @@ Code's own hooks through `--plugin-dir`. What that found, and what changed:
 - **Verified on Linux** (`go1.25.14 linux/arm64`, all packages under
   `-race`) in addition to macOS.
 
+- **User prompts can be persisted, opt-in** (`-store-prompts` on
+  `prompt-context`, or `CLAUDE_MEM_STORE_PROMPTS=1`). Off by default
+  because it stores the user's verbatim words. The write runs after every
+  existing privacy gate — excluded project, internal protocol payload,
+  `<private>` stripping (only the stripped text is stored), the
+  wholly-private session check, and the duplicate-firing guard. New
+  `user_prompts` table on both backends (FTS5 / tsvector), `search_prompts`
+  and `session_prompts` MCP tools, `stats` and `prune` cover prompts,
+  export/import carry them with a `"kind":"prompt"` discriminator. (#1,
+  PR #20)
+
+- **`-max-concurrent` defaults to 4, from a measured three-window soak.**
+  Three real concurrent Claude Code sessions against the old default of 2
+  captured everything but evicted and respawned an idle observer on every
+  third tool call. A cached session is one idle `claude` subprocess; 4 is
+  cheap. (PR #17)
+
+- **README restructured** into a 327-line front page plus `docs/`
+  (`findings.md`, `hooks.md`, `postgres.md`, `plugin-install.md`,
+  `development.md`); nothing was dropped — the word count of README+docs
+  is 106% of the old README. (PR #18)
+
+- **The CI recall guard tolerates duplicate vectors** in a long-lived test
+  database: ties let the HNSW scan emit more than `ef_search` rows for
+  some query vectors, so the invariant is "bounded on at least one
+  query", which a `SET LOCAL` that never reached the engine still fails.
+  Its cleanup also closes the store inside the same `t.Cleanup` — a
+  `defer Close()` ran first and left 300 rows behind per run. (PR #19)
+
+- **Final-code measurements** (20,000 real `nomic-embed-text` vectors,
+  `VACUUM ANALYZE` first): unscoped recall@10 85% at `ef_search` 40, 93%
+  at 200, 94% at 400, all under 2.1ms p50; project-scoped 100% at the
+  default. Three real concurrent Claude Code sessions through
+  `--plugin-dir`: 9/9 events captured, 0 errors.
+
 ## 0.3.0 — 2026-08-21
 
 - **Measured ANN recall — then found the measurement was wrong, retracted

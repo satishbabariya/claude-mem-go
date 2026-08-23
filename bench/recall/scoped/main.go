@@ -179,7 +179,7 @@ func main() {
 		tuned.Close()
 		label := fmt.Sprintf("%d", ef)
 		if ef == 0 {
-			label = "default (40)"
+			label = fmt.Sprintf("default (%d)", postgres.DefaultHNSWEfSearch)
 		}
 		// Printed beside the recall figure because the number means
 		// something completely different depending on which path ran.
