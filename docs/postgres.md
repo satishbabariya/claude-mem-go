@@ -1,225 +1,237 @@
 # Postgres + pgvector backend
 
-Everything about running claude-mem-go against Postgres instead of the default
-SQLite file: choosing between the two, bringing up the container, the
-`CLAUDE_MEM_DB` variable that makes an installed plugin use it at all, DSN and
-TLS handling, the `-hnsw-ef-search` recall knob, and the measurements behind
-the tuning advice. The recall harness itself lives in
-[`bench/recall/README.md`](../bench/recall/README.md).
+Running claude-mem-go against Postgres instead of the default SQLite file.
+The backend is selected by the shape of the store setting: a file path is
+SQLite, a `postgres://` URL or keyword/value DSN is Postgres. Use it when a
+store outgrows SQLite's linear-scan semantic search or when several machines
+share one memory.
 
-## Choosing a backend
+## Contents
 
-`memory.Backend` is one interface with two implementations, selected by what
-the `-db` flag looks like:
-
-- **SQLite** (default, zero dependencies) — a file path. FTS5 keyword
-  search, brute-force cosine similarity for semantic search. Opened with
-  WAL journal mode, a 5s busy-timeout, and foreign keys on — all three
-  fixed real, reproduced problems: this project's actual shape is the
-  worker daemon and every CLI subcommand each opening their own connection
-  to the same file, and the default rollback-journal mode's exclusive
-  write lock made a second concurrent writer fail immediately with
-  "database is locked." Separately, SQLite's foreign-key enforcement
-  defaults to off regardless of what the schema declares, which meant
-  `observation_vectors`' `ON DELETE CASCADE` had never actually fired —
-  `prune` was silently leaving orphaned embedding rows behind. Both
-  applied via DSN params (`_journal_mode`, `_busy_timeout`,
-  `_foreign_keys`), not a one-time `PRAGMA` `Exec` call, since the latter
-  only reaches whichever single pooled connection happens to run it.
-- **Postgres + pgvector** (`postgres://...` DSN) — real full-text search
-  (`tsvector`/GIN, no hand-written query sanitizer needed — Postgres
-  tokenizes punctuation like the hyphen in "claude-mem" sanely by default,
-  unlike SQLite's FTS5) and a real ANN index (HNSW) for semantic search
-  instead of a linear scan. `docker-compose.yml` brings up
-  `pgvector/pgvector:pg16`; every claim above (the HNSW index actually gets
-  used, not just created; the hyphen query that broke FTS5 works here
-  without a workaround) was checked with `EXPLAIN` and real queries against
-  that container, not assumed. The container has a persistent named
-  volume (data survives `docker compose down`) and `restart:
-  unless-stopped`, so it comes back after a Docker Desktop/daemon restart
-  without manual intervention — confirmed the policy actually applies via
-  `docker inspect`, and confirmed Docker's real distinction between "you
-  explicitly stopped it" (an explicit `docker stop`/`docker kill` — this
-  policy correctly does NOT override that; verified directly) and a crash,
-  which it would restart from.
+- [Setup](#setup)
+- [DSNs, TLS, and redaction](#dsns-tls-and-redaction)
+- [Schema and migrations](#schema-and-migrations)
+- [Full-text search](#full-text-search)
+- [Semantic search](#semantic-search)
+- [Tuning](#tuning)
+- [Measurements](#measurements)
+- [Operations](#operations)
+- [Limits](#limits)
 
 ## Setup
+
+`docker compose up -d` brings up both services this project can use:
+Postgres + pgvector, and Ollama with `nomic-embed-text` pulled into a named
+volume by the one-shot `ollama-pull` service (~274MB, once). Nothing needs to
+be installed but Docker. If you already run Ollama natively, leave that
+service stopped (`docker compose up -d postgres`) and keep pointing
+`CLAUDE_MEM_OLLAMA_BASE_URL` at your own instance — Docker has no GPU access
+on macOS, so a native install is faster.
 
 ```sh
 docker compose up -d
 
-# Set this once, in the profile your shell (and therefore Claude Code)
-# actually reads. It is what makes the plugin use Postgres at all:
+# Set this once, in the profile your shell (and therefore Claude Code) reads:
 export CLAUDE_MEM_DB="postgres://claudemem:claudemem@localhost:55432/claudemem?sslmode=disable"
 
-./claude-mem-go ingest        # -db still works, and still wins over the env var
+./claude-mem-go doctor        # confirms which store won: -db > $CLAUDE_MEM_DB > built-in path
 ```
 
-**`CLAUDE_MEM_DB` is not a convenience — without it an installed plugin
-cannot reach Postgres at all.** Every subcommand takes `-db`, but nothing
-that runs inside a plugin install can pass it: `hooks/hooks.json` invokes
-the binary as `"$CLAUDE_PLUGIN_ROOT/claude-mem-go" start` (and `context`,
-`prompt-context`, `file-context`, `hook`, `stop`), and `.mcp.json` execs
-`... mcp` — no flags, and nowhere to add them that survives a plugin
-update.
+`docker-compose.yml` runs `pgvector/pgvector:pg16` on port 55432 with a
+persistent named volume, `restart: unless-stopped` (it comes back after a
+Docker restart but not after an explicit `docker stop`), `shm_size: 1gb`, and
+`shared_buffers=512MB`, `maintenance_work_mem=512MB`, `work_mem=16MB`,
+`effective_cache_size=3GB` — sized for a ~7.7GB Docker VM shared with other
+work. Raise them on dedicated hardware; see [Tuning](#tuning) for why the
+stock defaults are not a starting point.
 
-The result was a split brain, measured here before it was fixed: `doctor`
-with no flag reported `~/.claude-mem-go/observations.db`, while `doctor
--db postgres://…` reported the Postgres store. Every hook and every MCP
-tool call took the first branch, so an operator could follow this section
-exactly, stand up Postgres, install the plugin, and have all of their
-memory silently go to SQLite — with no error, and nothing anywhere naming
-the second database.
+**`CLAUDE_MEM_DB` is required, not a convenience.** Every subcommand takes
+`-db`, but an installed plugin invokes the hooks and the MCP server with no
+flags, so nothing inside it can pass one. Without the variable every hook and
+MCP tool writes to `~/.claude-mem-go/observations.db` while `doctor -db
+postgres://…` reports Postgres, and memory silently splits across two stores.
+`doctor` names which of the three sources selected the store for this reason.
+A worker daemon started before the variable was set keeps writing to the old
+store; `start` replaces such a daemon on the next `SessionStart` (see
+[hooks.md](hooks.md#sessionstart)).
 
-## DSNs, TLS, and password redaction
+To move an existing SQLite store: `export -db ~/.claude-mem-go/observations.db -out backup.jsonl`,
+then `import -db postgres://… -in backup.jsonl`. Import is idempotent and
+keeps timestamps and embeddings.
 
-  `sslmode=disable` above is for the local Docker Compose container only
-  (it's on `localhost`, nothing else can see that traffic). Every DSN
-  example in this repo uses it for the same reason — pgx's `stdlib` driver
-  already honors the standard libpq `sslmode` parameter, so no code change
-  is needed to use TLS, just don't copy `sslmode=disable` into a DSN that
-  crosses a real network: use `sslmode=require` (encrypted, no certificate
-  verification) or `sslmode=verify-full` (encrypted and verified,
-  recommended for anything production) against a real Postgres instance.
-  A real Postgres DSN carries its password in plaintext — every place a
-  `-db` value could reach a log line or stdout (`doctor`'s output, the
-  `context`/`stop`/`file-context` hook logs, the error `postgres.Open`
-  returns and every caller further up the stack that logs it) now goes
-  through `store.RedactDSN` first, replacing the password with
-  `REDACTED`. This was a genuine leak before, not a hypothetical one, and
-  the first version of the redaction function itself had a real bug: it
-  used `net/url.Parse`-then-reserialize and fell back to returning the
-  *unredacted* original whenever parsing failed — exactly backwards for a
-  redaction function — which a deliberately malformed DSN (a well-formed
-  `user:password@` prefix followed by a broken host) triggered
-  immediately. Fixed with a regex-based approach that only needs the
-  `scheme://user:password@` prefix to be well-formed, independent of
-  whatever comes after — verified against the exact malformed-DSN case
-  that leaked, and against a real live-container auth failure.
+## DSNs, TLS, and redaction
 
-## `-hnsw-ef-search`: the query-time recall/speed knob
+Both pgx DSN forms work:
 
-  `-hnsw-ef-search` (on `semantic-search`, `prompt-context`, and `mcp`)
-  overrides pgvector's own `hnsw.ef_search` query-time recall/speed
-  tradeoff — the mandate's own "real ANN vector search... at scale"
-  otherwise has no actual knob once `observations` grows well past the
-  row counts pgvector's built-in default (40) was tuned against. Building
-  it surfaced a genuinely surprising real behavior: pgvector's documented
-  1..1000 bound on this value is **not reliably enforced by Postgres
-  itself**. `hnsw.ef_search` is a custom GUC pgvector's extension
-  registers, and until something on a given backend connection has
-  already touched the vector extension, Postgres treats the name as an
-  unchecked placeholder — reproduced directly, identical Go code (`BEGIN`,
-  `SET LOCAL hnsw.ef_search = 1001`, `COMMIT`) correctly errored through a
-  connection a prior real `Insert`/`SaveEmbedding` call had already warmed
-  up, but silently accepted the exact same invalid value with no error at
-  all on an otherwise-idle fresh connection whose first-ever query was
-  that `SET LOCAL`. A caller with a typo'd or misconfigured value would
-  have no reliable way to notice, since whether Postgres rejects it
-  depends on incidental connection warm-up state, not the value itself.
-  Fixed by validating the range in Go at `Open` time instead of ever
-  trusting Postgres to catch it, so a bad value fails the same way every
-  time regardless of connection state. The override itself is applied via
-  a transaction-scoped `SET LOCAL`, not a plain `SET`, against the pooled
-  connection every backend call shares — `database/sql` gives no control
-  over which physical connection any one call gets, so a plain `SET`
-  would silently persist onto whatever unrelated query the pool next
-  hands that same connection. Verified against the real container: the
-  out-of-range rejection, and that a valid override doesn't leak past its
-  own call (checked on a pool forced to a single connection, so this is
-  deterministic rather than merely likely).
+- URL: `postgres://user:password@host:5432/db?sslmode=verify-full`
+- keyword/value: `host=localhost port=55432 user=claudemem dbname=claudemem sslmode=disable`
 
-## Measured at scale: 250,000 observations, 768-dimension vectors
+The statement timeout (below) is appended to either form appropriately — as a
+query parameter on a URL, as a space-separated token on keyword/value — and is
+left alone if the DSN already sets `statement_timeout`. A URL that does not
+parse is passed through unchanged so the real connection error surfaces.
 
-"At scale" was claimed here long before it was demonstrated, so it was
-measured: a 250,000-row corpus in the real Docker container, built
-through the app's own schema and migrations, queried through the real Go
-code paths rather than by hand-written SQL. Table plus indexes came to
-~1.1GB (the HNSW index alone is 531MB).
+`sslmode=disable` is for the local container only. pgx honours the standard
+libpq `sslmode` and `PGSSLMODE`, so TLS needs no code change: use
+`sslmode=require` (encrypted, no certificate verification) or
+`sslmode=verify-full` (recommended for anything production) across a real
+network.
 
-| read path | latency |
+A DSN carries its password in plaintext. Every place a store setting can reach
+a log line or stdout — `doctor`, the hook logs, the stats file, the error
+`postgres.Open` returns — goes through `memory.RedactDSN`, which replaces the
+password with `REDACTED` using a regex that only needs the
+`scheme://user:password@` prefix to be well-formed, so a malformed DSN is
+still redacted rather than echoed.
+
+## Schema and migrations
+
+One `observations` table with `BIGSERIAL` ids, `TIMESTAMPTZ` `created_at`,
+`created_at_epoch` in milliseconds, `jsonb` for `facts`, `concepts`,
+`files_read`, `files_modified`, a `vector(N)` `embedding` column, a generated
+`search_vector`, and a `content_hash` unique key for idempotent inserts. A
+`user_prompts` table holds opt-in stored prompts. Migrations are numbered,
+idempotent, recorded in `schema_migrations`, and applied on `Open`
+(`internal/memory/postgres/postgres.go`):
+
+| Version | Migration |
 |---|---|
-| `SemanticSearch` unscoped, top 10 (ANN) | **1.0ms** |
-| `SemanticSearch` scoped to a project | **2.0ms** |
-| `RecentByProject(20)` | 0.7ms |
-| `CountByProject` | 0.5ms |
-| `Search` enumerate + date window | 10.5ms |
-| `Search` enumerate at offset 5000 | 3.3ms |
-| `Search` keyword, project-scoped | 12.3ms |
-| `Search` keyword, unscoped | 70.9ms |
+| 1 | initial observations table + indexes (btree on project and `created_at_epoch`, GIN on `search_vector`, HNSW on `embedding`) |
+| 2 | `CHECK` constraint on `observations.type` (`discovery`, `change`, `decision`, `summary`, `manual`), wrapped in a `DO` block so it is idempotent |
+| 3 | `search_vector` extended to `facts` and `concepts` at weight `D` (column dropped and re-added, which backfills every row) |
+| 4 | GIN indexes on `files_read` and `files_modified` for the file-context read |
+| 5 | `next_steps` column for session summaries |
+| 6 | `user_prompts` table + `tsvector` index |
 
-`EXPLAIN` confirms the HNSW index is genuinely chosen at this size
-(`Index Scan using idx_observations_embedding_hnsw`), which small-scale
-tests cannot show — the planner will not pick it on a few thousand rows.
-The one number worth watching is unscoped keyword search at 70.9ms: the
-term used matches roughly a fifth of the corpus, and ranking 50,000
-matches by `ts_rank_cd` is inherently more work than ranking the 5,000 a
-project scope leaves. Scoped search, which is what the hooks actually
-run, is 12.3ms.
+How the framework works and how to add a migration is in
+[development.md](development.md#schema-migrations).
 
-Recall is **not** quoted for this run: these vectors are randomly
-generated, and random high-dimensional vectors are near-orthogonal — a
-degenerate case for HNSW, so a figure from them would say nothing about
-real use. It is measured separately, against real embeddings, by
-`bench/recall` (see that directory's README), against a forced exact scan
-over the same rows.
+## Full-text search
 
-An earlier version of this section quoted **95.0% recall@10** from that
-harness. **That figure was wrong and has been retracted** — the corpus
-could only produce 1,440 distinct sentences regardless of row count, so
-it was mostly duplicate vectors, and recall counted as id overlap was
-really measuring how two query plans broke ties among identical
-distances. Both defects are fixed; `bench/recall/README.md` documents
-them in full rather than quietly deleting the number.
+`Search` uses `websearch_to_tsquery('english', …)` over `search_vector`
+(weights: title/subtitle/narrative above `facts`/`concepts` at `D`), ranked by
+`ts_rank_cd` then `id` so paging with `-offset` is deterministic. Uppercase
+`AND`/`OR`/`NOT` are operators on both backends, matching SQLite's FTS5
+behaviour: `NOT term` is rewritten to `-term` (the only negation
+`websearch_to_tsquery` honours), and every non-operator token is quoted so
+lowercase `or`/`not` are plain words here as they are in FTS5. Hyphenated
+terms like `claude-mem`, `key:value`, and parentheses all match without a
+sanitizer. One residual difference is deliberate: Postgres's `english`
+configuration strips stopwords and FTS5 does not, so a query made entirely of
+stopwords can match differently.
 
-The corrected measurement, on 20,000 distinct real `nomic-embed-text`
-embeddings:
+## Semantic search
 
-| `hnsw.ef_search` | recall@10 | scoped recall@10 |
+`SemanticSearch` orders by pgvector's cosine-distance operator (`<=>`) under
+the HNSW index and reports `1 - distance` so scores match SQLite's cosine
+similarity. The planner only chooses the index once a table is large enough
+(around 10,000–20,000 rows); below that a sequential scan is exact.
+
+**`hnsw.ef_search`** is the query-time recall/speed knob. The default here is
+**200** (`postgres.DefaultHNSWEfSearch`), not pgvector's 40: on 20,000 real
+`nomic-embed-text` embeddings, 40 measured 80% recall@10 unscoped and 71.2%
+project-scoped — the path every hook takes, losing about three relevant
+memories in ten with no error — while 200 measured 94% (95% on the latest
+run) for ~0.3ms more, under 4ms p50 throughout. Override it with
+`-hnsw-ef-search` on `semantic-search`, `prompt-context`, `mcp`, and
+`doctor` (the last only so its health output reflects the value configured
+elsewhere). It is applied per call with a transaction-scoped `SET LOCAL`, not
+a session `SET`, because `database/sql` gives no control over which pooled
+connection a call gets. The 1–1000 range is validated in Go at `Open`: Postgres
+treats `hnsw.ef_search` as an unchecked placeholder on a connection that has
+not yet touched the vector extension, so an out-of-range value would be
+accepted or rejected depending on connection warm-up.
+
+**Project scoping** uses pgvector 0.8's `hnsw.iterative_scan = strict_order`.
+A project predicate is a post-filter on the HNSW walk: pgvector collects
+`ef_search` globally-nearest candidates and then drops the ones from other
+projects, so when a project's rows are not among the global nearest the
+result is empty. Reproduced with 60,000 embedded rows in the queried project
+and 20,000 nearer rows in another: 0 results, `Rows Removed by Filter: 40`.
+Iterative scan keeps walking until enough rows survive the filter (~26ms on
+that reproduction). On pgvector older than 0.8, detected once at `Open` from
+`pg_extension`, `SemanticSearch` falls back to a `MATERIALIZED` CTE
+pre-filter — exact but O(rows in project), 2.7s on the same data — because an
+unsupported `hnsw.*` GUC errors on a warmed connection rather than degrading.
+Unscoped searches need neither.
+
+## Tuning
+
+Pool and timeout settings use the same environment variable names and
+defaults as real claude-mem, so settings migrate between the two:
+
+| Variable | Default | Effect |
 |---|---|---|
-| 40 (pgvector default) | **80.0%** | **71.2%** |
-| 200 | 94.0% | exact (planner skips HNSW) |
-| 400 | 98.0% | exact (planner skips HNSW) |
+| `CLAUDE_MEM_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | `statement_timeout` on every connection, so a hung query (lock contention from `prune`/`reembed`, a pathological plan, a network stall) releases its connection instead of wedging the 10-connection pool shared by every hook and the daemon |
+| `CLAUDE_MEM_POSTGRES_CONNECTION_TIMEOUT_MS` | 5000 | Bound on each initial ping attempt, so a host that accepts TCP and never answers fails in seconds rather than per-OS TCP timeouts on every retry |
+| `CLAUDE_MEM_POSTGRES_POOL_MAX` | 10 | `SetMaxOpenConns`; idle connections are capped at 5 |
+| `CLAUDE_MEM_POSTGRES_IDLE_TIMEOUT_MS` | 30000 | `SetConnMaxIdleTime` |
+| `CLAUDE_MEM_POSTGRES_EMBED_DIMS` | 768 | Width of the `vector(N)` column when the store is **created**; see [Dimension changes](#dimension-changes) |
 
-**pgvector's default is not good enough at this size**, and the
-project-scoped path every hook actually runs is the weaker of the two —
-roughly 71%, meaning about three relevant memories in ten silently
-missing. `-hnsw-ef-search 200` fixes both, for under 4ms p50, and
-`doctor` now flags any store past 10,000 embedded rows still on the
-default. The default itself is deliberately unchanged: one corpus on one
-embedding model is not enough evidence to alter search behaviour for
-every existing store.
+`Open` retries its initial ping on a backoff of 0, 250ms, 500ms, 1s, 2s, 4s
+(~7.75s of delay across 6 attempts, each bounded by the connection timeout),
+so a hook or daemon starting a beat before the container's healthcheck passes
+does not fail permanently.
 
-Three real problems surfaced only at this size, all now fixed:
+Server-side, `maintenance_work_mem` governs HNSW index builds: at the stock
+64MB pgvector reports *"hnsw graph no longer fits into maintenance_work_mem
+after 16759 tuples"*. The compose file's 512MB moves the spill point to
+141,896 tuples and cut a 250,000-row build from 73s to 40s; a real deployment
+should go higher. Raising it needs `shm_size` above Docker's 64MB default, or
+the build dies with `could not resize shared memory segment … No space left
+on device`.
 
-- **`ObservationsForFile` had no usable index.** It runs before every
-  `Read` tool call, and the jsonb containment test was a post-filter over
-  every row in the project — 47.7ms with a plan reading `Rows Removed by
-  Filter: 4687`. Migration 4 adds GIN indexes on `files_read` and
-  `files_modified`: 12.9ms, and the cost now scales with matches instead
-  of with project size.
-- **`maintenance_work_mem` was far too small.** At the stock 64MB
-  pgvector reported *"hnsw graph no longer fits into maintenance_work_mem
-  after 16759 tuples"* — index builds degrade at seventeen thousand rows.
-  Raised to 512MB in `docker-compose.yml`, which moves the spill point to
-  141,896 tuples and cuts the 250k build from 73s to 40s. It still spills
-  at 250k, so a real deployment should go higher again; the point is that
-  the shipped default is not a starting point.
-- **Docker's default 64MB `/dev/shm` made raising it impossible.**
-  Postgres puts parallel workers' shared memory there, so the build died
-  with `could not resize shared memory segment ... No space left on
-  device` — an error whose text gives no hint that the container's shm
-  size is the cause. `shm_size: 1gb` is now set explicitly.
+## Measurements
 
-## Related findings
+Full tables, method, and the retracted first result are in
+[bench/recall/README.md](../bench/recall/README.md); CI guards the key
+properties with 300 committed real embeddings. In summary: on 20,000 distinct
+`nomic-embed-text` vectors, recall@10 rises monotonically from 80% at
+`ef_search` 40 to 94% at 200 and 98% at 400, all under 4ms p50 (query
+embedding itself costs ~33ms against local Ollama and dominates); scoped
+recall at 40 is 71.2% and goes exact at 100+ because the planner abandons HNSW
+for a bitmap scan over `idx_observations_project` on a 1,000-row project. At
+250,000 rows with 768-dimension vectors (random, so recall is not quoted from
+that run) the table plus indexes came to ~1.1GB (HNSW index 531MB), with
+unscoped ANN search at 1.0ms, scoped at 2.0ms, `RecentByProject(20)` 0.7ms,
+`CountByProject` 0.5ms, enumerate with a date window 10.5ms, enumerate at
+offset 5000 3.3ms, project-scoped keyword search 12.3ms, and unscoped keyword
+search 70.9ms (the term matched a fifth of the corpus). `ObservationsForFile`
+went from 47.7ms to 12.9ms with migration 4's GIN indexes.
 
-The Postgres-specific defects found and fixed in this port, each with its
-reproduction, are recorded in [findings.md](findings.md):
+## Operations
 
-- [No statement timeout — a single hung query could wedge the entire connection pool](findings.md#the-postgres-backend-had-no-statement-timeout--a-single-hung-query-could-wedge-the-entire-connection-pool)
-- [No per-attempt timeout on the initial connection ping](findings.md#the-initial-connection-ping-had-no-per-attempt-timeout--a-firewalled-or-black-holed-postgres-could-hang-every-retry-not-just-the-query-timeout-above)
-- [Pool size and idle timeout were hardcoded, and the idle timeout was 10x off](findings.md#the-postgres-pools-size-and-idle-timeout-were-hardcoded--and-the-idle-timeout-was-10x-off-from-real-claude-mems-own-default)
-- [Keyword search silently ignored `facts` and `concepts`](findings.md#postgres-keyword-search-silently-ignored-facts-and-concepts--a-measured-cross-backend-divergence)
-- [Boolean search operators worked on SQLite and silently broke on Postgres](findings.md#boolean-search-operators-worked-on-sqlite-and-silently-broke-on-postgres)
-- [The project filter could make semantic search return zero results](findings.md#the-postgres-backends-project-filter-could-make-semantic-search-return-zero-results)
-- [Hard-wired to 768-dimension embeddings](findings.md#the-postgres-backend-was-hard-wired-to-768-dimension-embeddings-and-said-so-in-a-comment-that-was-wrong)
+**`doctor`** on a Postgres store reports pool utilization
+(`pool_open_connections`, `pool_in_use`, `pool_idle`,
+`pool_max_open_connections`), `vector_extension` version,
+`hnsw_index_exists` (a schema drift would otherwise silently degrade every
+semantic search to a table scan), `hnsw_ef_search` (`200 (default)` when
+unset), `embedding_column_dims`, and the `embedding_dims` histogram with
+`embedding_dims_consistent`. It warns when a store past 10,000 embedded rows
+runs with `ef_search` lowered below 100, quoting the measured recall.
+
+**`reembed`** re-embeds rows with no embedding or a dimension that does not
+match the live model; dry run until `-yes`.
+
+### Dimension changes
+
+A pgvector column's width is fixed at creation. `CLAUDE_MEM_POSTGRES_EMBED_DIMS`
+sizes it for a **new** store (e.g. 384 for `all-minilm`, 1024 for
+`mxbai-embed-large`); `Open` reads the real width from the catalog and
+`SaveEmbedding` fails with a message naming both numbers when a model does
+not fit. To change models on an existing store, `export`, create a new store
+with the variable set, `import`, then `reembed -yes`. `doctor`'s
+`embedding_column_dims` is the number that decides whether a model can write
+at all.
+
+## Limits
+
+- pgvector 0.8+ is needed for correct project-scoped ANN search at scale; older
+  versions get the exact-but-slow CTE fallback.
+- `hnsw.max_scan_tuples` (pgvector default 20,000) bounds how far an iterative
+  scan walks; the benchmark shows scoped recall at the default `ef_search`
+  holding at ~71–74% as that cap is lowered to simulate ~400,000 rows.
+- Behaviour past 20,000 real rows, and projects large enough that the
+  planner's exact fallback stops being cheap, are not measured.
+- The store is shared across every project on a machine; tools and hooks
+  scope by project, and `all_projects: true` is the explicit way out.
