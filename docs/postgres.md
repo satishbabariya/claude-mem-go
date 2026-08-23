@@ -20,6 +20,14 @@ share one memory.
 
 ## Setup
 
+`docker compose up -d` brings up both services this project can use:
+Postgres + pgvector, and Ollama with `nomic-embed-text` pulled into a named
+volume by the one-shot `ollama-pull` service (~274MB, once). Nothing needs to
+be installed but Docker. If you already run Ollama natively, leave that
+service stopped (`docker compose up -d postgres`) and keep pointing
+`CLAUDE_MEM_OLLAMA_BASE_URL` at your own instance — Docker has no GPU access
+on macOS, so a native install is faster.
+
 ```sh
 docker compose up -d
 

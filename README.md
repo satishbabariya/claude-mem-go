@@ -27,17 +27,20 @@ Postgres + pgvector when a store outgrows a linear scan.
 
 - The `claude` CLI on `PATH`. It is the model backend; claude-mem-go manages
   no API keys of its own.
-- [Ollama](https://ollama.com) with an embedding model pulled
-  (`ollama pull nomic-embed-text`) for semantic search. Keyword search works
-  without it.
+- An embedding server for semantic search — either `docker compose up -d`,
+  which runs Ollama and pulls `nomic-embed-text` for you, or a native
+  [Ollama](https://ollama.com) install (`ollama pull nomic-embed-text`), which
+  uses the GPU and is faster. Point `CLAUDE_MEM_OLLAMA_BASE_URL` at whichever
+  you run; the default already matches both. Keyword search needs neither.
 - Go 1.25+ to build (what `go.mod` requires; CI also tests the latest stable).
-- Docker, only for the optional Postgres backend.
+- Docker, if you want the bundled Ollama or the Postgres backend.
 
 ## Quick start
 
 Build, then try the store without wiring any hooks:
 
 ```sh
+docker compose up -d          # optional: Ollama (+ model) and Postgres; skip for keyword-only SQLite
 go build -o claude-mem-go ./cmd/claude-mem-go
 
 ./claude-mem-go ingest -limit 3                         # observe 3 tool calls from your latest transcript
