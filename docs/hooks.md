@@ -64,9 +64,10 @@ worker is detached with `Setsid` so it outlives its launcher. Flags:
 **`context`** (timeout 10s, budget 8s, log `context.log`) — injects memory
 before the first prompt. It reads the project's newest observations
 (`-limit`, default 5, max 100) across the worktree and its parent repository,
-leads with an "Unfinished from the last session" block taken from the most
-recent session summary's `next_steps` (only the most recent: stale intentions
-presented as current are worse than none), and returns them as
+leads with an "Unfinished from the last session" block: the newest
+observation in that window carrying `next_steps`, which in practice is the
+last session summary, since ordinary tool-call observations have none. Only
+that one is used — stale intentions presented as current are worse than none, and returns them as
 `additionalContext`. It tells the daemon how many rows it found so the read
 path is observable (best-effort). Skipped for an excluded project.
 
@@ -209,10 +210,12 @@ to 1. Idle sessions are closed after 10 minutes by a sweep that uses
 `TryLock` so it never closes a subprocess mid-turn; `lastUsed` is refreshed
 when a turn finishes, not only when it starts.
 
-**Shutdown.** On SIGTERM the daemon waits for every dispatched turn to finish
-(a `WaitGroup` covers turns for sessions not yet in the cache), then waits up
-to 5s per cached session for its in-flight turn before force-closing, then
-closes the store. Daemon exit is logged at `ERROR`.
+**Shutdown.** On SIGTERM the daemon waits up to 5s for turns already
+dispatched but not yet registered in the session cache (a `WaitGroup`, bounded
+by that grace period), then up to 5s per cached session for its in-flight turn
+before force-closing it, then closes the store. Each wait logs and proceeds
+when its grace period elapses rather than hanging. Daemon exit is logged at
+`ERROR`.
 
 **Socket protocol.** Besides the fire-and-forget hook forward, the socket
 answers plain-text queries used by the other hooks: `INFLIGHT <session_id>`,

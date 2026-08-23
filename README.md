@@ -41,7 +41,7 @@ Build, then try the store without wiring any hooks:
 go build -o claude-mem-go ./cmd/claude-mem-go
 
 ./claude-mem-go ingest -limit 3                         # observe 3 tool calls from your latest transcript
-./claude-mem-go search "some keyword"                   # keyword search (omit the query to enumerate)
+./claude-mem-go search "some keyword"                   # full-text keyword search (a query is required)
 ./claude-mem-go semantic-search "a question phrased differently"
 ./claude-mem-go doctor                                  # claude CLI, worker, database, Ollama, plugin
 ```
@@ -137,9 +137,11 @@ Every store-touching subcommand takes `-db`, which wins over `CLAUDE_MEM_DB`.
 The other flag families, by the commands that share them:
 
 - **Socket/daemon** — `-socket` on every hook, `start`, `worker`, `doctor`;
-  `-model` (default `haiku`), `-max-concurrent` (default 4), `-metrics-addr`,
-  `-stats`, and `-excluded-projects` on `start`/`worker` (`start` forwards
-  them to the worker it spawns).
+  `-max-concurrent` (default 4), `-metrics-addr` and `-excluded-projects` on
+  `start`/`worker` (`start` forwards them to the worker it spawns); `-stats`
+  on `start`, `worker` and `doctor`.
+- **Model** — `-model` (default `haiku`), the model the observer runs, on
+  `start`/`worker`, `ingest` and `stop`.
 - **Embedding** — `-embed-model` (default `nomic-embed-text`) on `ingest`,
   `stop`, `start`/`worker`, `prompt-context`, `semantic-search`, `mcp`,
   `doctor`, and `reembed`; `-embed-model ""` disables semantic features on
@@ -165,8 +167,10 @@ The other flag families, by the commands that share them:
 `worker-stats.json`, and the logs: `worker.log`, `start.log`, `hook.log`,
 `context.log`, `prompt-context.log`, `file-context.log`, `stop.log`, `mcp.log`, and
 `missing-binary.log`. Hooks run detached from any terminal, so these logs are
-the only record of what they did. Every log file rotates at 5MB, keeping one
-prior generation (`name.log.1`).
+the only record of what they did. Every log the binary writes rotates at 5MB,
+keeping one prior generation (`name.log.1`); `missing-binary.log` is appended
+by the shell wrapper at a point where the binary may not exist, so it is the
+one file with no rotation.
 
 ## Operating it
 
@@ -194,9 +198,9 @@ prior generation (`name.log.1`).
   `search_observations`, `semantic_search_observations`,
   `observation_context`, `recent_observations`, `session_start_context`,
   `session_observations`, `file_observations`, `get_observations`,
-  `timeline`, the one write tool `add_observation`, and — only when prompt
-  persistence is enabled — `search_prompts` and `session_prompts`. List
-  limits are capped at 100 per call.
+  `timeline`, the one write tool `add_observation`, and `search_prompts` and
+  `session_prompts` — always listed, but empty unless prompt persistence was
+  enabled when the session ran. List limits are capped at 100 per call.
 - **`export` / `import`** — JSON Lines backup and restore, and the
   SQLite-to-Postgres migration path: `export` from one backend, `import` into
   the other. Import is idempotent (rows dedupe on `content_hash`) and keeps
