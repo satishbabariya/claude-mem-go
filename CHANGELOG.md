@@ -5,6 +5,14 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.4.1 — 2026-08-23
+
+- **Release binaries are stamped from a clean tree.** The v0.4.0 assets
+  reported `<commit>-dirty` from `version`: goreleaser's untracked `dist/`
+  output counted as a modification for Go's VCS stamp. `dist/` is now
+  ignored and the release hook verifies tidiness instead of rewriting
+  module files. Same code as 0.4.0 otherwise.
+
 ## 0.4.0 — 2026-08-22
 
 The first release after a full code, structure and architecture review,
