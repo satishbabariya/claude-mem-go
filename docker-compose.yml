@@ -55,5 +55,42 @@ services:
       timeout: 3s
       retries: 20
 
+  # Ollama serves the embedding model semantic search needs. Running it
+  # here means a user needs nothing installed beyond Docker: `docker
+  # compose up -d` brings up Postgres and Ollama together, and the
+  # one-shot `ollama-pull` service fetches nomic-embed-text (~274MB, once;
+  # the volume keeps it). The default CLAUDE_MEM_OLLAMA_BASE_URL
+  # (http://localhost:11434) already points at the published port.
+  #
+  # CPU inference. On Apple Silicon Docker has no GPU access, and
+  # nomic-embed-text measured ~40 embeddings/s on CPU here — more than the
+  # capture path ever produces (one embedding per observation, seconds
+  # apart) and enough to seed the 20,000-row benchmark corpus in under
+  # eight minutes. A native Ollama install uses the GPU and is faster;
+  # point CLAUDE_MEM_OLLAMA_BASE_URL at it and leave this service stopped.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - claude_mem_go_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    restart: "no"
+
 volumes:
   claude_mem_go_pgdata:
+  claude_mem_go_ollama:
