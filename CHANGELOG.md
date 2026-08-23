@@ -5,6 +5,45 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.4.2 — 2026-08-24
+
+- **`docker compose up -d` now supplies Ollama as well as Postgres.** A
+  one-shot `ollama-pull` service fetches `nomic-embed-text` into a named
+  volume on first start, so semantic search needs nothing installed but
+  Docker. The default `CLAUDE_MEM_OLLAMA_BASE_URL` already points at the
+  published port; a native install stays the faster option (Docker has no
+  GPU access on macOS) and is selected by pointing that variable at it.
+  Verified from a cold start: model present after 40s, `/api/embeddings`
+  answering, `doctor` reporting semantic search available.
+
+- **The documentation was rewritten as reference material.** README and
+  `docs/*` had been assembled by moving the original prose verbatim —
+  chronological, repetitive, hard to use. Same facts, same measured
+  numbers, same rationale, now stated once in the right place: README 300
+  lines; `docs/hooks.md` a per-hook reference (trigger, budget, reads and
+  writes, failure behaviour); `docs/findings.md` one templated
+  **Symptom / Cause / Fix / Verified** entry per defect (31 headings to 93,
+  so nothing was merged away while the prose shrank by a third);
+  `docs/postgres.md`, `docs/development.md` and `docs/plugin-install.md`
+  reorganised, the last gaining a symptom/cause/fix troubleshooting table.
+
+- **Seven documentation claims were wrong and are corrected.** Found by a
+  multi-agent review that checked every command, flag, default, number,
+  link and anchor against the source and then tried to refute each
+  finding: the `search` CLI requires a query (only the MCP tool enumerates
+  on an empty one); `-model` is also on `ingest`/`stop` and `-stats` on
+  `doctor`; `search_prompts`/`session_prompts` are always listed and
+  merely empty when storage is off; `missing-binary.log` is appended by
+  the shell wrapper and does not rotate; SessionStart injects the newest
+  observation carrying `next_steps` rather than "the most recent summary";
+  and the SIGTERM drain is bounded by a 5s grace period on both waits.
+
+- **`bench/recall` records the 2026-08-23 complete run** — a fresh 20,000
+  embedding corpus: 69/77/90/95/100% recall@10 at `ef_search`
+  20/40/100/200/400, 1.6-2.4ms p50, scoped 100% at the default — and
+  documents the few-point run-to-run spread, since HNSW builds are
+  parallel and not deterministic.
+
 ## 0.4.1 — 2026-08-23
 
 - **Release binaries are stamped from a clean tree.** The v0.4.0 assets
