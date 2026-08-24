@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -177,7 +178,15 @@ func summarizeSession(ctx context.Context, l *logging.Logger, st memory.Backend,
 		return n, true
 	}
 	observations, err := cli.WaitForSessionObservations(ctx, st, project, in.SessionID, limit, inFlight)
-	if err != nil {
+	switch {
+	case errors.Is(err, cli.ErrWaitBudgetExhausted):
+		// Not a failure: the wait yielded so this hook still has time to
+		// summarize. Before it did, the poll ran past the context deadline
+		// and the whole hook died with "context deadline exceeded" logged
+		// at ERROR, writing nothing.
+		l.Warnf("stopped waiting for in-flight observations for session %s — summarizing the %d already recorded",
+			in.SessionID, len(observations))
+	case err != nil:
 		l.Errorf("FAILED BySessionID(%s): %v", in.SessionID, err)
 		return 0
 	}
