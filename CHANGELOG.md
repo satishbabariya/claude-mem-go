@@ -5,6 +5,30 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.4.3 — 2026-08-24
+
+- **The Stop hook could burn its whole budget and then write nothing.**
+  Found live, in `stop.log`, during a clean-clone install test:
+  `FAILED BySessionID(...): context deadline exceeded`. The wait loop's
+  extended ceiling is 300 polls while the hook's own context budget is
+  110s, and the loop never checked the deadline — so a session whose
+  observations never settled polled straight through it, the query failed,
+  the failure was logged at ERROR, and no summary was written. The
+  extended patience could never actually be used; it only guaranteed the
+  failure. The wait now yields once less than 45s of budget remains
+  (sized from measured 10-30s summarizations), returns what it has, and
+  the hook summarizes that at WARN instead of erroring. An unbounded or
+  ample context behaves exactly as before.
+
+- **Verified the install path users actually take**: a clean clone of this
+  repository ships no binary (it is gitignored), `scripts/ensure-binary.sh`
+  built one, and a real `claude` session through `--plugin-dir` captured an
+  observation and wrote a session summary — SessionStart, UserPromptSubmit,
+  PreToolUse, PostToolUse and Stop all firing from a checkout that had
+  never been built. The run also confirmed, live, the store-mismatch rule
+  from 0.4.0: with two explicitly configured stores the daemon warns and
+  keeps writing to its own rather than thrashing between them.
+
 ## 0.4.2 — 2026-08-24
 
 - **`docker compose up -d` now supplies Ollama as well as Postgres.** A

@@ -145,9 +145,13 @@ flight for 2 consecutive checks with at least one row present. Without a
 daemon answer it falls back to the row count: 10 consecutive matching
 non-zero reads (~9s of confirmed no-growth, above a single observation's
 usual 5–8s) within 45 polls. A daemon that reports real in-flight work
-extends the ceiling to 300 polls (five minutes), since a single observation
-has been measured at 104s under load. A session with no tool calls pays the
-full 45s and writes nothing.
+extends the ceiling to 300 polls, since a single observation has been
+measured at 104s under load — but the hook's own 110s budget is the real
+bound: the wait yields once less than `StopSummarizeReserve` (45s) of it
+remains, returning what it has so there is still time to summarize. Before
+that yield existed the poll ran through the deadline and the hook died with
+`context deadline exceeded`, writing nothing. A session with no tool calls
+pays the full 45 polls and writes nothing.
 
 Windowing: `BySessionID` returns oldest-first, so a plain `LIMIT` would keep
 the start of a session and drop its conclusions (measured on a 150-observation
