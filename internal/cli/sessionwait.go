@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/satishbabariya/claude-mem-go/internal/memory"
@@ -63,6 +64,17 @@ const (
 	// finishes in ~StopWaitMaxAttempts seconds, not five minutes.
 	StopInFlightWaitMaxAttempts = 300
 )
+
+// StopSummarizeReserve is how much of the caller's context budget
+// WaitForSessionObservations refuses to spend, so there is time left to
+// run the observer and insert the summary. Sized from measured Stop-hook
+// summaries, which take roughly 10-30s end to end.
+const StopSummarizeReserve = 45 * time.Second
+
+// ErrWaitBudgetExhausted means the wait stopped early to leave time for
+// summarizing, not that anything failed. Callers should summarize the
+// observations returned alongside it rather than treating it as an error.
+var ErrWaitBudgetExhausted = errors.New("stopped waiting for in-flight observations to leave time to summarize")
 
 // WaitForSessionObservations polls BySessionID until the count holds
 // steady for StopStableStreakRequired consecutive checks (the worker's
@@ -168,6 +180,18 @@ func WaitForSessionObservations(ctx context.Context, st memory.Backend, project,
 	// ever anything to wait for.
 	sawActivity := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Stop waiting while there is still budget left to summarize with.
+		// StopInFlightWaitMaxAttempts (300s) is larger than the Stop hook's
+		// own context budget (110s, see cmd/claude-mem-go/ctx.go), so a
+		// session whose observations never settle used to poll straight
+		// through the deadline: BySessionID then failed with "context
+		// deadline exceeded", which the caller logged at ERROR, and no
+		// summary was written at all. Observed live on 2026-08-24. The
+		// wait now yields early, and the caller summarizes whatever was
+		// recorded — a partial summary beats an error and nothing.
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= StopSummarizeReserve {
+			return observations, ErrWaitBudgetExhausted
+		}
 		obs, err := st.BySessionID(ctx, project, sessionID, limit)
 		if err != nil {
 			return nil, err

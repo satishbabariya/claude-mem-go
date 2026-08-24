@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -315,5 +316,55 @@ func TestWaitForSessionObservationsGenuinelyEmptySessionStillBoundedEvenWhenWork
 	}
 	if be.calls != StopWaitMaxAttempts {
 		t.Fatalf("WaitForSessionObservations made %d BySessionID calls, want exactly %d — a genuinely empty session must not get the extended budget just because the worker was reachable", be.calls, StopWaitMaxAttempts)
+	}
+}
+
+// TestWaitYieldsBeforeTheCallerBudgetExpires pins the fix for a defect seen
+// live on 2026-08-24: StopInFlightWaitMaxAttempts (300 polls) is larger than
+// the Stop hook's own 110s context budget, so a session whose observations
+// never settled polled straight through the deadline. BySessionID then failed
+// with "context deadline exceeded", cmdStop logged it at ERROR, and no summary
+// was written at all. The wait must yield while enough budget remains to
+// summarize what it already has.
+func TestWaitYieldsBeforeTheCallerBudgetExpires(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	// A deadline inside the reserve: the wait must give up immediately
+	// rather than poll toward it.
+	ctx, cancel := context.WithTimeout(context.Background(), StopSummarizeReserve/2)
+	defer cancel()
+
+	be := &sequencedBackend{counts: []int{1, 1, 1}}
+	start := time.Now()
+	got, err := WaitForSessionObservations(ctx, be, "proj", "s1", 50, nil)
+	if !errors.Is(err, ErrWaitBudgetExhausted) {
+		t.Fatalf("err = %v, want ErrWaitBudgetExhausted", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("waited %s; with the deadline inside the reserve it must yield at once", elapsed)
+	}
+	if be.calls != 0 {
+		t.Fatalf("queried the store %d times; with no budget left it should not query at all", be.calls)
+	}
+	if len(got) != 0 {
+		t.Fatalf("returned %d observations before querying anything", len(got))
+	}
+}
+
+// A deadline generous enough to leave the reserve behaves exactly as an
+// unbounded context: the wait runs normally and returns no sentinel.
+func TestWaitIsUnchangedWhenTheBudgetIsAmple(t *testing.T) {
+	setFastPollIntervalForTest(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), StopSummarizeReserve+time.Minute)
+	defer cancel()
+
+	be := &sequencedBackend{counts: []int{0, 1, 2, 2, 2}}
+	got, err := WaitForSessionObservations(ctx, be, "proj", "s1", 50, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d observations, want 2", len(got))
 	}
 }
