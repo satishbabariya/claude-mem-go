@@ -5,35 +5,254 @@ name: Release
 # workflow is for. CI (ci.yml) already builds/tests every push; this
 # workflow's only job is turning a deliberately-tagged commit into real
 # downloadable binaries.
+#
+# Four jobs, in a strict chain, because a single job that builds then
+# publishes never gets independent verification — it would just be
+# trusting its own output. No in-tree checksum pin is needed *before* a
+# tag exists (an earlier version of this workflow tried that; see git
+# history and scripts/checksums/README.md for why it can't work —
+# -buildvcs=true embeds the commit's own revision into the binary, so a
+# pin computed at commit X and then re-committed as a different commit Y
+# describes a build that no longer matches):
+#
+#   build         — builds the tagged commit once, uploads the result.
+#                   Nothing public yet.
+#   verify        — rebuilds the *same* tagged commit independently, on a
+#                   separate runner, and diffs its output against
+#                   `build`'s. This is the actual verification; nothing
+#                   past this point runs if it fails.
+#   publish       — only reachable if `verify` passed. Publishes exactly
+#                   the artifacts `build` produced (not a third build) as
+#                   the GitHub Release.
+#   pin-checksums — only reachable once `publish` has succeeded. Pushes a
+#                   release-pin/<tag> branch adding
+#                   scripts/checksums/<version>.txt — the checksums
+#                   `build` and `verify` already independently agreed on —
+#                   for ensure-binary.sh's release-fetch step (SATA-13 PR
+#                   B) to verify future downloads against, then tries to
+#                   open a PR for it. This repo has GITHUB_TOKEN PR
+#                   creation disabled, so that PR step is expected to fail
+#                   here; the job still succeeds and leaves the compare
+#                   URL in the job summary for the board to open by hand.
+#                   An ordinary post-hoc PR either way; it gates nothing
+#                   that already happened.
 on:
   push:
     tags:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          # goreleaser's changelog step is disabled (see .goreleaser.yaml),
-          # but full history is what makes `vcs.revision`/`vcs.time` (which
-          # `version`/`doctor` print, via runtime/debug.ReadBuildInfo)
-          # resolve correctly rather than however a shallow clone's HEAD
-          # happens to look.
+          # Full history, not a shallow clone: runtime/debug.ReadBuildInfo's
+          # vcs.revision/vcs.time (what `version`/`doctor` print) resolve
+          # from it, and goreleaser's -buildvcs=true (see .goreleaser.yaml)
+          # is pinned specifically so a shallow or dirty checkout fails the
+          # build loudly instead of silently changing the binary's bytes.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          # Reads the `toolchain go1.25.N` line in go.mod, not a floating
+          # "1.25" — the same source `verify` below reads. If the two
+          # jobs ever resolved different Go patch versions, identical
+          # source would produce different bytes and `verify` would fail
+          # every release until they were realigned.
+          go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v6
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          install-only: true
+
+      - name: Cross-check the tag against the manifest version
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$manifest_version" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match .claude-plugin/plugin.json's version ($manifest_version) at this commit. Refusing to build." >&2
+            exit 1
+          fi
+
+      - name: Build (nothing published from this job)
+        run: goreleaser release --clean --skip=publish
+
+      - name: Upload the build for verify/publish to consume
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  verify:
+    needs: build
+    # A different runner image than `build`, not just another instance of
+    # the same one — GitHub Actions gives every job an independent fresh
+    # VM regardless, but pinning a distinct label here makes that
+    # independence an explicit, load-bearing part of the design rather
+    # than an incidental property nobody checked.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+
+      - name: Rebuild the same tagged commit, independently
+        run: goreleaser release --clean --skip=publish
+
+      - name: Download build's output
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist-build
+
+      - name: Diff this rebuild against build's output
+        run: |
+          set -eu
+          echo "--- build job's checksums ---"
+          cat dist-build/checksums.txt
+          echo "--- this rebuild's checksums ---"
+          cat dist/checksums.txt
+
+          # Same diagnostic ci.yml's reproducible-build job uses: diff
+          # every archive's tar listing before the checksum diff, so a
+          # divergence says which archive/entry/field moved instead of
+          # just "checksums differ."
+          status=0
+          for f in dist-build/*.tar.gz; do
+            name="$(basename "$f")"
+            echo "=== $name ==="
+            if ! diff -u <(tar -tvzf "dist-build/$name") <(tar -tvzf "dist/$name"); then
+              status=1
+            fi
+          done
+
+          if ! diff -u dist-build/checksums.txt dist/checksums.txt; then
+            status=1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::this independent rebuild does not match the build job's output. Not publishing. If every tar listing matches but checksums.txt still differs, check the gzip container's own header next (its embedded MTIME field is separate from the tar entries' mtimes)." >&2
+            exit 1
+          fi
+          echo "verified: independent rebuild is byte-identical to the build job's output"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish as a GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Deliberately not `goreleaser release` again here: this project's
+        # pinned (OSS) goreleaser has no supported way to publish a
+        # previous job's dist/ without rebuilding — its split/merge
+        # (`--split` / `goreleaser continue --merge`) is a Pro-only
+        # feature. Re-running the full build a third time would only be
+        # verified *after* the fact, defeating the point of `verify`
+        # running first. `gh release create` instead publishes exactly
+        # the files `build` produced and `verify` already proved
+        # byte-identical on a separate runner — nothing here is rebuilt,
+        # so nothing published can differ from what was already checked.
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See CHANGELOG.md for what changed in this release."
+
+  pin-checksums:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the published build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Push the pin branch, opening a PR when the repo allows it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # gh pr create with GITHUB_TOKEN is rejected outright on repos where
+        # "Allow GitHub Actions to create and approve pull requests" is off
+        # (this repo has it off) — that's an operator call about repo
+        # security, not something this workflow should require changing.
+        # So the branch always gets pushed; PR creation is a best-effort
+        # extra on top of it, and its failure doesn't fail the job. Note
+        # also that a PR opened with GITHUB_TOKEN wouldn't trigger CI
+        # anyway, which is one more reason the board opens this one by
+        # hand rather than relying on automation here.
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          branch="release-pin/$GITHUB_REF_NAME"
+          default_branch="${{ github.event.repository.default_branch }}"
+          mkdir -p scripts/checksums
+          cp dist/checksums.txt "scripts/checksums/$version.txt"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "scripts/checksums/$version.txt"
+          git commit -m "Pin release checksums for $GITHUB_REF_NAME"
+          git push origin "$branch"
+
+          if gh pr create \
+            --title "Pin release checksums for $GITHUB_REF_NAME" \
+            --body "Checksums the \`build\` and \`verify\` jobs on [this tag's release.yml run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) independently agreed on. $GITHUB_REF_NAME is already published at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME — this PR only records the pin on the default branch for ensure-binary.sh's release-fetch step to verify future downloads against; it does not gate anything that already happened."
+          then
+            exit 0
+          fi
+
+          compare_url="https://github.com/${{ github.repository }}/compare/${default_branch}...${branch}"
+          echo "::warning::gh pr create was rejected (likely repo setting: \"Allow GitHub Actions to create and approve pull requests\" is off). The pin branch $branch was pushed; open the PR by hand: $compare_url . Note a PR opened with GITHUB_TOKEN would not trigger CI anyway." >&2
+          {
+            echo "### Release checksum pin needs a manual PR"
+            echo
+            echo "\`gh pr create\` was rejected for \`$branch\` — this repo has \"Allow GitHub Actions to create and approve pull requests\" turned off, so \`GITHUB_TOKEN\` can't open pull requests. The branch was pushed successfully."
+            echo
+            echo "Open the PR by hand: $compare_url"
+            echo
+            echo "(A PR opened with \`GITHUB_TOKEN\` wouldn't trigger CI anyway, which is one more reason to open this one manually.)"
+          } >> "$GITHUB_STEP_SUMMARY"

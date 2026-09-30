@@ -2,6 +2,15 @@ module github.com/satishbabariya/claude-mem-go
 
 go 1.25.0
 
+// Pinned, not left floating: release.yml's build and verify jobs must
+// resolve the exact same Go toolchain (via go-version-file: go.mod in
+// both), or a patch release landing between the two runs would silently
+// change every release binary's bytes and make verify's independent
+// rebuild diverge from build's output instead of matching it. See
+// scripts/checksums/README.md for the reproducibility chain this
+// protects.
+toolchain go1.25.14
+
 require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pgvector/pgvector-go v0.4.1
