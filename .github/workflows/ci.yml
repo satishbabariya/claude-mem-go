@@ -116,43 +116,87 @@ jobs:
           version: "~> v2"
           install-only: true
 
+      # -buildvcs=true (pinned in .goreleaser.yaml) embeds vcs.modified
+      # based on whether `git status --porcelain` is non-empty at build
+      # time — untracked files count, not just tracked changes. This step
+      # runs before *every* build in this job (not just the first) so a
+      # leftover untracked dir from a prior step in this same job — or a
+      # future edit to this workflow that reintroduces one — fails loudly
+      # here instead of silently flipping one build's vcs.modified bit and
+      # producing a checksum mismatch that has nothing to do with the
+      # actual reproducibility settings under test.
+      - name: Assert clean working tree before build #1
+        run: |
+          set -eu
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::working tree is not clean before build #1 — this would make -buildvcs=true embed vcs.modified=true and break the byte-for-byte comparison below" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
       - name: Build snapshot #1
         run: goreleaser release --clean --snapshot
 
-      - run: mv dist dist-1
+      # Moved to $RUNNER_TEMP, outside the checkout, rather than
+      # `mv dist dist-1`: a sibling directory inside the checkout is
+      # untracked and not covered by .gitignore (only dist/ itself is), so
+      # it would make `git status --porcelain` non-empty for build #2 and
+      # build #2 alone — the two builds would then differ only in their
+      # embedded vcs.modified bit, not in anything .goreleaser.yaml
+      # actually controls. release.yml's build/verify jobs don't hit this
+      # because each runs in its own fresh checkout; this job proves the
+      # same reproducibility within a single job, so it has to clear its
+      # own output out of the tree between builds instead.
+      - run: mv dist "$RUNNER_TEMP/dist-1"
+
+      - name: Assert clean working tree before build #2
+        run: |
+          set -eu
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::working tree is not clean before build #2 — this would make -buildvcs=true embed vcs.modified=true and break the byte-for-byte comparison below" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
 
       - name: Build snapshot #2
         run: goreleaser release --clean --snapshot
 
-      - run: mv dist dist-2
+      - run: mv dist "$RUNNER_TEMP/dist-2"
 
       - name: Diff archive listings and checksums
         run: |
           set -eu
+          dist1="$RUNNER_TEMP/dist-1"
+          dist2="$RUNNER_TEMP/dist-2"
           echo "--- build 1 checksums ---"
-          cat dist-1/checksums.txt
+          cat "$dist1/checksums.txt"
           echo "--- build 2 checksums ---"
-          cat dist-2/checksums.txt
+          cat "$dist2/checksums.txt"
 
           # Diff every archive's tar listing (name, mode, owner, size,
           # mtime per entry) up front, not only after a checksum mismatch:
           # if these two builds ever diverge again, this says *where* —
           # which archive, which entry, which field — instead of just
-          # "the checksums differ." Caught a real bug this way once
-          # already: builds_info.mtime only pinned the binary's own tar
-          # entry, and the extra `files:` entries (README.md,
-          # CHANGELOG.md, LICENSE) kept the build-time mtime until they
-          # got their own per-entry info.mtime too (see .goreleaser.yaml).
+          # "the checksums differ." Caught two real bugs this way already:
+          # builds_info.mtime only pinned the binary's own tar entry, and
+          # the extra `files:` entries (README.md, CHANGELOG.md, LICENSE)
+          # kept the build-time mtime until they got their own per-entry
+          # info.mtime too (see .goreleaser.yaml); and dist-1/ sitting
+          # untracked inside the checkout flipped build #2's embedded
+          # vcs.modified bit, which showed up only in the checksums, never
+          # in these tar listings, since it lives inside the binary's own
+          # bytes rather than any entry's metadata — hence the two
+          # "assert clean working tree" steps above.
           status=0
-          for f in dist-1/*.tar.gz; do
+          for f in "$dist1"/*.tar.gz; do
             name="$(basename "$f")"
             echo "=== $name ==="
-            if ! diff -u <(tar -tvzf "dist-1/$name") <(tar -tvzf "dist-2/$name"); then
+            if ! diff -u <(tar -tvzf "$dist1/$name") <(tar -tvzf "$dist2/$name"); then
               status=1
             fi
           done
 
-          if ! diff -u dist-1/checksums.txt dist-2/checksums.txt; then
+          if ! diff -u "$dist1/checksums.txt" "$dist2/checksums.txt"; then
             status=1
           fi
 
