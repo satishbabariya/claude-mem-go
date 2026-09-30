@@ -564,6 +564,171 @@ func TestFetchReleaseNonLoopbackOverrideIsIgnored(t *testing.T) {
 	}
 }
 
+// TestFetchReleaseUserinfoBypassIsRejected covers
+// "127.0.0.1@evil.example": release_host must not treat the part before
+// '@' as the host, since is_loopback_host would otherwise see the
+// loopback-looking userinfo and accept an authority that curl actually
+// connects to "evil.example" for. Same verification shape as
+// TestFetchReleaseNonLoopbackOverrideIsIgnored: the attacker-controlled
+// real target gets zero requests, and the URL fake curl was actually
+// asked to fetch uses the real release host instead.
+func TestFetchReleaseUserinfoBypassIsRejected(t *testing.T) {
+	skipOnWindows(t)
+	osName, arch := hostAssetOSArch(t)
+	version := "9.9.50"
+	root := fakePluginRootWithManifest(t, version)
+	asset := fmt.Sprintf("claude-mem-go_%s_%s_%s.tar.gz", version, osName, arch)
+	writePin(t, root, version, strings.Repeat("a", 64)+"  "+asset)
+	attacker := newFixtureServer(t, map[string][]byte{asset: []byte("should never be fetched")})
+
+	logFile := filepath.Join(t.TempDir(), "fake-curl.log")
+	pathDir := pathWithFakeCurl(t, logFile)
+
+	out, code := runScript(t, root,
+		"CLAUDE_MEM_GO_RELEASE_BASE_URL="+strings.Replace(attacker.URL, "127.0.0.1", "127.0.0.1@evil.example", 1),
+		"PATH="+pathDir,
+	)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0. Output:\n%s", code, out)
+	}
+	if attacker.Hits() != 0 {
+		t.Fatalf("the userinfo bypass's real target must never be contacted, got %d hits", attacker.Hits())
+	}
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("fake curl was never invoked: %v\nscript output:\n%s", err, out)
+	}
+	if strings.Contains(string(logged), "evil.example") {
+		t.Fatalf("the userinfo bypass leaked into the request: %s", logged)
+	}
+	if !strings.Contains(string(logged), "github.com") {
+		t.Fatalf("expected the real release host to be used instead, got: %s", logged)
+	}
+}
+
+// TestFetchReleaseGlobSuffixBypassIsRejected covers
+// "127.x.evil.example": a naive glob check like "127.*.*.*" matches this
+// (three wildcarded segments after "127."), even though it is a DNS name
+// that can resolve anywhere. is_loopback_host must reject it because its
+// second label ("x") is not an all-digit octet.
+func TestFetchReleaseGlobSuffixBypassIsRejected(t *testing.T) {
+	skipOnWindows(t)
+	osName, arch := hostAssetOSArch(t)
+	version := "9.9.51"
+	root := fakePluginRootWithManifest(t, version)
+	asset := fmt.Sprintf("claude-mem-go_%s_%s_%s.tar.gz", version, osName, arch)
+	writePin(t, root, version, strings.Repeat("a", 64)+"  "+asset)
+	attacker := newFixtureServer(t, map[string][]byte{asset: []byte("should never be fetched")})
+
+	logFile := filepath.Join(t.TempDir(), "fake-curl.log")
+	pathDir := pathWithFakeCurl(t, logFile)
+
+	out, code := runScript(t, root,
+		"CLAUDE_MEM_GO_RELEASE_BASE_URL="+strings.Replace(attacker.URL, "127.0.0.1", "127.x.evil.example", 1),
+		"PATH="+pathDir,
+	)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0. Output:\n%s", code, out)
+	}
+	if attacker.Hits() != 0 {
+		t.Fatalf("the glob-suffix bypass's real target must never be contacted, got %d hits", attacker.Hits())
+	}
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("fake curl was never invoked: %v\nscript output:\n%s", err, out)
+	}
+	if strings.Contains(string(logged), "evil.example") {
+		t.Fatalf("the glob-suffix bypass leaked into the request: %s", logged)
+	}
+	if !strings.Contains(string(logged), "github.com") {
+		t.Fatalf("expected the real release host to be used instead, got: %s", logged)
+	}
+}
+
+// TestFetchReleaseDottedSuffixBypassIsRejected covers
+// "127.0.0.1.evil.example": the same glob would also match a real
+// loopback prefix followed by extra DNS labels. is_loopback_host must
+// reject it because splitting on '.' yields six fields, not the four a
+// dotted quad requires.
+func TestFetchReleaseDottedSuffixBypassIsRejected(t *testing.T) {
+	skipOnWindows(t)
+	osName, arch := hostAssetOSArch(t)
+	version := "9.9.52"
+	root := fakePluginRootWithManifest(t, version)
+	asset := fmt.Sprintf("claude-mem-go_%s_%s_%s.tar.gz", version, osName, arch)
+	writePin(t, root, version, strings.Repeat("a", 64)+"  "+asset)
+	attacker := newFixtureServer(t, map[string][]byte{asset: []byte("should never be fetched")})
+
+	logFile := filepath.Join(t.TempDir(), "fake-curl.log")
+	pathDir := pathWithFakeCurl(t, logFile)
+
+	out, code := runScript(t, root,
+		"CLAUDE_MEM_GO_RELEASE_BASE_URL="+strings.Replace(attacker.URL, "127.0.0.1", "127.0.0.1.evil.example", 1),
+		"PATH="+pathDir,
+	)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0. Output:\n%s", code, out)
+	}
+	if attacker.Hits() != 0 {
+		t.Fatalf("the dotted-suffix bypass's real target must never be contacted, got %d hits", attacker.Hits())
+	}
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("fake curl was never invoked: %v\nscript output:\n%s", err, out)
+	}
+	if strings.Contains(string(logged), "evil.example") {
+		t.Fatalf("the dotted-suffix bypass leaked into the request: %s", logged)
+	}
+	if !strings.Contains(string(logged), "github.com") {
+		t.Fatalf("expected the real release host to be used instead, got: %s", logged)
+	}
+}
+
+// TestFetchReleaseBracketedIPv6LoopbackOverrideIsHonored covers the other
+// direction: "[::1]" (the URL literal form of the IPv6 loopback address)
+// must be RECOGNIZED as loopback and the override honored, not rejected
+// alongside the bypasses above. Verified the same way as
+// TestFetchReleaseNonLoopbackOverrideIsIgnored — a fake curl records the
+// URL it was asked to fetch — since a real fixture server bound to
+// "[::1]" would make this test depend on IPv6 being available on the
+// runner.
+func TestFetchReleaseBracketedIPv6LoopbackOverrideIsHonored(t *testing.T) {
+	skipOnWindows(t)
+	osName, arch := hostAssetOSArch(t)
+	version := "9.9.53"
+	root := fakePluginRootWithManifest(t, version)
+	asset := fmt.Sprintf("claude-mem-go_%s_%s_%s.tar.gz", version, osName, arch)
+	writePin(t, root, version, strings.Repeat("a", 64)+"  "+asset)
+	fs := newFixtureServer(t, map[string][]byte{})
+
+	logFile := filepath.Join(t.TempDir(), "fake-curl.log")
+	pathDir := pathWithFakeCurl(t, logFile)
+
+	fixturePort := fs.URL[strings.LastIndex(fs.URL, ":")+1:]
+	override := "http://[::1]:" + fixturePort
+
+	out, code := runScript(t, root,
+		"CLAUDE_MEM_GO_RELEASE_BASE_URL="+override,
+		"PATH="+pathDir,
+	)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0. Output:\n%s", code, out)
+	}
+	if fs.Hits() != 0 {
+		t.Fatalf("expected the fake curl to intercept the request before any real connection, got %d hits", fs.Hits())
+	}
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("fake curl was never invoked: %v\nscript output:\n%s", err, out)
+	}
+	if strings.Contains(string(logged), "github.com") {
+		t.Fatalf("a real loopback override must not fall back to the release host: %s", logged)
+	}
+	if !strings.Contains(string(logged), "[::1]") {
+		t.Fatalf("expected the bracketed IPv6 override to be used, got: %s", logged)
+	}
+}
+
 // TestFetchReleaseVersionFallsBackToCheckoutTag covers version
 // selection's fallback path: a manifest that parses but has no
 // "version" field (not merely a missing file — this proves the

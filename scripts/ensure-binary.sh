@@ -149,25 +149,76 @@ arch_name() {
 }
 
 # release_host prints the host portion of a URL (scheme stripped, then up
-# to the first '/' or ':'). Pure string parsing, not a DNS resolution —
-# deliberately: resolving the override's host would add a dependency this
-# script otherwise has none of, and the property this function's caller
-# actually needs (is the LITERAL host a loopback name) does not require
-# it. A URL whose loopback-looking host is deliberately mis-resolved by
-# the local resolver is a much narrower, already-privileged attack than
-# what this check exists to stop (an arbitrary env var silently
-# redirecting an outbound request to a non-loopback host).
+# to the first '/', with userinfo and port removed). Pure string parsing,
+# not a DNS resolution — deliberately: resolving the override's host would
+# add a dependency this script otherwise has none of, and the property
+# this function's caller actually needs (is the LITERAL host a loopback
+# name) does not require it. A URL whose loopback-looking host is
+# deliberately mis-resolved by the local resolver is a much narrower,
+# already-privileged attack than what this check exists to stop (an
+# arbitrary env var silently redirecting an outbound request to a
+# non-loopback host).
+#
+# An authority containing '@' (userinfo, e.g. "127.0.0.1@evil.example")
+# is rejected outright — printed as an empty host, which is_loopback_host
+# always rejects — rather than parsed for the part after '@', so a
+# loopback-looking prefix can never smuggle a non-loopback host in behind
+# it.
 release_host() {
 	rest="${1#*://}"
-	host="${rest%%/*}"
-	printf '%s' "${host%%:*}"
+	authority="${rest%%/*}"
+	case "$authority" in
+	*@*)
+		printf ''
+		return
+		;;
+	esac
+	case "$authority" in
+	\[*)
+		# Bracketed IPv6 literal, e.g. "[::1]" or "[::1]:8080" — keep the
+		# brackets so is_loopback_host can match the literal form used in
+		# URLs.
+		printf '%s' "${authority%%]*}]"
+		;;
+	*)
+		printf '%s' "${authority%%:*}"
+		;;
+	esac
 }
 
+# is_loopback_host accepts only: the literal name "localhost"; "::1" or
+# its bracketed URL form "[::1]"; or a strict dotted quad in 127/8 (four
+# all-digit octets, each 0-255, first octet 127). Deliberately NOT a glob
+# like "127.*.*.*" — "*" matches any characters including dots and
+# letters, so that glob also matches a DNS name such as
+# "127.x.evil.example" or "127.0.0.1.evil.example", and (combined with
+# release_host not stripping userinfo) "127.0.0.1@evil.example". Each of
+# those resolves or forwards to a host this check must reject.
 is_loopback_host() {
-	case "$1" in
-	127.*.*.* | ::1 | localhost) return 0 ;;
+	host="$1"
+	case "$host" in
+	localhost | ::1 | \[::1\])
+		return 0
+		;;
+	esac
+	case "$host" in
+	127.*.*.*) ;;
 	*) return 1 ;;
 	esac
+	oldifs="$IFS"
+	IFS=.
+	# shellcheck disable=SC2086 # word splitting on IFS=. is the point: it's how the four octets get split apart.
+	set -- $host
+	IFS="$oldifs"
+	[ "$#" -eq 4 ] || return 1
+	for octet in "$1" "$2" "$3" "$4"; do
+		case "$octet" in
+		'' | *[!0-9]*) return 1 ;;
+		esac
+		[ "$((10#$octet))" -le 255 ] || return 1
+	done
+	[ "$1" = 127 ] || return 1
+	return 0
 }
 
 # fetch_url downloads $1 to $2 using whichever of curl/wget is on PATH,
@@ -261,10 +312,12 @@ sha256_of() {
 # what verification catches — the request itself (headers, timing, the
 # mere fact that a plugin's Setup hook reached some internal host) is
 # observable even when the response can never be trusted. So the
-# override is honored only when its host is loopback
-# (127.0.0.0/8/::1/localhost), or when the test-only
-# CLAUDE_MEM_GO_ALLOW_REMOTE_RELEASE_BASE_URL=1 is also set; any other
-# value is treated as absent and the real release host is used instead.
+# override is honored only when its authority has no userinfo and its
+# host is strictly loopback (127.0.0.0/8, "::1"/"[::1]", or "localhost" —
+# see is_loopback_host's own comment for why this is not a glob), or when
+# the test-only CLAUDE_MEM_GO_ALLOW_REMOTE_RELEASE_BASE_URL=1 is also
+# set; any other value is treated as absent and the real release host is
+# used instead.
 fetch_release() {
 	version=$(resolve_version) || return 1
 	[ -n "$version" ] || return 1
@@ -283,7 +336,10 @@ fetch_release() {
 	fi
 
 	asset="claude-mem-go_${version}_${os}_${arch}.tar.gz"
-	expected=$(grep -F "$asset" "$pin" 2>/dev/null | awk '{print $1}' | head -n1)
+	# Exact filename match on column 2, not `grep -F "$asset" "$pin"` — a
+	# substring match would also hit a longer name sharing the same
+	# prefix, such as a future "$asset.sbom" sidecar entry.
+	expected=$(awk -v a="$asset" '$2==a{print $1; exit}' "$pin" 2>/dev/null)
 	[ -n "$expected" ] || return 1
 
 	base="https://github.com/satishbabariya/claude-mem-go/releases/download/v${version}"
