@@ -8,6 +8,7 @@ work without it. Release binaries are produced as described in
 ## Contents
 
 - [Install and uninstall](#install-and-uninstall)
+- [Manual install from a release binary](#manual-install-from-a-release-binary)
 - [What gets wired](#what-gets-wired)
 - [The self-healing binary](#the-self-healing-binary)
 - [Verifying an install](#verifying-an-install)
@@ -32,6 +33,46 @@ Claude Code session on the machine. Restart Claude Code after installing so
 claude plugin uninstall claude-mem-go@claude-mem-go-local --scope project
 claude plugin marketplace remove claude-mem-go-local
 ```
+
+## Manual install from a release binary
+
+No Go toolchain? Every tagged release publishes a checksummed binary for each
+[supported platform](../README.md#requirements) — pick the one matching your
+`uname -s`/`uname -m`, verify it against the release's `checksums.txt`, and
+use it in place of `go build -o claude-mem-go ./cmd/claude-mem-go` above (or
+standalone, without the plugin, for just the CLI and MCP server):
+
+```sh
+# Map uname to goreleaser's naming: darwin/linux, amd64/arm64.
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+arch=$(uname -m); case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+version=0.4.3   # the release tag without its leading "v" — check the Releases page for the latest
+
+base="https://github.com/satishbabariya/claude-mem-go/releases/download/v${version}"
+curl -sLO "${base}/claude-mem-go_${version}_${os}_${arch}.tar.gz"
+curl -sLO "${base}/checksums.txt"
+
+# Verify before extracting — never run an unverified download.
+grep "claude-mem-go_${version}_${os}_${arch}.tar.gz" checksums.txt | shasum -a 256 -c -
+#   (Linux without `shasum`: sha256sum --ignore-missing -c checksums.txt)
+
+tar -xzf "claude-mem-go_${version}_${os}_${arch}.tar.gz" claude-mem-go
+chmod +x claude-mem-go
+./claude-mem-go doctor
+```
+
+To use this binary with the plugin (hooks, MCP server, `/mem-*` skills)
+instead of building one, a Go toolchain is still not required for the binary
+itself, but the plugin source (manifest, hooks, skills) still needs a local
+checkout — `git clone` it, then copy the verified binary to
+`$CLAUDE_PLUGIN_ROOT/claude-mem-go` (the path `scripts/ensure-binary.sh` would
+otherwise build into) before running `claude plugin install` above; it will
+find a working binary already in place and skip building.
+
+There is no install script and no Setup-hook fetch of these binaries yet —
+see [The self-healing binary](#the-self-healing-binary) for why the current
+plugin install always builds from source, and CHANGELOG.md / the project's
+issue tracker for that gap's status.
 
 Uninstalling leaves `~/.claude-mem-go/` (store, logs, socket) in place; a
 running worker daemon keeps running until stopped or the machine restarts.
