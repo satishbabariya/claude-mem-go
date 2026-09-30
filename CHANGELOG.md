@@ -5,37 +5,6 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
-## 0.4.4 — 2026-09-30
-
-- **Release archives are now reproducible, not just the binaries inside
-  them.** `.goreleaser.yaml` pins `mod_timestamp` to the commit's own
-  timestamp (goreleaser's default is wall-clock "now," which is why
-  identical source used to produce different bytes on every build), adds
-  `-trimpath` (drops the builder's absolute filesystem path) and pins
-  `-buildvcs=true` explicitly rather than leaving it on Go's `auto`
-  default (which silently drops VCS stamping — and silently changes the
-  binary's bytes — on a shallow or dirty checkout instead of failing
-  loud), and sets `archives[].builds_info.mtime` so archive file
-  timestamps stop leaking build time into otherwise-identical archives.
-  Proved, not just asserted: a new `reproducible-build` CI job builds the
-  same commit twice and asserts the checksums match byte-for-byte.
-- **The Go toolchain is now pinned exactly** (`toolchain go1.25.14` in
-  go.mod, read via `go-version-file: go.mod`), closing a gap where the
-  pre-tag pinning job and the release job could otherwise land on
-  different Go patch versions on different days and silently produce
-  different release bytes.
-- **Closed the release-checksum chicken-and-egg problem.** goreleaser can
-  only produce `checksums.txt` from a build *at* the tagged commit, so
-  that commit's own tree could never contain a pin for its own release —
-  a pin fetched from the release itself would have been trust-on-first-
-  use against the same server, not real verification. A new
-  `pin-release-checksums` workflow, run manually by the operator against
-  the commit about to be tagged, computes the pin ahead of the tag and
-  opens a PR with it; `release.yml` now builds first, verifies the result
-  against that committed pin byte-for-byte, and only then publishes —
-  refusing to publish a non-reproducible or tampered build rather than
-  detecting it after the fact. See `scripts/checksums/README.md`.
-
 ## 0.4.3 — 2026-08-24
 
 - **The Stop hook could burn its whole budget and then write nothing.**

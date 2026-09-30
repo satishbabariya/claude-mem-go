@@ -45,10 +45,11 @@ builds:
       - arm64
     flags:
       # -trimpath: the builder's absolute filesystem path (which differs
-      # between the pre-tag pinning job and the release job, and between
+      # between release.yml's build and verify jobs — two independent
+      # runners by design, see that workflow's own comments — and between
       # anyone reproducing the build locally) must not leak into the
-      # binary — see the checksum-pinning comment on `checksum:` below for
-      # why that matters here specifically.
+      # binary, or the two jobs' otherwise-identical output would diverge
+      # on that alone.
       #
       # -buildvcs=true pinned explicitly, not left on Go's default `auto`:
       # `auto` silently drops VCS stamping when the working tree isn't a
@@ -79,16 +80,29 @@ archives:
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    files:
-      - README.md
-      - CHANGELOG.md
-      - LICENSE
     # Reproducibility is over the archive, not just the binary inside it:
     # goreleaser stamps archive file mtimes with the build time by
     # default, so identical binaries would still produce different
     # archive bytes (and therefore different checksums.txt entries) on
-    # every rebuild without this. Applies to every file in the archive —
-    # the binary and the three extra files above alike.
+    # every rebuild without this.
+    #
+    # `builds_info.mtime` below only pins the *binary's* entry (the one
+    # `builds:` produces) — confirmed the hard way, by a `reproducible-
+    # build` CI run whose two builds' checksums differed even with that
+    # setting in place. The three extra files still got the build-time
+    # mtime because they go through `files:`, a separate mechanism with
+    # its own per-entry `info.mtime`. Both have to be set; either alone
+    # leaves part of the archive unpinned.
+    files:
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: CHANGELOG.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
     builds_info:
       mtime: "{{ .CommitDate }}"
 

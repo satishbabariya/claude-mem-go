@@ -5,36 +5,62 @@ name: Release
 # workflow is for. CI (ci.yml) already builds/tests every push; this
 # workflow's only job is turning a deliberately-tagged commit into real
 # downloadable binaries.
+#
+# Four jobs, in a strict chain, because a single job that builds then
+# publishes never gets independent verification — it would just be
+# trusting its own output. No in-tree checksum pin is needed *before* a
+# tag exists (an earlier version of this workflow tried that; see git
+# history and scripts/checksums/README.md for why it can't work —
+# -buildvcs=true embeds the commit's own revision into the binary, so a
+# pin computed at commit X and then re-committed as a different commit Y
+# describes a build that no longer matches):
+#
+#   build         — builds the tagged commit once, uploads the result.
+#                   Nothing public yet.
+#   verify        — rebuilds the *same* tagged commit independently, on a
+#                   separate runner, and diffs its output against
+#                   `build`'s. This is the actual verification; nothing
+#                   past this point runs if it fails.
+#   publish       — only reachable if `verify` passed. Publishes exactly
+#                   the artifacts `build` produced (not a third build) as
+#                   the GitHub Release.
+#   pin-checksums — only reachable once `publish` has succeeded. Opens a
+#                   PR adding scripts/checksums/<version>.txt — the
+#                   checksums `build` and `verify` already independently
+#                   agreed on — to the default branch, for
+#                   ensure-binary.sh's release-fetch step (SATA-13 PR B)
+#                   to verify future downloads against. An ordinary
+#                   post-hoc PR; it gates nothing that already happened.
 on:
   push:
     tags:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          # goreleaser's changelog step is disabled (see .goreleaser.yaml),
-          # but full history is what makes `vcs.revision`/`vcs.time` (which
-          # `version`/`doctor` print, via runtime/debug.ReadBuildInfo)
-          # resolve correctly rather than however a shallow clone's HEAD
-          # happens to look.
+          # Full history, not a shallow clone: runtime/debug.ReadBuildInfo's
+          # vcs.revision/vcs.time (what `version`/`doctor` print) resolve
+          # from it, and goreleaser's -buildvcs=true (see .goreleaser.yaml)
+          # is pinned specifically so a shallow or dirty checkout fails the
+          # build loudly instead of silently changing the binary's bytes.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           # Reads the `toolchain go1.25.N` line in go.mod, not a floating
-          # "1.25". The pin-release-checksums workflow (which computed
-          # this tag's committed checksum pin) resolves its Go toolchain
-          # the same way — same source, same version, on purpose. If the
-          # two ever resolved different patch versions, identical source
-          # would produce different bytes and this workflow's verify step
-          # below would fail every release until they were realigned.
+          # "1.25" — the same source `verify` below reads. If the two
+          # jobs ever resolved different Go patch versions, identical
+          # source would produce different bytes and `verify` would fail
+          # every release until they were realigned.
           go-version-file: go.mod
 
       - name: Install goreleaser
@@ -44,41 +70,158 @@ jobs:
           version: "~> v2"
           install-only: true
 
-      # Build first, skip only the GitHub-release-publish step, so nothing
-      # reaches the public Release until it has been checked against the
-      # committed pin below. `goreleaser continue` (reusing this build's
-      # dist/ for the real publish step, skipping a full rebuild) is not
-      # available in the pinned goreleaser version — we rebuild instead of
-      # reusing this run's artifacts, and reproducibility is exactly what
-      # makes that safe: a second `--clean` build of the same tagged
-      # commit is required to produce byte-identical output, so rebuilding
-      # to publish is not a second chance to get a different, unverified
-      # answer.
-      - name: Build (without publishing)
-        run: goreleaser release --clean --skip=publish
-
-      - name: Verify against the committed checksum pin
+      - name: Cross-check the tag against the manifest version
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
-          pin="scripts/checksums/$version.txt"
-          if [ ! -f "$pin" ]; then
-            echo "::error::no committed checksum pin at $pin for tag $GITHUB_REF_NAME." >&2
-            echo "::error::Run the 'Pin release checksums' workflow (see scripts/checksums/README.md) against the commit this tag points at, merge the PR it opens, then re-push this tag. Refusing to publish an unpinned release." >&2
-            exit 1
-          fi
           manifest_version="$(jq -r .version .claude-plugin/plugin.json)"
           if [ "$manifest_version" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match .claude-plugin/plugin.json's version ($manifest_version) at this commit. Refusing to publish a release under a mismatched version." >&2
+            echo "::error::tag $GITHUB_REF_NAME does not match .claude-plugin/plugin.json's version ($manifest_version) at this commit. Refusing to build." >&2
             exit 1
           fi
-          if ! diff -u "$pin" dist/checksums.txt; then
-            echo "::error::build output does not match the committed checksum pin at $pin. Either the release build is not reproducible (see the 'reproducible-build' CI job) or the pin is stale. Refusing to publish." >&2
-            exit 1
-          fi
-          echo "checksums verified byte-for-byte against $pin"
 
-      - name: Publish
-        run: goreleaser release --clean
+      - name: Build (nothing published from this job)
+        run: goreleaser release --clean --skip=publish
+
+      - name: Upload the build for verify/publish to consume
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  verify:
+    needs: build
+    # A different runner image than `build`, not just another instance of
+    # the same one — GitHub Actions gives every job an independent fresh
+    # VM regardless, but pinning a distinct label here makes that
+    # independence an explicit, load-bearing part of the design rather
+    # than an incidental property nobody checked.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+
+      - name: Rebuild the same tagged commit, independently
+        run: goreleaser release --clean --skip=publish
+
+      - name: Download build's output
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist-build
+
+      - name: Diff this rebuild against build's output
+        run: |
+          set -eu
+          echo "--- build job's checksums ---"
+          cat dist-build/checksums.txt
+          echo "--- this rebuild's checksums ---"
+          cat dist/checksums.txt
+
+          # Same diagnostic ci.yml's reproducible-build job uses: diff
+          # every archive's tar listing before the checksum diff, so a
+          # divergence says which archive/entry/field moved instead of
+          # just "checksums differ."
+          status=0
+          for f in dist-build/*.tar.gz; do
+            name="$(basename "$f")"
+            echo "=== $name ==="
+            if ! diff -u <(tar -tvzf "dist-build/$name") <(tar -tvzf "dist/$name"); then
+              status=1
+            fi
+          done
+
+          if ! diff -u dist-build/checksums.txt dist/checksums.txt; then
+            status=1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::this independent rebuild does not match the build job's output. Not publishing. If every tar listing matches but checksums.txt still differs, check the gzip container's own header next (its embedded MTIME field is separate from the tar entries' mtimes)." >&2
+            exit 1
+          fi
+          echo "verified: independent rebuild is byte-identical to the build job's output"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish as a GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Deliberately not `goreleaser release` again here: this project's
+        # pinned (OSS) goreleaser has no supported way to publish a
+        # previous job's dist/ without rebuilding — its split/merge
+        # (`--split` / `goreleaser continue --merge`) is a Pro-only
+        # feature. Re-running the full build a third time would only be
+        # verified *after* the fact, defeating the point of `verify`
+        # running first. `gh release create` instead publishes exactly
+        # the files `build` produced and `verify` already proved
+        # byte-identical on a separate runner — nothing here is rebuilt,
+        # so nothing published can differ from what was already checked.
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See CHANGELOG.md for what changed in this release."
+
+  pin-checksums:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the published build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Open a PR pinning this release's checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          branch="release-pin/$GITHUB_REF_NAME"
+          mkdir -p scripts/checksums
+          cp dist/checksums.txt "scripts/checksums/$version.txt"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "scripts/checksums/$version.txt"
+          git commit -m "Pin release checksums for $GITHUB_REF_NAME"
+          git push origin "$branch"
+          gh pr create \
+            --title "Pin release checksums for $GITHUB_REF_NAME" \
+            --body "Checksums the \`build\` and \`verify\` jobs on [this tag's release.yml run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) independently agreed on. $GITHUB_REF_NAME is already published at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME — this PR only records the pin on the default branch for ensure-binary.sh's release-fetch step to verify future downloads against; it does not gate anything that already happened."
