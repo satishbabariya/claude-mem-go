@@ -72,3 +72,20 @@ func TestBuildVersionStringHandlesNoVCSRevision(t *testing.T) {
 		t.Errorf("got %q, want it to still report the Go version without a revision", got)
 	}
 }
+
+// TestBuildVersionStringExplainsTheGoInstallCase pins the regression this
+// exists for: `go install .../cmd/claude-mem-go@latest` produces exactly
+// this build-info shape (no vcs.* settings at all, since the module proxy
+// hands the toolchain a snapshot with no local .git to stamp from), and the
+// message a user installed that way sees must name the cause and the fix
+// — not just "unknown build", which gives no way to tell "this install path
+// can never carry version info" apart from "something is actually broken".
+func TestBuildVersionStringExplainsTheGoInstallCase(t *testing.T) {
+	got := buildVersionString(buildInfoWith())
+	if !strings.Contains(got, "go install") {
+		t.Errorf("got %q, want it to name `go install .../@latest` as the likely cause", got)
+	}
+	if !strings.Contains(got, "go build") {
+		t.Errorf("got %q, want it to name `go build` as a fix that does carry version info", got)
+	}
+}

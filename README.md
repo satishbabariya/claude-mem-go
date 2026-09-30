@@ -49,6 +49,12 @@ go build -o claude-mem-go ./cmd/claude-mem-go
 ./claude-mem-go doctor                                  # claude CLI, worker, database, Ollama, plugin
 ```
 
+Build from a git checkout (as above) rather than `go install
+github.com/satishbabariya/claude-mem-go/cmd/claude-mem-go@latest`: the module
+proxy hands the Go toolchain a snapshot with no local `.git` to stamp, so a
+`go install ...@latest` binary can never carry real version info — `version`
+and `doctor` will say so explicitly rather than report something misleading.
+
 Install it as a Claude Code plugin so the hooks and MCP server run
 automatically. Use project scope while evaluating; a user-scope install
 affects every Claude Code session on the machine.
