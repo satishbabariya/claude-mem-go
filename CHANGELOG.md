@@ -5,6 +5,79 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## 0.4.4 — 2026-09-30
+
+- **Release binaries are now reproducible, byte-for-byte.** `.goreleaser.yaml`
+  pins `mod_timestamp` to the commit timestamp, builds with `-trimpath` and
+  `-buildvcs=true` (a shallow or dirty checkout now fails the build loudly
+  instead of Go's `auto` silently dropping VCS stamping), and pins each
+  archive's own file mtimes — the binary's tar entry via `builds_info.mtime`,
+  and README.md/CHANGELOG.md/LICENSE's own entries via their individual
+  `files[].info.mtime` (pinning only the first one still left the archive
+  checksum floating; caught by a CI run whose two builds disagreed on all
+  four archives). `go.mod` pins `toolchain go1.25.14` so every workflow that
+  builds a release resolves the identical Go patch version. A new
+  `reproducible-build` CI job builds the same commit twice and asserts both
+  the checksums and every archive's tar listing match.
+
+- **`release.yml` is now four jobs in a strict chain instead of one that
+  would only ever trust itself.** `build` builds the tagged commit and
+  uploads it, nothing public yet. `verify` rebuilds the same tag
+  independently on a separate runner and diffs its output against `build`'s,
+  byte for byte; nothing past this point runs if it fails. `publish` (only
+  reachable once `verify` passes) publishes exactly `build`'s
+  already-verified files via `gh release create`, not a third build.
+  `pin-checksums` (only after `publish`) pushes a `release-pin/<tag>` branch
+  adding `scripts/checksums/<version>.txt` — the checksums `build` and
+  `verify` already agreed on — and opens a PR for it, falling back to a
+  manual compare-URL note when the repo has Actions PR creation turned off.
+  An earlier design tried to commit the pin before the tag existed; that
+  cannot work, because `-buildvcs=true` embeds the commit's own revision, so
+  a pin computed at commit X and then recommitted as a different commit Y
+  describes a build that no longer matches — see
+  `scripts/checksums/README.md`.
+
+- **`ensure-binary.sh` fetches a matching release archive before building
+  from source.** The Setup hook now tries, in order: reuse an existing
+  working binary; fetch a release archive for the resolved version
+  (`.claude-plugin/plugin.json`, falling back to the checkout's exact git
+  tag) when this checkout has a local checksum pin for that version,
+  verifying the download against that pin — never against anything fetched
+  from the release host itself; build from source; explain and exit 0. A
+  checkout with no pin for its version falls straight through to building,
+  unchanged from before. `CLAUDE_MEM_GO_RELEASE_BASE_URL` lets tests
+  redirect the fetch to a local fixture server, restricted to loopback hosts
+  unless a second test-only variable also opts in.
+
+- **`go install .../@latest` now explains its own version output instead of
+  looking broken.** That install path has no local `.git` to stamp
+  `vcs.revision` from, so `version`/`doctor` used to print a bare "unknown
+  build" with no way to tell "this path never carries version info" apart
+  from "something is actually broken." The message now names the cause and
+  points at `go build` from a checkout or a release binary instead.
+
+- **Fixed flaky macOS unix-socket tests and a test helper that was silently
+  skipping the case it existed to cover.** Socket-bound tests built their
+  bind path under `t.TempDir()`, which nests inside macOS's already-long
+  `$TMPDIR` and routinely exceeded `sockaddr_un`'s ~104-byte limit — invisible
+  on the `ubuntu-latest`-only CI this project had. A new
+  `internal/sockettest` helper binds under a short, fixed base instead.
+  Separately, a test helper appended environment overrides after
+  `os.Environ()`; since `getenv` resolves the first match, a `PATH` override
+  placed after the real `PATH` never took effect, so
+  `TestEnsureBinaryWithoutGoExplainsItself` had been silently exercising the
+  "Go is available" branch instead of the one it exists to cover. A new
+  `macos-latest` CI job (build + `go test ./... -race`) gives this class of
+  bug real coverage going forward.
+
+- **Documented the manual install path the release tarballs already
+  produced.** Nothing told a machine with no Go toolchain what to do with
+  `.goreleaser.yaml`'s output. `docs/plugin-install.md` now has a
+  step-by-step manual-install section (pick the platform tarball, verify
+  against `checksums.txt`, extract, use standalone or as the plugin binary),
+  and the README states the supported platforms plainly (linux/darwin,
+  amd64/arm64, no Windows build).
+
 ## 0.4.3 — 2026-08-24
 
 - **The Stop hook could burn its whole budget and then write nothing.**
