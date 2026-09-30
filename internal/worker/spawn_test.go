@@ -9,17 +9,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/sockettest"
 )
 
 func TestIsRunningFalseWhenNothingListens(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nonexistent.sock")
+	path := filepath.Join(sockettest.Dir(t), "nonexistent.sock")
 	if IsRunning(path) {
 		t.Fatal("IsRunning on a socket nobody is listening on: want false, got true")
 	}
 }
 
 func TestIsRunningTrueWhenListening(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.sock")
+	path := filepath.Join(sockettest.Dir(t), "test.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)

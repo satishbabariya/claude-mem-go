@@ -4,15 +4,16 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/satishbabariya/claude-mem-go/internal/sockettest"
 )
 
 func TestForwardDeliversExactBytes(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "test.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -56,16 +57,7 @@ func TestForwardDeliversExactBytes(t *testing.T) {
 // succeeding, and — the part a size check alone wouldn't prove — nothing
 // was actually written to the socket at all.
 func TestForwardRejectsOversizedPayloadWithoutSending(t *testing.T) {
-	// A short, manually-made temp dir, not t.TempDir(): that helper embeds
-	// this (unusually long) test function's own name into the path, and a
-	// unix socket path has a real OS-enforced length limit (macOS/BSD's
-	// sun_path) this test's own name was long enough to blow past.
-	dir, err := os.MkdirTemp("", "hook")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	socketPath := filepath.Join(dir, "t.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "t.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -105,12 +97,7 @@ func TestForwardRejectsOversizedPayloadWithoutSending(t *testing.T) {
 }
 
 func TestForwardAcceptsPayloadExactlyAtTheLimit(t *testing.T) {
-	dir, err := os.MkdirTemp("", "hook")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	socketPath := filepath.Join(dir, "t.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "t.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -137,7 +124,7 @@ func TestForwardAcceptsPayloadExactlyAtTheLimit(t *testing.T) {
 }
 
 func TestForwardFailsCleanlyWhenNothingListens(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "nonexistent.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "nonexistent.sock")
 	_, err := Forward(socketPath, strings.NewReader("payload"))
 	if err == nil {
 		t.Fatal("Forward against an unreachable socket: want an error, got nil")
@@ -149,7 +136,7 @@ type erroringReader struct{}
 func (erroringReader) Read([]byte) (int, error) { return 0, errors.New("simulated read failure") }
 
 func TestForwardPropagatesReadError(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "test.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -168,12 +155,7 @@ func TestForwardPropagatesReadError(t *testing.T) {
 // refuse such input with an error before dialing — the listener here
 // records any connection so "nothing was sent" is asserted, not assumed.
 func TestSendersRejectUnparseableSessionIDs(t *testing.T) {
-	dir, err := os.MkdirTemp("", "hooksid")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	defer os.RemoveAll(dir)
-	socketPath := filepath.Join(dir, "w.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "w.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)

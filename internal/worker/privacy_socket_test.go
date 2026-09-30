@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/satishbabariya/claude-mem-go/internal/logging"
 
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
+	"github.com/satishbabariya/claude-mem-go/internal/sockettest"
 )
 
 // TestParsePrivacyMarkerRoundTrips confirms the plain-text setter protocol
@@ -52,12 +52,7 @@ func TestParsePrivacyQueryRoundTrips(t *testing.T) {
 // d.handleConn, matching inflight_test.go's own harness.
 func newTestSocket(t *testing.T, d *Daemon) string {
 	t.Helper()
-	sockDir, err := os.MkdirTemp("", "cmg")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(sockDir) })
-	socketPath := filepath.Join(sockDir, "w.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "w.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
