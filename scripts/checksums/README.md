@@ -30,7 +30,7 @@ not trust-on-first-use. See its own comments for the full mechanism.
 
 A checkout that predates this PR merging, or an exact-tag checkout of a
 version whose pin PR hasn't merged yet, has no file here for that
-version. `ensure-binary.sh`'s eventual release-fetch step (SATA-13 PR B,
-not yet implemented) is designed to treat that the same as "no matching
-release asset" and fall back to building from source, and to document
-that gap in `docs/plugin-install.md` when it lands.
+version. `ensure-binary.sh`'s release-fetch step treats that the same as
+"no matching release asset" and falls back to building from source — see
+docs/plugin-install.md#the-self-healing-binary for the user-facing
+version of this gap.

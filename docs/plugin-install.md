@@ -69,10 +69,10 @@ checkout — `git clone` it, then copy the verified binary to
 otherwise build into) before running `claude plugin install` above; it will
 find a working binary already in place and skip building.
 
-There is no install script and no Setup-hook fetch of these binaries yet —
-see [The self-healing binary](#the-self-healing-binary) for why the current
-plugin install always builds from source, and CHANGELOG.md / the project's
-issue tracker for that gap's status.
+The Setup hook (`scripts/ensure-binary.sh`) can also fetch one of these same
+archives automatically instead of building — see
+[The self-healing binary](#the-self-healing-binary) for when that happens and
+when it still builds from source instead.
 
 Uninstalling leaves `~/.claude-mem-go/` (store, logs, socket) in place; a
 running worker daemon keeps running until stopped or the machine restarts.
@@ -131,14 +131,36 @@ missing binary. Two layers handle this:
 
 - **`Setup` hook, `scripts/ensure-binary.sh`** — if `$CLAUDE_PLUGIN_ROOT/claude-mem-go`
   is missing or does not run (`version` fails — a wrong-architecture binary
-  stats fine and fails only when executed), it builds from the shipped source.
-  It builds to a temporary name and renames into place, because Go 1.26+
-  refuses `go build -o X` onto an existing non-object file (the corrupt-binary
-  case this script exists for) and `rename(2)` is atomic for a hook that
-  fires mid-build. A cold build measures ~33s, a warm rebuild ~0.7s, and the
-  common case is one `version` call. Without Go installed it prints the build
-  command and exits 0. It runs at `Setup` with a 300s timeout because
-  `SessionStart`'s hooks allow 10–15s. Outside a plugin install
+  stats fine and fails only when executed), it tries, in order:
+  1. **Fetch a matching release archive**, verified against this checkout's own
+     `scripts/checksums/<version>.txt` (never against anything fetched from the
+     release host — see that file's own README for the trust chain). Reached
+     only when this checkout actually has a version and a pin for it: the
+     version comes from `.claude-plugin/plugin.json`, falling back to the
+     checkout's exact git tag only if the manifest has none. **A checkout
+     installed from the default branch (the documented marketplace path,
+     `source: .`) normally has both once a release's pin PR has merged; an
+     exact-tag checkout of a version whose pin PR hasn't merged, or a checkout
+     that predates one entirely, has no pin and this step is skipped —
+     silently, same as an unsupported OS/arch or a 404 on the asset — falling
+     straight through to building from source below.** A checksum mismatch or
+     a truncated download is the one fetch failure that prints anything
+     (`downloaded binary failed checksum verification, discarding`), since
+     that is the one worth someone noticing.
+  2. **Build from the shipped source.** Builds to a temporary name and renames
+     into place, because Go 1.26+ refuses `go build -o X` onto an existing
+     non-object file (the corrupt-binary case this script exists for) and
+     `rename(2)` is atomic for a hook that fires mid-build. A cold build
+     measures ~33s, a warm rebuild ~0.7s. Without Go installed it prints the
+     build command and exits 0.
+  3. **Explain and exit 0.** A read-only `$CLAUDE_PLUGIN_ROOT` is diagnosed on
+     its own terms (`... is not writable`), distinct from "Go is not
+     installed", before either the fetch or the build is even attempted.
+
+  Cost of the common case — a binary that already exists and runs — is one
+  `version` call. It runs at `Setup` with a 300s timeout because
+  `SessionStart`'s hooks allow 10–15s; a failed fetch attempt adds at most
+  ~20s before falling through to the build. Outside a plugin install
   (`$CLAUDE_PLUGIN_ROOT` unset) it does nothing.
 - **Hook wrapper, `scripts/run-hook.sh`** — `Setup` does not fire under
   `claude -p`, nor during `claude plugin install`, so every hook goes through
@@ -148,12 +170,17 @@ missing binary. Two layers handle this:
   `cd $CLAUDE_PLUGIN_ROOT && go build -o claude-mem-go ./cmd/claude-mem-go`
   and restart; every other hook appends a line to
   `~/.claude-mem-go/missing-binary.log` and exits 0. The wrapper deliberately
-  does not build. It also detaches the `stop` hook after capturing stdin,
-  because Claude Code tears hook processes down when a session ends (see
-  [hooks.md](hooks.md#stop)).
+  does not build or fetch. It also detaches the `stop` hook after capturing
+  stdin, because Claude Code tears hook processes down when a session ends
+  (see [hooks.md](hooks.md#stop)).
 
-Fetching a release asset instead of building is not wired: building from the
-source the plugin already ships is the fix for the distribution in use.
+`CLAUDE_MEM_GO_RELEASE_BASE_URL` overrides the fetch step's base URL, and
+exists only for testing against a local fixture server: it is honored only
+when its host is loopback, or when the test-only
+`CLAUDE_MEM_GO_ALLOW_REMOTE_RELEASE_BASE_URL=1` is also set. Anything else is
+treated as absent and the real release host is used — see the script's own
+comments for why an arbitrary redirect target is safe to reject even though
+checksum verification would already catch a malicious payload.
 
 ## Verifying an install
 
