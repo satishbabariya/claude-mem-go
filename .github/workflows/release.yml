@@ -28,12 +28,57 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          # Reads the `toolchain go1.25.N` line in go.mod, not a floating
+          # "1.25". The pin-release-checksums workflow (which computed
+          # this tag's committed checksum pin) resolves its Go toolchain
+          # the same way — same source, same version, on purpose. If the
+          # two ever resolved different patch versions, identical source
+          # would produce different bytes and this workflow's verify step
+          # below would fail every release until they were realigned.
+          go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v6
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          install-only: true
+
+      # Build first, skip only the GitHub-release-publish step, so nothing
+      # reaches the public Release until it has been checked against the
+      # committed pin below. `goreleaser continue` (reusing this build's
+      # dist/ for the real publish step, skipping a full rebuild) is not
+      # available in the pinned goreleaser version — we rebuild instead of
+      # reusing this run's artifacts, and reproducibility is exactly what
+      # makes that safe: a second `--clean` build of the same tagged
+      # commit is required to produce byte-identical output, so rebuilding
+      # to publish is not a second chance to get a different, unverified
+      # answer.
+      - name: Build (without publishing)
+        run: goreleaser release --clean --skip=publish
+
+      - name: Verify against the committed checksum pin
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          pin="scripts/checksums/$version.txt"
+          if [ ! -f "$pin" ]; then
+            echo "::error::no committed checksum pin at $pin for tag $GITHUB_REF_NAME." >&2
+            echo "::error::Run the 'Pin release checksums' workflow (see scripts/checksums/README.md) against the commit this tag points at, merge the PR it opens, then re-push this tag. Refusing to publish an unpinned release." >&2
+            exit 1
+          fi
+          manifest_version="$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$manifest_version" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match .claude-plugin/plugin.json's version ($manifest_version) at this commit. Refusing to publish a release under a mismatched version." >&2
+            exit 1
+          fi
+          if ! diff -u "$pin" dist/checksums.txt; then
+            echo "::error::build output does not match the committed checksum pin at $pin. Either the release build is not reproducible (see the 'reproducible-build' CI job) or the pin is stale. Refusing to publish." >&2
+            exit 1
+          fi
+          echo "checksums verified byte-for-byte against $pin"
+
+      - name: Publish
+        run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

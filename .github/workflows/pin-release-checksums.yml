@@ -1,0 +1,122 @@
+name: Pin release checksums
+
+# Operator-triggered, once, right before cutting a release tag — never
+# automatic, never on every push. This prepares the one thing a
+# tag-triggered release build cannot produce for itself: the checksum
+# pin that release.yml verifies a build against before it is allowed to
+# publish.
+#
+# Why this has to exist at all: goreleaser only produces checksums.txt
+# *from* a build at the tagged commit, computed after that commit already
+# exists. The tagged commit's own tree therefore can never contain a file
+# listing its own release's checksums — nothing could have written it
+# there first. This workflow closes that gap by computing the pin against
+# a commit *before* it is tagged, using a local, never-pushed tag so
+# goreleaser resolves the exact same `.Version` (and therefore the exact
+# same archive names and checksums) that pushing the real tag will
+# produce later.
+#
+# This never pushes to the default branch directly (org policy: all
+# changes go through pull requests). It pushes a new branch and opens a
+# PR instead. The operator does not need to wait for that PR to merge
+# before tagging: the branch-tip commit this job creates is a real,
+# permanent, independently reachable commit the moment it is pushed, and
+# this repo already merges PRs with a real merge commit (not squash or
+# rebase — see its own git history), which keeps the original branch
+# commits reachable forever. The operator tags THAT commit directly — the
+# SHA this workflow prints and puts in the PR body — not whatever merge
+# commit eventually lands on the default branch. Squash- or rebase-
+# merging the PR this opens would orphan that SHA; use a normal merge for
+# it.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or branch to compute the pin for (defaults to the default branch)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+
+      - name: Resolve version and guard against an existing pin
+        id: version
+        run: |
+          set -eu
+          version="$(jq -r .version .claude-plugin/plugin.json)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          pin="scripts/checksums/$version.txt"
+          if [ -f "$pin" ]; then
+            echo "::notice::$pin already exists at this commit — nothing to pin."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build reproducibly and capture checksums
+        if: steps.version.outputs.skip == 'false'
+        run: |
+          set -eu
+          version="${{ steps.version.outputs.version }}"
+          # Local and never pushed: the only thing goreleaser needs to
+          # resolve `.Version` to "$version" instead of a snapshot
+          # suffix, so the archive names — and therefore checksums.txt —
+          # come out identical to what pushing the real tag at this exact
+          # commit will produce later.
+          git tag "v$version"
+          goreleaser release --clean --skip=publish
+          git tag -d "v$version"
+          mkdir -p scripts/checksums
+          cp dist/checksums.txt "scripts/checksums/$version.txt"
+
+      - name: Open the pin PR
+        if: steps.version.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          version="${{ steps.version.outputs.version }}"
+          base_sha="$(git rev-parse HEAD)"
+          branch="release-pin/v$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add "scripts/checksums/$version.txt"
+          git commit -m "Pin release checksums for v$version"
+          git push origin "$branch"
+          pin_sha="$(git rev-parse HEAD)"
+          body="Computed against commit $base_sha.
+
+          To release v$version, tag **this branch's commit ($pin_sha)** directly. Do not wait for this PR to merge, and do not tag whatever merge commit eventually lands on the default branch:
+
+          \`\`\`
+          git fetch origin $branch
+          git tag v$version $pin_sha
+          git push origin v$version
+          \`\`\`
+
+          This PR exists so the pin is visible in the default branch's history too. Merge it with a normal merge commit (not squash/rebase) whenever convenient — doing otherwise orphans $pin_sha."
+          gh pr create --title "Pin release checksums for v$version" --body "$body"
+          echo "### Pin ready for v$version" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag commit \`$pin_sha\` to release, per the PR body." >> "$GITHUB_STEP_SUMMARY"

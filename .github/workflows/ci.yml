@@ -88,6 +88,54 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           claude plugin validate .
 
+  reproducible-build:
+    runs-on: ubuntu-latest
+
+    # Proves the .goreleaser.yaml reproducibility settings (mod_timestamp,
+    # -trimpath, -buildvcs=true, archives[].builds_info.mtime) actually
+    # hold, rather than trusting them by inspection: two independent
+    # snapshot builds of the same commit, checksums that must match
+    # byte-for-byte. This is the real evidence behind both
+    # release.yml's verify-before-publish gate and the pin-release-
+    # checksums workflow — if this job goes red, the checksum pin a tag
+    # push verifies against can never match, and every release fails
+    # closed rather than publishing something unreproducible.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+
+      - name: Build snapshot #1
+        run: goreleaser release --clean --snapshot
+
+      - run: mv dist dist-1
+
+      - name: Build snapshot #2
+        run: goreleaser release --clean --snapshot
+
+      - run: mv dist dist-2
+
+      - name: Assert identical checksums
+        run: |
+          set -eu
+          echo "--- build 1 ---"
+          cat dist-1/checksums.txt
+          echo "--- build 2 ---"
+          cat dist-2/checksums.txt
+          diff -u dist-1/checksums.txt dist-2/checksums.txt
+          echo "reproducible: two independent builds produced identical checksums"
+
   test-macos:
     runs-on: macos-latest
 
