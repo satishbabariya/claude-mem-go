@@ -80,10 +80,22 @@ func mergeEnv(overrides ...string) []string {
 			keys[kv[:i]] = true
 		}
 	}
+	// BASH_ENV is always dropped, not merely overridable: bash sources it
+	// for every NON-interactive invocation (exactly how the script under
+	// test always runs here), regardless of --norc/--noprofile, so a test
+	// runner whose own environment happens to export one — some CI images
+	// and dev-shell setups do, to inject a PATH or credentials — would
+	// have that file silently re-run inside the script, overwriting
+	// whatever PATH a test just constructed to exercise a specific
+	// missing-tool branch. Confirmed against a real BASH_ENV script that
+	// re-exported a long PATH: `command -v go` found go again through
+	// it even though the test's own PATH override omitted it entirely,
+	// which would otherwise make e.g. TestEnsureBinaryWithoutGoExplainsItself
+	// silently build a real binary instead of exercising the no-Go branch.
 	base := os.Environ()
 	env := make([]string, 0, len(base)+len(overrides))
 	for _, kv := range base {
-		if i := strings.IndexByte(kv, '='); i >= 0 && keys[kv[:i]] {
+		if i := strings.IndexByte(kv, '='); i >= 0 && (keys[kv[:i]] || kv[:i] == "BASH_ENV") {
 			continue
 		}
 		env = append(env, kv)
