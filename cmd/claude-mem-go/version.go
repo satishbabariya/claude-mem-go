@@ -37,7 +37,17 @@ func buildVersionString(info *debug.BuildInfo) string {
 	}
 
 	if revision == "" {
-		return fmt.Sprintf("claude-mem-go (unknown build — no vcs.revision recorded, %s)", info.GoVersion)
+		// The common way to land here: `go install .../cmd/claude-mem-go@latest`.
+		// The module proxy hands the Go toolchain a bare module snapshot with
+		// no local .git for it to stamp vcs.* settings from, so this is not a
+		// bug in THIS build — it is an inherent gap in that install path. Say
+		// so explicitly, and name the two install paths that do carry a real
+		// stamp, rather than leaving an operator to guess why `doctor`'s
+		// version line is unusable for staleness comparison.
+		return fmt.Sprintf("claude-mem-go (unknown build — no VCS revision recorded; "+
+			"this usually means the binary was installed via `go install .../@latest`, "+
+			"which has no local .git to stamp — build from a git checkout with `go build` "+
+			"or use a release binary for real version info, %s)", info.GoVersion)
 	}
 
 	short := revision
