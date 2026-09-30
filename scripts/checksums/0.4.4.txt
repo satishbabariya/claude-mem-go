@@ -1,0 +1,4 @@
+d8f5396f52fa06967681683d8337d2e5efe56edefb5826ff945755dd8ea63483  claude-mem-go_0.4.4_darwin_amd64.tar.gz
+c027c6f22c6218f69a81a955f08eba2f0f3ddbcd29a3d7cb48581b5144d6fc00  claude-mem-go_0.4.4_darwin_arm64.tar.gz
+1edae025871850821f137b8ce415da6cc0f63fa7fed5c022b6e2d6cc2fefdc94  claude-mem-go_0.4.4_linux_amd64.tar.gz
+c08a672955b81e81bac9b848e18694c0ae555e6d1ee99d67bb2659ee3f55f0f7  claude-mem-go_0.4.4_linux_arm64.tar.gz
