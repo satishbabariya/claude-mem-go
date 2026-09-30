@@ -32,8 +32,14 @@ Postgres + pgvector when a store outgrows a linear scan.
   [Ollama](https://ollama.com) install (`ollama pull nomic-embed-text`), which
   uses the GPU and is faster. Point `CLAUDE_MEM_OLLAMA_BASE_URL` at whichever
   you run; the default already matches both. Keyword search needs neither.
-- Go 1.25+ to build (what `go.mod` requires; CI also tests the latest stable).
+- Go 1.25+ to build (what `go.mod` requires; CI also tests the latest stable) —
+  not required if you use a [release binary](docs/plugin-install.md#manual-install-from-a-release-binary).
 - Docker, if you want the bundled Ollama or the Postgres backend.
+- **Supported platforms:** linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+  — the same matrix [.goreleaser.yaml](.goreleaser.yaml) builds release
+  binaries for. No Windows build; Claude Code on Windows runs through WSL,
+  which is untested here (but is just linux/amd64 or linux/arm64 from the
+  binary's point of view).
 
 ## Quick start
 
