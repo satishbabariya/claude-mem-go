@@ -49,10 +49,11 @@ func fakePluginRoot(t *testing.T) string {
 func runScript(t *testing.T, root string, env ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command("bash", scriptPath(t))
-	cmd.Env = append(os.Environ(), env...)
+	overrides := env
 	if root != "" {
-		cmd.Env = append(cmd.Env, "CLAUDE_PLUGIN_ROOT="+root)
+		overrides = append(overrides, "CLAUDE_PLUGIN_ROOT="+root)
 	}
+	cmd.Env = mergeEnv(overrides...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -61,6 +62,33 @@ func runScript(t *testing.T, root string, env ...string) (string, int) {
 		t.Fatalf("run script: %v", err)
 	}
 	return string(out), code
+}
+
+// mergeEnv layers overrides on top of the real process environment,
+// dropping any existing entry an override replaces first. A plain
+// append(os.Environ(), overrides...) leaves both the old and new value
+// for any key an override sets: exec's envp is not de-duplicated, and on
+// this platform getenv(3) resolves the FIRST match, so the override
+// silently loses to the stale value appended after it. Confirmed with
+// "PATH="+t.TempDir(): appended after the real PATH, the shell inside
+// the script still found Go on the original PATH and built the binary
+// instead of taking the "Go is not installed" branch under test.
+func mergeEnv(overrides ...string) []string {
+	keys := make(map[string]bool, len(overrides))
+	for _, kv := range overrides {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			keys[kv[:i]] = true
+		}
+	}
+	base := os.Environ()
+	env := make([]string, 0, len(base)+len(overrides))
+	for _, kv := range base {
+		if i := strings.IndexByte(kv, '='); i >= 0 && keys[kv[:i]] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, overrides...)
 }
 
 // TestEnsureBinaryBuildsAMissingBinary is the regression test for a real

@@ -87,3 +87,35 @@ jobs:
         run: |
           npm install -g @anthropic-ai/claude-code
           claude plugin validate .
+
+  test-macos:
+    runs-on: macos-latest
+
+    # A dedicated macOS job, separate from the ubuntu-latest matrix above:
+    # this project ships darwin release binaries but, until now, never ran
+    # its own test suite on darwin. That gap was real, not theoretical — a
+    # class of unix-domain-socket tests bound their listener under
+    # t.TempDir(), whose path embeds the test name under $TMPDIR, and macOS
+    # sets $TMPDIR to an already-long per-process path; add the test name
+    # and the combination routinely exceeds sockaddr_un's ~104-byte
+    # sun_path limit, failing net.Listen with "bind: invalid argument" —
+    # invisible on ubuntu-latest, where $TMPDIR is short.
+    #
+    # No postgres service: GitHub-hosted `services:` containers only run
+    # on Linux runners. internal/memory/postgres's tests already skip
+    # themselves without CLAUDE_MEM_GO_TEST_POSTGRES_DSN (see the ubuntu
+    # job and the README's Testing section), so that package is a no-op
+    # skip here rather than a gap. Everything else — including the
+    # socket-bound packages this job exists for — runs for real.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Build
+        run: go build -o claude-mem-go ./cmd/claude-mem-go
+
+      - name: Test
+        run: go test ./... -race -v

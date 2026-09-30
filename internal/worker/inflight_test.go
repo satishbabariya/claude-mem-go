@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/satishbabariya/claude-mem-go/internal/hook"
 	"github.com/satishbabariya/claude-mem-go/internal/observer"
+	"github.com/satishbabariya/claude-mem-go/internal/sockettest"
 	"github.com/satishbabariya/claude-mem-go/internal/transcript"
 )
 
@@ -79,17 +79,7 @@ func TestInFlightQueryReflectsARealInProgressEvent(t *testing.T) {
 	}
 	defer st.Close()
 
-	// A short, dedicated temp dir rather than t.TempDir(): this test's own
-	// name is long enough that t.TempDir()'s path (which embeds the test
-	// name) plus "w.sock" can exceed sockaddr_un's ~104-byte sun_path
-	// limit on macOS/BSD, failing net.Listen with "invalid argument" —
-	// confirmed by hand.
-	sockDir, err := os.MkdirTemp("", "cmg")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	defer os.RemoveAll(sockDir)
-	socketPath := filepath.Join(sockDir, "w.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "w.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
