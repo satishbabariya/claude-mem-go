@@ -24,13 +24,18 @@ name: Release
 #   publish       — only reachable if `verify` passed. Publishes exactly
 #                   the artifacts `build` produced (not a third build) as
 #                   the GitHub Release.
-#   pin-checksums — only reachable once `publish` has succeeded. Opens a
-#                   PR adding scripts/checksums/<version>.txt — the
-#                   checksums `build` and `verify` already independently
-#                   agreed on — to the default branch, for
-#                   ensure-binary.sh's release-fetch step (SATA-13 PR B)
-#                   to verify future downloads against. An ordinary
-#                   post-hoc PR; it gates nothing that already happened.
+#   pin-checksums — only reachable once `publish` has succeeded. Pushes a
+#                   release-pin/<tag> branch adding
+#                   scripts/checksums/<version>.txt — the checksums
+#                   `build` and `verify` already independently agreed on —
+#                   for ensure-binary.sh's release-fetch step (SATA-13 PR
+#                   B) to verify future downloads against, then tries to
+#                   open a PR for it. This repo has GITHUB_TOKEN PR
+#                   creation disabled, so that PR step is expected to fail
+#                   here; the job still succeeds and leaves the compare
+#                   URL in the job summary for the board to open by hand.
+#                   An ordinary post-hoc PR either way; it gates nothing
+#                   that already happened.
 on:
   push:
     tags:
@@ -207,13 +212,23 @@ jobs:
           name: dist
           path: dist
 
-      - name: Open a PR pinning this release's checksums
+      - name: Push the pin branch, opening a PR when the repo allows it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # gh pr create with GITHUB_TOKEN is rejected outright on repos where
+        # "Allow GitHub Actions to create and approve pull requests" is off
+        # (this repo has it off) — that's an operator call about repo
+        # security, not something this workflow should require changing.
+        # So the branch always gets pushed; PR creation is a best-effort
+        # extra on top of it, and its failure doesn't fail the job. Note
+        # also that a PR opened with GITHUB_TOKEN wouldn't trigger CI
+        # anyway, which is one more reason the board opens this one by
+        # hand rather than relying on automation here.
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
           branch="release-pin/$GITHUB_REF_NAME"
+          default_branch="${{ github.event.repository.default_branch }}"
           mkdir -p scripts/checksums
           cp dist/checksums.txt "scripts/checksums/$version.txt"
           git config user.name "github-actions[bot]"
@@ -222,6 +237,22 @@ jobs:
           git add "scripts/checksums/$version.txt"
           git commit -m "Pin release checksums for $GITHUB_REF_NAME"
           git push origin "$branch"
-          gh pr create \
+
+          if gh pr create \
             --title "Pin release checksums for $GITHUB_REF_NAME" \
             --body "Checksums the \`build\` and \`verify\` jobs on [this tag's release.yml run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) independently agreed on. $GITHUB_REF_NAME is already published at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME — this PR only records the pin on the default branch for ensure-binary.sh's release-fetch step to verify future downloads against; it does not gate anything that already happened."
+          then
+            exit 0
+          fi
+
+          compare_url="https://github.com/${{ github.repository }}/compare/${default_branch}...${branch}"
+          echo "::warning::gh pr create was rejected (likely repo setting: \"Allow GitHub Actions to create and approve pull requests\" is off). The pin branch $branch was pushed; open the PR by hand: $compare_url . Note a PR opened with GITHUB_TOKEN would not trigger CI anyway." >&2
+          {
+            echo "### Release checksum pin needs a manual PR"
+            echo
+            echo "\`gh pr create\` was rejected for \`$branch\` — this repo has \"Allow GitHub Actions to create and approve pull requests\" turned off, so \`GITHUB_TOKEN\` can't open pull requests. The branch was pushed successfully."
+            echo
+            echo "Open the PR by hand: $compare_url"
+            echo
+            echo "(A PR opened with \`GITHUB_TOKEN\` wouldn't trigger CI anyway, which is one more reason to open this one manually.)"
+          } >> "$GITHUB_STEP_SUMMARY"
