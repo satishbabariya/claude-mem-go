@@ -1,0 +1,63 @@
+{
+  "manifest_version": "0.3",
+  "name": "claude-mem-go",
+  "version": "0.4.4",
+  "description": "Persistent memory for Claude Code: capture, compress, search, and recall automatically.",
+  "long_description": "Go reimplementation of claude-mem's capture-compress-persist-search-recall loop. One static binary, SQLite by default, Postgres + pgvector at scale. This bundle packages the MCP stdio server (`claude-mem-go mcp`) for darwin and linux, amd64 and arm64.",
+  "author": {
+    "name": "satishbabariya",
+    "url": "https://github.com/satishbabariya"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/satishbabariya/claude-mem-go"
+  },
+  "homepage": "https://github.com/satishbabariya/claude-mem-go#readme",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "memory",
+    "mcp",
+    "sqlite",
+    "postgres",
+    "pgvector"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "mcpb/launch.sh",
+    "mcp_config": {
+      "command": "mcpb/launch.sh",
+      "args": ["mcp"],
+      "platform_overrides": {
+        "darwin": {
+          "command": "mcpb/launch.sh",
+          "args": ["mcp"]
+        },
+        "linux": {
+          "command": "mcpb/launch.sh",
+          "args": ["mcp"]
+        }
+      }
+    }
+  },
+  "tools": [
+    { "name": "important_workflow", "description": "Teaches the intended search -> timeline -> get_observations usage pattern between the other tools." },
+    { "name": "search_observations", "description": "Keyword (full-text) search over persisted observations; omit query to enumerate." },
+    { "name": "semantic_search_observations", "description": "Meaning-based search over observations via local embeddings and cosine similarity." },
+    { "name": "observation_context", "description": "A ready-to-inject memory context block for a query, on demand." },
+    { "name": "recent_observations", "description": "The most recent observations for the current project, newest first." },
+    { "name": "session_start_context", "description": "Renders the exact text the SessionStart hook injects automatically." },
+    { "name": "session_observations", "description": "Every observation recorded for one Claude Code session, oldest first." },
+    { "name": "file_observations", "description": "Prior observations that mention a specific file in the current project." },
+    { "name": "get_observations", "description": "Fetch full details for specific observation IDs." },
+    { "name": "timeline", "description": "Chronological context around one observation, before and after it." },
+    { "name": "search_prompts", "description": "Keyword search over the user's own stored prompts, when prompt storage is enabled." },
+    { "name": "session_prompts", "description": "Every stored user prompt from one session, oldest first." },
+    { "name": "add_observation", "description": "Explicitly persist a fact, decision, or preference into memory." }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": ["darwin", "linux"]
+  }
+}

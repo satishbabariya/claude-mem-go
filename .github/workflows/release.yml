@@ -28,14 +28,25 @@ name: Release
 #                   release-pin/<tag> branch adding
 #                   scripts/checksums/<version>.txt — the checksums
 #                   `build` and `verify` already independently agreed on —
-#                   for ensure-binary.sh's release-fetch step (SATA-13 PR
-#                   B) to verify future downloads against, then tries to
-#                   open a PR for it. This repo has GITHUB_TOKEN PR
-#                   creation disabled, so that PR step is expected to fail
-#                   here; the job still succeeds and leaves the compare
-#                   URL in the job summary for the board to open by hand.
-#                   An ordinary post-hoc PR either way; it gates nothing
-#                   that already happened.
+#                   for ensure-binary.sh's release-fetch step to verify
+#                   future downloads against, then tries to open a PR for
+#                   it. This repo has GITHUB_TOKEN PR creation disabled,
+#                   so that PR step is expected to fail here; the job
+#                   still succeeds and leaves the compare URL in the job
+#                   summary for the board to open by hand. An ordinary
+#                   post-hoc PR either way; it gates nothing that already
+#                   happened. The same commit also writes this tag's
+#                   .mcpb sha256 into server.json (see that step's own
+#                   comment) — the registry's MCPB package type needs
+#                   exactly that hash, and it isn't knowable until the
+#                   bundle has actually been built.
+#
+# `build`/`verify` each also assemble a .mcpb bundle (manifest.json +
+# mcpb/launch.sh + the four just-built platform binaries, via
+# scripts/build-mcpb — see that tool's own comment for why it isn't the
+# upstream `mcpb pack` CLI) alongside the tar.gz archives, add it to
+# checksums.txt, and verify includes it in the byte-for-byte diff. Same
+# chain, same guarantee, one more artifact.
 on:
   push:
     tags:
@@ -75,18 +86,33 @@ jobs:
           version: "~> v2"
           install-only: true
 
-      - name: Cross-check the tag against the manifest version
+      - name: Cross-check the tag against the manifest versions
+        # plugin.json, manifest.json (the MCPB bundle), and server.json
+        # (the registry descriptor) all describe the same release and
+        # must move in lockstep — a version bump that only touched one of
+        # them would otherwise ship a tag whose MCPB bundle or registry
+        # entry quietly still claims the previous version.
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
-          manifest_version="$(jq -r .version .claude-plugin/plugin.json)"
-          if [ "$manifest_version" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match .claude-plugin/plugin.json's version ($manifest_version) at this commit. Refusing to build." >&2
-            exit 1
-          fi
+          check() {
+            file="$1"; path="$2"
+            got="$(jq -r "$path" "$file")"
+            if [ "$got" != "$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match $file's $path ($got) at this commit. Refusing to build." >&2
+              exit 1
+            fi
+          }
+          check .claude-plugin/plugin.json .version
+          check manifest.json .version
+          check server.json .version
+          check server.json '.packages[0].version'
 
       - name: Build (nothing published from this job)
         run: goreleaser release --clean --skip=publish
+
+      - name: Stage and build the MCPB bundle
+        run: scripts/build-mcpb-stage.sh "${GITHUB_REF_NAME#v}"
 
       - name: Upload the build for verify/publish to consume
         uses: actions/upload-artifact@v4
@@ -94,6 +120,7 @@ jobs:
           name: dist
           path: |
             dist/*.tar.gz
+            dist/*.mcpb
             dist/checksums.txt
           retention-days: 7
           if-no-files-found: error
@@ -127,6 +154,9 @@ jobs:
       - name: Rebuild the same tagged commit, independently
         run: goreleaser release --clean --skip=publish
 
+      - name: Stage and build the MCPB bundle
+        run: scripts/build-mcpb-stage.sh "${GITHUB_REF_NAME#v}"
+
       - name: Download build's output
         uses: actions/download-artifact@v4
         with:
@@ -142,14 +172,27 @@ jobs:
           cat dist/checksums.txt
 
           # Same diagnostic ci.yml's reproducible-build job uses: diff
-          # every archive's tar listing before the checksum diff, so a
-          # divergence says which archive/entry/field moved instead of
-          # just "checksums differ."
+          # every archive's tar listing (and the .mcpb's zip listing)
+          # before the checksum diff, so a divergence says which
+          # archive/entry/field moved instead of just "checksums differ."
           status=0
           for f in dist-build/*.tar.gz; do
             name="$(basename "$f")"
             echo "=== $name ==="
             if ! diff -u <(tar -tvzf "dist-build/$name") <(tar -tvzf "dist/$name"); then
+              status=1
+            fi
+          done
+
+          for f in dist-build/*.mcpb; do
+            name="$(basename "$f")"
+            echo "=== $name ==="
+            # cd'd into each dir first, not `unzip -v dist-build/$name`:
+            # unzip's own "Archive:" header line echoes the path it was
+            # given, which would make dist-build/x.mcpb and dist/x.mcpb
+            # diff on that line alone regardless of the two zips' actual
+            # contents.
+            if ! diff -u <(cd dist-build && unzip -v "$name") <(cd dist && unzip -v "$name"); then
               status=1
             fi
           done
@@ -193,7 +236,7 @@ jobs:
         # so nothing published can differ from what was already checked.
         run: |
           set -eu
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.mcpb dist/checksums.txt \
             --title "$GITHUB_REF_NAME" \
             --notes "See CHANGELOG.md for what changed in this release."
 
@@ -231,16 +274,36 @@ jobs:
           default_branch="${{ github.event.repository.default_branch }}"
           mkdir -p scripts/checksums
           cp dist/checksums.txt "scripts/checksums/$version.txt"
+
+          # The .mcpb's own sha256 out of the checksums build/verify
+          # already agreed on, not recomputed here — recomputing would
+          # just be trusting this job's own download of an already-
+          # verified file instead of the value two independent builds
+          # produced. This is the one field in server.json that cannot
+          # be known before the bundle exists (see release.yml's top
+          # comment and manifest.json/server.json's own history); every
+          # other field was already correct as of the version-bump
+          # commit the "Cross-check the tag against the manifest
+          # versions" build-job step enforces.
+          mcpb_name="claude-mem-go_${version}.mcpb"
+          mcpb_sha256="$(awk -v f="$mcpb_name" '$2==f {print $1}' dist/checksums.txt)"
+          if [ -z "$mcpb_sha256" ]; then
+            echo "::error::no checksums.txt entry for $mcpb_name — cannot pin server.json's fileSha256" >&2
+            exit 1
+          fi
+          jq --arg sha "$mcpb_sha256" '.packages[0].fileSha256 = $sha' server.json > server.json.tmp
+          mv server.json.tmp server.json
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
-          git add "scripts/checksums/$version.txt"
-          git commit -m "Pin release checksums for $GITHUB_REF_NAME"
+          git add "scripts/checksums/$version.txt" server.json
+          git commit -m "Pin release checksums and MCPB hash for $GITHUB_REF_NAME"
           git push origin "$branch"
 
           if gh pr create \
-            --title "Pin release checksums for $GITHUB_REF_NAME" \
-            --body "Checksums the \`build\` and \`verify\` jobs on [this tag's release.yml run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) independently agreed on. $GITHUB_REF_NAME is already published at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME — this PR only records the pin on the default branch for ensure-binary.sh's release-fetch step to verify future downloads against; it does not gate anything that already happened."
+            --title "Pin release checksums and MCPB hash for $GITHUB_REF_NAME" \
+            --body "Checksums the \`build\` and \`verify\` jobs on [this tag's release.yml run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) independently agreed on, plus that same agreed-on .mcpb sha256 written into server.json's \`packages[0].fileSha256\`. $GITHUB_REF_NAME is already published at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME — this PR only records the pin on the default branch for ensure-binary.sh's release-fetch step (and, for server.json, the MCP registry) to verify future downloads against; it does not gate anything that already happened."
           then
             exit 0
           fi

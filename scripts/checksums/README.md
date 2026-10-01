@@ -2,8 +2,10 @@
 
 One `<version>.txt` file per release, each a copy of the `checksums.txt`
 that `.github/workflows/release.yml`'s `build` and `verify` jobs
-independently agreed on for that version's archives — committed to the
-default branch *after* the release is already published, not before.
+independently agreed on for that version's archives (and, as of the MCPB
+bundle, its `.mcpb` too — see `scripts/build-mcpb-stage.sh`) — committed
+to the default branch *after* the release is already published, not
+before.
 
 Why after, not before: an earlier design tried to commit the pin before
 the tag existed, so `release.yml` could verify a build against it prior
@@ -21,8 +23,11 @@ outputs are byte-identical. That is the real verification, and it
 happens entirely in-workflow, before anything reaches a public GitHub
 Release — no in-tree pin is needed for it. Once `publish` has succeeded,
 a `pin-checksums` job commits the checksums both jobs already agreed on
-as `scripts/checksums/<version>.txt`, via a normal PR (org policy: no
-direct pushes to the default branch). This file exists for one consumer
+as `scripts/checksums/<version>.txt`, and in the same commit writes the
+`.mcpb`'s own agreed-on sha256 into `server.json`'s
+`packages[0].fileSha256` — the one field in that file that cannot be
+known before the bundle exists — via a normal PR (org policy: no direct
+pushes to the default branch). This file exists for one consumer
 only: `ensure-binary.sh`'s release-fetch step, which verifies a
 downloaded archive against the local checkout's copy of this file — not
 against anything fetched from the release host — which is why that is

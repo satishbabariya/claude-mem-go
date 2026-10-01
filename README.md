@@ -13,6 +13,7 @@ Postgres + pgvector when a store outgrows a linear scan.
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Installing from the MCPB bundle](#installing-from-the-mcpb-bundle)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Operating it](#operating-it)
@@ -76,6 +77,43 @@ The plugin wires `hooks/hooks.json` (six hook events), `.mcp.json` (the MCP
 server), and the `/mem-*` skills. See [docs/plugin-install.md](docs/plugin-install.md).
 To use the MCP server without the plugin, copy `.mcp.json.example`; to wire
 hooks by hand, copy `.claude/settings.json.example`.
+
+## Installing from the MCPB bundle
+
+Every tagged release also publishes a `.mcpb` file — an
+[MCPB](https://github.com/modelcontextprotocol/mcpb) bundle: a zip containing
+`manifest.json` plus all four platform binaries
+([Requirements](#requirements)'s matrix), so one download works regardless of
+which `darwin`/`linux` x `amd64`/`arm64` machine unpacks it. This is the
+packaging the MCP registry's MCPB package type expects; `server.json` at the
+repo root points at it. Use this when a client installs servers straight from
+a `.mcpb` rather than through the plugin path above.
+
+```sh
+version=0.4.4   # check the Releases page for the latest
+curl -sLO "https://github.com/satishbabariya/claude-mem-go/releases/download/v${version}/claude-mem-go_${version}.mcpb"
+sha256sum -c <(grep ".mcpb" checksums.txt)   # downloaded alongside it from the same release
+```
+
+Point an MCP client's stdio config at the unpacked bundle's entry point
+directly (no `claude-mem-go` on `PATH` required — the bundle carries its own):
+
+```json
+{
+  "mcpServers": {
+    "claude-mem-go": {
+      "command": "/path/to/unpacked/mcpb/launch.sh",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+`mcpb/launch.sh` resolves the current OS/architecture at launch and execs the
+matching bundled binary (`bin/claude-mem-go_<os>_<arch>`) — the MCPB manifest
+format has no architecture-level override, only per-OS (`darwin`/`linux`), so
+that one script is what both of `manifest.json`'s `platform_overrides`
+entries point at.
 
 ## Architecture
 

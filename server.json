@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.satishbabariya/claude-mem-go",
+  "description": "Persistent memory for Claude Code: capture, compress, search, and recall automatically.",
+  "version": "0.4.4",
+  "repository": {
+    "url": "https://github.com/satishbabariya/claude-mem-go",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/satishbabariya/claude-mem-go#readme",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/satishbabariya/claude-mem-go/releases/download/v0.4.4/claude-mem-go_0.4.4.mcpb",
+      "version": "0.4.4",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

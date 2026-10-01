@@ -5,6 +5,28 @@ exact, granular history; this is the "what actually changed and why"
 summary. Dates are when each milestone landed, not a formal release
 process (this project doesn't cut tagged releases on a schedule).
 
+## Unreleased
+
+- **Every release now also publishes an MCPB bundle and a registry
+  `server.json`.** `manifest.json` at the repo root is an
+  [MCPB](https://github.com/modelcontextprotocol/mcpb) manifest
+  (`server.type: binary`) whose `platform_overrides` point darwin and linux
+  at `mcpb/launch.sh`, a small POSIX script that resolves `uname -s`/`uname
+  -m` and execs the matching bundled binary — MCPB's `platform_overrides`
+  only keys on OS, not architecture, so arch dispatch happens inside that
+  one script instead of as a manifest field that doesn't exist.
+  `scripts/build-mcpb` packs the bundle deterministically (not via the
+  upstream `mcpb pack` CLI, which stamps every zip entry with the current
+  wall-clock time and so isn't reproducible); `release.yml`'s `build` and
+  `verify` jobs each build it independently from the same tagged commit and
+  diff the result byte-for-byte, the same guarantee already in place for the
+  tar.gz archives. `server.json` (`io.github.satishbabariya/claude-mem-go`,
+  `registryType: mcpb`) has its `fileSha256` written in by the
+  `pin-checksums` job once that hash is known — the one field that can't
+  exist before the bundle itself does. Publishing to the MCP registry itself
+  is a separate, operator-run step; this only builds what that step would
+  point at.
+
 ## 0.4.4 — 2026-09-30
 
 - **Release binaries are now reproducible, byte-for-byte.** `.goreleaser.yaml`
