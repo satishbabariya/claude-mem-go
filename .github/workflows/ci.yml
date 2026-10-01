@@ -88,6 +88,17 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           claude plugin validate .
 
+      - name: Validate MCPB manifest
+        # Schema validation only, via the upstream tool — the actual
+        # .mcpb bytes are built deterministically by
+        # scripts/build-mcpb instead (see that tool's own comment for
+        # why: @anthropic-ai/mcpb's own `pack` stamps every zip entry
+        # with time.Now(), which isn't reproducible). This step only
+        # catches manifest.json itself drifting out of schema.
+        run: |
+          npm install -g @anthropic-ai/mcpb
+          mcpb validate manifest.json
+
   reproducible-build:
     runs-on: ubuntu-latest
 
@@ -100,6 +111,11 @@ jobs:
     # job goes red, the independent rebuild that gates publishing there
     # can never match either, and release.yml fails closed rather than
     # publishing something unreproducible.
+    #
+    # Also proves the same property for the .mcpb bundle
+    # scripts/build-mcpb-stage.sh/scripts/build-mcpb assemble on top of
+    # these archives — it's a second, independently-reproducible artifact
+    # built from the same commit, not just the tar.gz archives.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -137,6 +153,9 @@ jobs:
       - name: Build snapshot #1
         run: goreleaser release --clean --snapshot
 
+      - name: Stage and build the MCPB bundle #1
+        run: scripts/build-mcpb-stage.sh snapshot
+
       # Moved to $RUNNER_TEMP, outside the checkout, rather than
       # `mv dist dist-1`: a sibling directory inside the checkout is
       # untracked and not covered by .gitignore (only dist/ itself is), so
@@ -160,6 +179,9 @@ jobs:
 
       - name: Build snapshot #2
         run: goreleaser release --clean --snapshot
+
+      - name: Stage and build the MCPB bundle #2
+        run: scripts/build-mcpb-stage.sh snapshot
 
       - run: mv dist "$RUNNER_TEMP/dist-2"
 
@@ -196,15 +218,28 @@ jobs:
             fi
           done
 
+          # Same check for the .mcpb bundle (scripts/build-mcpb-stage.sh,
+          # scripts/build-mcpb) — cd'd into each dir first so unzip's own
+          # "Archive:" header line (which echoes the path it was given)
+          # doesn't make dist-1/x.mcpb and dist-2/x.mcpb diff on that
+          # line alone regardless of the two zips' actual contents.
+          for f in "$dist1"/*.mcpb; do
+            name="$(basename "$f")"
+            echo "=== $name ==="
+            if ! diff -u <(cd "$dist1" && unzip -v "$name") <(cd "$dist2" && unzip -v "$name"); then
+              status=1
+            fi
+          done
+
           if ! diff -u "$dist1/checksums.txt" "$dist2/checksums.txt"; then
             status=1
           fi
 
           if [ "$status" -ne 0 ]; then
-            echo "::error::build 1 and build 2 are not byte-identical. If every tar listing above is identical but the checksums still differ, the divergence is in the gzip container itself (its own embedded MTIME header field, separate from the tar entries' mtimes) — check that next, e.g. with 'gzip -l' or a hexdump of each archive's first bytes." >&2
+            echo "::error::build 1 and build 2 are not byte-identical. If every tar/zip listing above is identical but the checksums still differ, the divergence is in a container format's own header (gzip's embedded MTIME field for the archives, or the zip local/central-directory header's own timestamp field for the .mcpb — both separate from the entries' own per-file mtimes) — check that next, e.g. with 'gzip -l' or a hexdump of each file's first bytes." >&2
             exit 1
           fi
-          echo "reproducible: two independent builds produced identical archives (tar listings and checksums both match)"
+          echo "reproducible: two independent builds produced identical archives and .mcpb bundle (tar/zip listings and checksums all match)"
 
   test-macos:
     runs-on: macos-latest
